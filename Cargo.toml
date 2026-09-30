@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/wavecore"]
+members = ["crates/wavecore", "crates/waveio", "crates/wavesim"]
 
 [workspace.package]
 edition = "2024"

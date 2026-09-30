@@ -19,6 +19,24 @@ impl Bathymetry {
         Self { b }
     }
 
+    /// Build from interior values, row-major with `j` (y) outer and `i` (x) inner, as
+    /// stored in a bed file. Panics if the length does not match the grid.
+    pub fn from_interior(grid: &Grid, values: &[f64]) -> Self {
+        assert_eq!(
+            values.len(),
+            grid.nx * grid.ny,
+            "bed has {} values, grid needs {}",
+            values.len(),
+            grid.nx * grid.ny
+        );
+        let mut b = vec![0.0; grid.cells()];
+        for (n, (i, j)) in grid.interior().enumerate() {
+            b[grid.idx(i, j)] = values[n];
+        }
+        mirror_ghosts(grid, &mut b);
+        Self { b }
+    }
+
     /// Constant depth: a flat bed `depth` metres below still water.
     pub fn flat(grid: &Grid, depth: f64) -> Self {
         Self::from_fn(grid, |_, _| -depth)

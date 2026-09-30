@@ -1,0 +1,15 @@
+[package]
+name = "waveio"
+description = "Reads bed files and writes run output for wavecore. All file I/O lives here."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+wavecore = { path = "../wavecore" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"

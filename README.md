@@ -4,7 +4,7 @@
 
 A nearshore wave solver in Rust, built to be verified before it is trusted.
 
-`wavesim` solves the nonlinear shallow-water equations on a Cartesian grid to model how water moves over a sloping or uneven bed. The numerical core, `wavecore`, is a pure library with no I/O, no graphics and no GDAL, and its kernels are pure functions of the cells they touch.
+`wavesim` solves the nonlinear shallow-water equations on a Cartesian grid to model how water moves over a sloping or uneven bed, including real 3 m bathymetry cropped from NOAA data. The numerical core, `wavecore`, is a pure library with no I/O, no graphics and no GDAL, and its kernels are pure functions of the cells they touch.
 
 It is a depth-averaged model. It captures shoaling and breaking as a bore, not an overturning lip.
 
@@ -14,6 +14,7 @@ It is a depth-averaged model. It captures shoaling and breaking as a bore, not a
 - [Documentation Map](#documentation-map)
 - [Architecture](#architecture)
 - [Quick Start](#quick-start)
+- [Run a swell over a real bed](#run-a-swell-over-a-real-bed)
 - [Numerics](#numerics)
 - [Verification](#verification)
 - [Project Structure](#project-structure)
@@ -29,6 +30,8 @@ It is a depth-averaged model. It captures shoaling and breaking as a bore, not a
 | **Bathymetry** | Bed generators: flat, plane beach, rough bed |
 | **State** | Depth `h` and momentum `hu`, `hv`; reflective walls; volume and momentum diagnostics |
 | **Forcing** | Internal wave-maker (oblique incidence supported), absorbing sponge layers, Manning bottom friction, optional periodic boundaries in `y` |
+| **Bed files** | A documented format for a real seabed; `tools/fetch_spot.py` crops one from a remote GeoTIFF, rotated so `+x` is the wave direction |
+| **Runs** | `wavesim run` sends a swell over a bed and writes frames in a documented format a viewer can read |
 | **Solver** | Well-balanced finite-volume scheme: hydrostatic reconstruction, HLL flux, and either first order or second order (MUSCL with an MC limiter, SSP-RK2) |
 
 Design rules:
@@ -41,13 +44,18 @@ Design rules:
 
 | Doc | What it covers |
 |---|---|
+| [docs/data-format.md](docs/data-format.md) | The bed and run file formats, the coordinate frame, and how to read a run from Python or JavaScript |
 | [docs/bathymetry.md](docs/bathymetry.md) | Notes on real-world bed data: NOAA CUDEM for Hawaii, its provenance and caveats, and what was found for Portugal |
 
 ## Architecture
 
 ```mermaid
 graph TD
-    B[Bathymetry<br/>flat / plane beach / rough bed] --> S
+    G[Remote GeoTIFF<br/>NOAA CUDEM] --> T[tools/fetch_spot.py<br/>crop, rotate, resample]
+    T --> F[Bed file<br/>JSON + f32]
+    F --> IO[waveio]
+    IO --> B
+    B[Bathymetry<br/>from a bed file or a generator] --> S
     I[Initial state<br/>lake at rest / dam break / solitary wave] --> S
     subgraph wavecore
         S[Solver] --> M[MUSCL reconstruction<br/>free surface + velocities, MC limiter]
@@ -57,6 +65,8 @@ graph TD
         U --> D[Sponge layers<br/>+ Manning friction]
     end
     D --> R[State<br/>h, hu, hv, time]
+    R --> C[wavesim run<br/>waveio writes frames]
+    C --> O[Run directory<br/>run.json + frames.f32]
 ```
 
 ## Quick Start
@@ -64,8 +74,9 @@ graph TD
 ### Prerequisites
 
 - Rust (stable), installed through [rustup](https://rustup.rs)
+- [uv](https://docs.astral.sh/uv/) for the fetch tool (only needed to get real bathymetry)
 
-The solver has no other dependencies.
+`wavecore`, the numerical crate, has no dependencies. `waveio` and `wavesim` use `serde`, `serde_json`, `thiserror` and `clap`.
 
 ### Run the tests
 
@@ -73,6 +84,12 @@ The solver has no other dependencies.
 git clone <this-repo>
 cd wavesim
 cargo test
+```
+
+### Test the fetch tool
+
+```bash
+uv run --python 3.12 --with pytest --with rasterio --with numpy --with scipy --with pyproj pytest tools
 ```
 
 ### Lint and format
@@ -95,6 +112,33 @@ let solver = Solver::new(grid, bed);
 let dt = solver.stable_dt(&state);
 solver.step(&mut state, dt);
 ```
+
+## Run a swell over a real bed
+
+Fetch the seabed once. This reads only the window it needs (about 1 MB) from NOAA's public bucket:
+
+```bash
+uv run --python 3.12 --with rasterio --with numpy --with scipy --with pyproj \
+    tools/fetch_spot.py pipeline
+```
+
+```bash
+cargo run --release -p wavesim -- info data/pipeline.json
+```
+
+Send a swell over it:
+
+```bash
+cargo run --release -p wavesim -- run data/pipeline.json --height 1.0 --period 14 --duration 300
+```
+
+That writes `out/pipeline/` (about 120 MB for 151 frames of 200,000 cells; both `data/` and `out/` are git-ignored). On a laptop it takes about 4.5 minutes for 300 simulated seconds. Options: `--tide` (metres above mean sea level), `--maker-depth` (where the wave-maker goes), `--frame-interval`, `--manning`, `--out`.
+
+The swell travels along `+x` of the bed's frame, so its direction is chosen when the bed is fetched (`bearing` in `spots.toml`). Add your own spot by adding a table to `spots.toml`.
+
+**What a run on Pipeline shows.** With a 1 m, 14 s swell the crest lines curve with the seabed (refraction), the wavelength shortens as the water shoals, and the local wave height grows from about 0.9 m offshore to about 1.7 m near the reef ledge before it falls off again over the last 100 m to the shore.
+
+**Its limit, stated plainly.** The equations have no dispersion, so large waves steepen into shocks within tens of metres. At 2.5 m, in 8 m of water, the swell has already lost about half its height to bores before it reaches the reef, and the offshore-going half is affected too. The run stays stable and the bores are real shock-captured breaking, but where and how a big wave breaks is not trustworthy until the model is dispersive. Use small swells to look at refraction and shoaling.
 
 ## Numerics
 
@@ -142,6 +186,10 @@ Choose the order with `Solver::with_order(Order::First)`; the default is `Order:
 | Solitary-wave runup | Non-breaking runup within 10% of Synolakis' law (measured 1.5% high) |
 | Friction | Attenuation over 100 m within 0.03 of the quadratic-drag prediction (measured 0.919 against 0.911) |
 | Manning factor | Equals the exact solution of quadratic drag |
+| Bed and run files | Round-trip exactly; wrong length, NaN values and unknown formats are rejected with a clear message |
+| Full run on a synthetic beach | Frame count and times are right, the first frame is still water, and the wave in the frames has the requested amplitude (between 0.6 and 1.3 times the request) |
+| Run planning | The wave-maker goes where the water first reaches the requested depth, moves seaward at high tide, and impossible setups are explained |
+| Fetch tool | On a synthetic plane, `+x` follows the bearing and `+y` is 90° counter-clockwise from it, for four bearings; clipping is counted; a request outside the raster is an error |
 
 The lake-at-rest and dam-break conservation tests run for both orders. L1 error at a shock converges at rate 1 at best, so a rate near 1 is the target, not 2.
 
@@ -160,23 +208,34 @@ wavesim/
 ├── Cargo.toml                  # workspace
 ├── LICENSE
 ├── README.md
+├── spots.toml                  # real-world spots the fetch tool can crop
 ├── docs/
-│   └── bathymetry.md           # real-world bed data notes
+│   ├── bathymetry.md           # real-world bed data notes
+│   └── data-format.md          # bed and run file formats
 ├── img/
 │   └── header-banner.png
+├── tools/
+│   ├── fetch_spot.py           # crop, rotate and resample a remote GeoTIFF
+│   └── tests/test_fetch_spot.py
 └── crates/
-    └── wavecore/
-        ├── src/
-        │   ├── lib.rs
-        │   ├── grid.rs         # padded Cartesian grid, metres, two ghost layers
-        │   ├── bathymetry.rs   # flat, plane beach, rough bed
-        │   ├── forcing.rs      # wave-maker, sponge layers, Manning friction
-        │   ├── state.rs        # h, hu, hv, time, boundaries, diagnostics
-        │   └── solver.rs       # MUSCL + hydrostatic reconstruction, HLL flux, SSP-RK2
-        └── tests/
-            ├── well_balanced.rs  # still water stays still; conservation
-            ├── stoker.rs         # dam breaks against exact solutions
-            └── waves.rs          # wave-maker, shoaling, refraction, friction, runup
+    ├── wavecore/               # pure numerics, no dependencies
+    │   ├── src/
+    │   │   ├── lib.rs
+    │   │   ├── grid.rs         # padded Cartesian grid, metres, two ghost layers
+    │   │   ├── bathymetry.rs   # flat, plane beach, rough bed, from raw values
+    │   │   ├── forcing.rs      # wave-maker, sponge layers, Manning friction
+    │   │   ├── state.rs        # h, hu, hv, time, boundaries, diagnostics
+    │   │   └── solver.rs       # MUSCL + hydrostatic reconstruction, HLL flux, SSP-RK2
+    │   └── tests/
+    │       ├── well_balanced.rs  # still water stays still; conservation
+    │       ├── stoker.rs         # dam breaks against exact solutions
+    │       └── waves.rs          # wave-maker, shoaling, refraction, friction, runup
+    ├── waveio/                 # all file I/O: bed files and run directories
+    │   ├── src/{lib,bed,run,error}.rs
+    │   └── tests/formats.rs
+    └── wavesim/                # the command line: `run` and `info`
+        ├── src/{lib,main}.rs
+        └── tests/run.rs
 ```
 
 ## Development
@@ -193,7 +252,9 @@ wavesim/
 - Wave input is monochromatic and calibrated for long waves; there is no irregular sea state or spectrum.
 - Non-dispersive waves steepen as they travel, so a sinusoid loses first-harmonic amplitude to higher harmonics over long distances.
 - The sponge reflects a little (a few percent at about one wavelength wide); measure well away from it.
-- Bed data comes from synthetic generators only.
+- Real bathymetry exists at 3 m only where measured surveys exist (see [docs/bathymetry.md](docs/bathymetry.md)). For most coasts, including Portugal's, no open reef-scale data was found.
+- `wavesim run` sends one monochromatic swell along `+x` of the bed's frame; the direction is fixed when the bed is fetched.
+- The wave-maker sits at a single depth, and its amplitude is calibrated for the depth along the middle row.
 
 ## License
 

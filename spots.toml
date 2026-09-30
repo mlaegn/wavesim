@@ -1,0 +1,24 @@
+# Real-world spots the fetch tool can turn into bed files.
+#
+# The output grid is rotated so that +x points along `bearing` (compass degrees,
+# clockwise from north: the direction the waves travel, towards the beach) and +y is
+# 90 degrees counter-clockwise from +x. The anchor (lat, lon) sits `offshore_m` from
+# the offshore edge and `onshore_m` from the landward edge, and the domain is
+# `width_m` wide, centred on the anchor.
+
+[pipeline]
+description = "Banzai Pipeline, Oahu North Shore, Hawaii"
+source = "NOAA NCEI CUDEM 1/9 arc-second topobathy, Hawaii"
+url = "https://noaa-nos-coastal-lidar-pds.s3.amazonaws.com/dem/NCEI_ninth_Topobathy_Hawaii_9428/tiles/ncei19_n21x75_w158x25_2021v1.tif"
+datum = "local mean sea level"
+attribution = "NOAA National Centers for Environmental Information"
+lat = 21.665
+lon = -158.051
+utm_crs = "EPSG:32604"
+bearing = 130.0      # shore-normal, estimated from the seabed gradient (median 131 deg)
+offshore_m = 1100.0
+onshore_m = 400.0
+width_m = 1200.0
+cell_m = 3.0
+clip_above = 10.0    # land higher than this is flattened; waves never reach it
+clip_below = -15.0   # water deeper than this is flattened; only the sponge lives there

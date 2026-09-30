@@ -195,7 +195,7 @@ pub struct Solver {
     /// The south and north edges wrap around instead of reflecting.
     pub periodic_y: bool,
     wavemaker: Option<Drive>,
-    sponge: Option<Sponge>,
+    sponges: Vec<Sponge>,
 }
 
 impl Solver {
@@ -208,7 +208,7 @@ impl Solver {
             manning: 0.0,
             periodic_y: false,
             wavemaker: None,
-            sponge: None,
+            sponges: Vec::new(),
         }
     }
 
@@ -224,9 +224,9 @@ impl Solver {
         self
     }
 
-    /// Add an absorbing sponge layer.
+    /// Add an absorbing sponge layer. Call again for layers of different widths.
     pub fn with_sponge(mut self, sponge: Sponge) -> Self {
-        self.sponge = Some(sponge);
+        self.sponges.push(sponge);
         self
     }
 
@@ -306,13 +306,13 @@ impl Solver {
 
     /// Sponge layer and bottom friction, applied after the flux update.
     fn damp(&self, s: &mut State, dt: f64) {
-        if self.sponge.is_none() && self.manning == 0.0 {
+        if self.sponges.is_empty() && self.manning == 0.0 {
             return;
         }
         let g = &self.grid;
         for (i, j) in g.interior() {
             let k = g.idx(i, j);
-            if let Some(sp) = &self.sponge {
+            for sp in &self.sponges {
                 let rate = sp.rate(g, i, j);
                 if rate > 0.0 {
                     let f = (-rate * dt).exp();
