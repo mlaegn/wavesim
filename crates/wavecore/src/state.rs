@@ -1,5 +1,5 @@
-use crate::bathymetry::{Bathymetry, fill_ghosts_copy};
-use crate::grid::Grid;
+use crate::bathymetry::Bathymetry;
+use crate::grid::{GHOST, Grid, mirror_ghosts};
 
 /// Conserved variables: water depth `h` and depth-integrated momentum `hu`, `hv`.
 /// All arrays are padded, see [`Grid`].
@@ -34,19 +34,23 @@ impl State {
     /// Reflective walls: ghost cells mirror depth and tangential momentum,
     /// and flip the momentum component normal to the wall.
     pub fn fill_walls(&mut self, grid: &Grid) {
-        fill_ghosts_copy(grid, &mut self.h);
-        fill_ghosts_copy(grid, &mut self.hu);
-        fill_ghosts_copy(grid, &mut self.hv);
-        let (nx, ny) = (grid.nx, grid.ny);
-        for j in 0..ny + 2 {
-            let (l, r) = (grid.idx(0, j), grid.idx(nx + 1, j));
-            self.hu[l] = -self.hu[l];
-            self.hu[r] = -self.hu[r];
+        mirror_ghosts(grid, &mut self.h);
+        mirror_ghosts(grid, &mut self.hu);
+        mirror_ghosts(grid, &mut self.hv);
+        let (nx, ny, w) = (grid.nx, grid.ny, grid.width());
+        for j in 0..ny + 2 * GHOST {
+            for k in 0..GHOST {
+                let (l, r) = (grid.idx(GHOST - 1 - k, j), grid.idx(GHOST + nx + k, j));
+                self.hu[l] = -self.hu[l];
+                self.hu[r] = -self.hu[r];
+            }
         }
-        for i in 0..nx + 2 {
-            let (lo, hi) = (grid.idx(i, 0), grid.idx(i, ny + 1));
-            self.hv[lo] = -self.hv[lo];
-            self.hv[hi] = -self.hv[hi];
+        for i in 0..w {
+            for k in 0..GHOST {
+                let (lo, hi) = (grid.idx(i, GHOST - 1 - k), grid.idx(i, GHOST + ny + k));
+                self.hv[lo] = -self.hv[lo];
+                self.hv[hi] = -self.hv[hi];
+            }
         }
     }
 

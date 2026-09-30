@@ -21,6 +21,6 @@ pub mod solver;
 pub mod state;
 
 pub use bathymetry::Bathymetry;
-pub use grid::Grid;
-pub use solver::{G, H_DRY, Solver};
+pub use grid::{GHOST, Grid};
+pub use solver::{G, H_DRY, Order, Solver};
 pub use state::State;

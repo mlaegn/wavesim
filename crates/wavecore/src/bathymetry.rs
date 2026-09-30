@@ -1,7 +1,7 @@
-use crate::grid::Grid;
+use crate::grid::{Grid, mirror_ghosts};
 
 /// Bed elevation `b` in metres relative to still-water level (negative is underwater).
-/// Stored padded; ghost cells copy the nearest interior cell.
+/// Stored padded; ghost cells mirror the interior.
 #[derive(Clone, Debug)]
 pub struct Bathymetry {
     pub b: Vec<f64>,
@@ -15,7 +15,7 @@ impl Bathymetry {
             let (x, y) = grid.centre(i, j);
             b[grid.idx(i, j)] = f(x, y);
         }
-        fill_ghosts_copy(grid, &mut b);
+        mirror_ghosts(grid, &mut b);
         Self { b }
     }
 
@@ -41,18 +41,5 @@ impl Bathymetry {
                 + 0.4 * (tau * 7.0 * x / lx + 1.3).sin();
             -mean_depth + amplitude * s
         })
-    }
-}
-
-/// Copy the nearest interior value into every ghost cell.
-pub(crate) fn fill_ghosts_copy(grid: &Grid, a: &mut [f64]) {
-    let (nx, ny) = (grid.nx, grid.ny);
-    for j in 1..=ny {
-        a[grid.idx(0, j)] = a[grid.idx(1, j)];
-        a[grid.idx(nx + 1, j)] = a[grid.idx(nx, j)];
-    }
-    for i in 0..nx + 2 {
-        a[grid.idx(i, 0)] = a[grid.idx(i, 1)];
-        a[grid.idx(i, ny + 1)] = a[grid.idx(i, ny)];
     }
 }

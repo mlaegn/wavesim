@@ -25,10 +25,10 @@ It is a depth-averaged model. It captures shoaling and breaking as a bore, not a
 
 | Component | Description |
 |---|---|
-| **Grid** | Uniform Cartesian grid in metres, with one ghost layer on every side |
+| **Grid** | Uniform Cartesian grid in metres, with two ghost layers on every side |
 | **Bathymetry** | Bed generators: flat, plane beach, rough bed |
 | **State** | Depth `h` and momentum `hu`, `hv`; reflective walls; volume and momentum diagnostics |
-| **Solver** | Well-balanced first-order finite-volume scheme with hydrostatic reconstruction and an HLL flux |
+| **Solver** | Well-balanced finite-volume scheme: hydrostatic reconstruction, HLL flux, and either first order or second order (MUSCL with an MC limiter, SSP-RK2) |
 
 Design rules:
 
@@ -49,8 +49,9 @@ graph TD
     B[Bathymetry<br/>flat / plane beach / rough bed] --> S
     I[Initial state<br/>lake at rest / dam break] --> S
     subgraph wavecore
-        S[Solver] --> F[Face flux<br/>hydrostatic reconstruction + HLL]
-        F --> U[Cell update<br/>forward Euler, CFL-limited]
+        S[Solver] --> M[MUSCL reconstruction<br/>free surface + velocities, MC limiter]
+        M --> F[Face flux<br/>hydrostatic reconstruction + HLL]
+        F --> U[Time step<br/>SSP-RK2, CFL-limited]
     end
     U --> R[State<br/>h, hu, hv]
 ```
@@ -104,15 +105,18 @@ The solver integrates the conservative nonlinear shallow-water equations for wat
 
 | Aspect | Choice | Why |
 |---|---|---|
-| Grid | Uniform Cartesian, metres, one ghost layer | Matches raster bed data |
+| Grid | Uniform Cartesian, metres, two ghost layers | Matches raster bed data; a second-order boundary face reaches two cells out |
 | Discretisation | Cell-centred finite volume | Conserves mass and momentum exactly |
 | Bed source term | Hydrostatic reconstruction (Audusse et al. 2004) | Still water stays still over any bed; depth stays non-negative at a shoreline |
+| Reconstruction | MUSCL on the free surface `h + b` and the velocities, MC limiter | Reconstructing the surface, not the depth, keeps a flat surface exactly flat |
 | Flux | HLL Riemann solver | Robust at shocks and wet/dry fronts |
 | Breaking | Shocks captured by the Riemann solver | No tunable breaking closure |
 | Boundaries | Reflective walls | |
-| Time step | Adaptive, CFL 0.4, forward Euler | |
+| Time step | Adaptive, CFL 0.4; SSP-RK2 (second order) or forward Euler (first order) | |
 
-Cells shallower than `1e-8` m count as dry and carry no velocity.
+Cells shallower than `1e-8` m count as dry and carry no velocity. A cell drops to first order where it or a neighbour is shallower than 1 mm, or where reconstruction would leave a face without water, so wet/dry fronts stay positive and well-balanced.
+
+Choose the order with `Solver::with_order(Order::First)`; the default is `Order::Second`.
 
 ## Verification
 
@@ -121,6 +125,11 @@ Cells shallower than `1e-8` m count as dry and carry no velocity.
 | Lake at rest over a rough bed | Still water stays still (momentum below 1e-11) and volume is conserved over 500 steps |
 | Lake at rest with dry bumps | The same, with wet/dry fronts beside steep bed steps |
 | Dam break onto a dry bed | Volume conserved, depth non-negative, water advances into the dry region |
+| Wet-bed dam break vs the Stoker solution | Second order at least 4× more accurate than first order; observed L1 convergence rate above 0.9 (measured 1.07) |
+| Dry-bed dam break vs the Ritter solution | The same criteria (measured rate 1.03) |
+| Exact-solution self-check | The Stoker middle state satisfies the Rankine–Hugoniot conditions |
+
+The lake-at-rest and dam-break conservation tests run for both orders. L1 error at a shock converges at rate 1 at best, so a rate near 1 is the target, not 2.
 
 ```bash
 cargo test
@@ -141,12 +150,13 @@ wavesim/
     └── wavecore/
         ├── src/
         │   ├── lib.rs
-        │   ├── grid.rs         # padded Cartesian grid, metres
+        │   ├── grid.rs         # padded Cartesian grid, metres, two ghost layers
         │   ├── bathymetry.rs   # flat, plane beach, rough bed
         │   ├── state.rs        # h, hu, hv, walls, diagnostics
-        │   └── solver.rs       # well-balanced HLL finite-volume step
+        │   └── solver.rs       # MUSCL + hydrostatic reconstruction, HLL flux, SSP-RK2
         └── tests/
-            └── well_balanced.rs
+            ├── well_balanced.rs  # still water stays still; conservation
+            └── stoker.rs         # dam breaks against exact solutions
 ```
 
 ## Development
@@ -158,7 +168,8 @@ wavesim/
 ## Limitations
 
 - Depth-averaged: no overturning lip, so no barrels.
-- First-order and non-dispersive: numerically diffusive, and inaccurate once kh (wavenumber times depth) exceeds roughly 0.3, i.e. where depth is more than about 5% of the wavelength.
+- First order at shorelines: cells at or beside a wet/dry front drop to first order to stay positive, so runup is more diffusive than the open water.
+- Non-dispersive: inaccurate once kh (wavenumber times depth) exceeds roughly 0.3, i.e. where depth is more than about 5% of the wavelength.
 - Only still-water and dam-break setups; there is no wave input.
 - Bed data comes from synthetic generators only.
 
