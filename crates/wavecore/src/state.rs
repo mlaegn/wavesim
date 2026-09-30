@@ -1,13 +1,15 @@
 use crate::bathymetry::Bathymetry;
-use crate::grid::{GHOST, Grid, mirror_ghosts};
+use crate::grid::{GHOST, Grid, mirror_ghosts, wrap_ghosts_y};
 
-/// Conserved variables: water depth `h` and depth-integrated momentum `hu`, `hv`.
-/// All arrays are padded, see [`Grid`].
+/// Conserved variables: water depth `h` and depth-integrated momentum `hu`, `hv`,
+/// plus the simulation time in seconds. All arrays are padded, see [`Grid`].
 #[derive(Clone, Debug)]
 pub struct State {
     pub h: Vec<f64>,
     pub hu: Vec<f64>,
     pub hv: Vec<f64>,
+    /// Simulation time in seconds; advanced by [`crate::Solver::step`].
+    pub time: f64,
 }
 
 impl State {
@@ -17,6 +19,7 @@ impl State {
             h: vec![0.0; n],
             hu: vec![0.0; n],
             hv: vec![0.0; n],
+            time: 0.0,
         }
     }
 
@@ -51,6 +54,17 @@ impl State {
                 self.hv[lo] = -self.hv[lo];
                 self.hv[hi] = -self.hv[hi];
             }
+        }
+    }
+
+    /// Ghost cells for the chosen boundaries: reflective walls everywhere, except that
+    /// the south and north edges wrap around when `periodic_y` is set.
+    pub fn fill_boundaries(&mut self, grid: &Grid, periodic_y: bool) {
+        self.fill_walls(grid);
+        if periodic_y {
+            wrap_ghosts_y(grid, &mut self.h);
+            wrap_ghosts_y(grid, &mut self.hu);
+            wrap_ghosts_y(grid, &mut self.hv);
         }
     }
 

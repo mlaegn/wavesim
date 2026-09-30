@@ -72,3 +72,15 @@ pub(crate) fn mirror_ghosts(grid: &Grid, a: &mut [f64]) {
         }
     }
 }
+
+/// Fill the south and north ghost layers by wrapping around the interior, for a
+/// domain that is periodic in `y`.
+pub(crate) fn wrap_ghosts_y(grid: &Grid, a: &mut [f64]) {
+    let (ny, w) = (grid.ny, grid.width());
+    for i in 0..w {
+        for k in 0..GHOST {
+            a[grid.idx(i, GHOST - 1 - k)] = a[grid.idx(i, GHOST + ny - 1 - k)];
+            a[grid.idx(i, GHOST + ny + k)] = a[grid.idx(i, GHOST + k)];
+        }
+    }
+}

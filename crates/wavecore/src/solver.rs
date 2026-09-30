@@ -10,7 +10,8 @@
 //! same kernels can be ported one-to-one to a compute shader.
 
 use crate::bathymetry::Bathymetry;
-use crate::grid::Grid;
+use crate::forcing::{Drive, H_FRICTION_MIN, Sponge, WaveMaker, manning_factor};
+use crate::grid::{GHOST, Grid, wrap_ghosts_y};
 use crate::state::State;
 
 pub const G: f64 = 9.81;
@@ -189,6 +190,12 @@ pub struct Solver {
     pub bed: Bathymetry,
     pub cfl: f64,
     pub order: Order,
+    /// Manning roughness `n` in s/m^(1/3); zero switches friction off.
+    pub manning: f64,
+    /// The south and north edges wrap around instead of reflecting.
+    pub periodic_y: bool,
+    wavemaker: Option<Drive>,
+    sponge: Option<Sponge>,
 }
 
 impl Solver {
@@ -198,6 +205,10 @@ impl Solver {
             bed,
             cfl: 0.4,
             order: Order::Second,
+            manning: 0.0,
+            periodic_y: false,
+            wavemaker: None,
+            sponge: None,
         }
     }
 
@@ -205,6 +216,49 @@ impl Solver {
     pub fn with_order(mut self, order: Order) -> Self {
         self.order = order;
         self
+    }
+
+    /// Add Manning bottom friction with roughness `n` in s/m^(1/3).
+    pub fn with_manning(mut self, n: f64) -> Self {
+        self.manning = n;
+        self
+    }
+
+    /// Add an absorbing sponge layer.
+    pub fn with_sponge(mut self, sponge: Sponge) -> Self {
+        self.sponge = Some(sponge);
+        self
+    }
+
+    /// Add an internal wave-maker. The still-water depth at the source line is read
+    /// from the bed, so the bed must be set first and lie below `y = 0` there.
+    pub fn with_wavemaker(mut self, spec: WaveMaker) -> Self {
+        let g = &self.grid;
+        let i = ((spec.x / g.dx - 0.5).round().max(0.0) as usize).min(g.nx - 1) + GHOST;
+        let depth = -self.bed.b[g.idx(i, GHOST + g.ny / 2)];
+        self.wavemaker = Some(Drive::new(spec, g, depth));
+        self.check_periodic();
+        self
+    }
+
+    /// Make the domain periodic in `y`. Set the bed first; its ghost rows are wrapped.
+    /// An oblique wave-maker needs `k_y * Ly` to be a whole multiple of 2 pi so the
+    /// wave fits the period; this panics otherwise.
+    pub fn with_periodic_y(mut self) -> Self {
+        self.periodic_y = true;
+        wrap_ghosts_y(&self.grid, &mut self.bed.b);
+        self.check_periodic();
+        self
+    }
+
+    fn check_periodic(&self) {
+        if let (true, Some(drive)) = (self.periodic_y, &self.wavemaker) {
+            let turns = drive.ky() * self.grid.ny as f64 * self.grid.dy / std::f64::consts::TAU;
+            assert!(
+                (turns - turns.round()).abs() < 1e-6,
+                "wave-maker does not fit the periodic domain: k_y * Ly / 2pi = {turns}, must be a whole number"
+            );
+        }
     }
 
     /// Largest stable time step for the current state. Infinite if nothing can move.
@@ -225,17 +279,19 @@ impl Solver {
         }
     }
 
-    /// Advance one step of size `dt` with reflective walls.
+    /// Advance one step of size `dt` with reflective walls, then apply sponge damping
+    /// and friction. Advances `s.time` by `dt`.
     pub fn step(&self, s: &mut State, dt: f64) {
-        s.fill_walls(&self.grid);
+        let t = s.time;
+        s.fill_boundaries(&self.grid, self.periodic_y);
         match self.order {
             Order::First => {
-                *s = self.advance(s, &self.rhs(s), dt);
+                *s = self.advance(s, &self.rhs(s, t), dt);
             }
             Order::Second => {
-                let mut s1 = self.advance(s, &self.rhs(s), dt);
-                s1.fill_walls(&self.grid);
-                let s2 = self.advance(&s1, &self.rhs(&s1), dt);
+                let mut s1 = self.advance(s, &self.rhs(s, t), dt);
+                s1.fill_boundaries(&self.grid, self.periodic_y);
+                let s2 = self.advance(&s1, &self.rhs(&s1, t + dt), dt);
                 for (a, b) in [(&mut s.h, &s2.h), (&mut s.hu, &s2.hu), (&mut s.hv, &s2.hv)] {
                     for (x, y) in a.iter_mut().zip(b) {
                         *x = 0.5 * (*x + y);
@@ -244,6 +300,38 @@ impl Solver {
                 self.clean_dry(s);
             }
         }
+        self.damp(s, dt);
+        s.time = t + dt;
+    }
+
+    /// Sponge layer and bottom friction, applied after the flux update.
+    fn damp(&self, s: &mut State, dt: f64) {
+        if self.sponge.is_none() && self.manning == 0.0 {
+            return;
+        }
+        let g = &self.grid;
+        for (i, j) in g.interior() {
+            let k = g.idx(i, j);
+            if let Some(sp) = &self.sponge {
+                let rate = sp.rate(g, i, j);
+                if rate > 0.0 {
+                    let f = (-rate * dt).exp();
+                    s.hu[k] *= f;
+                    s.hv[k] *= f;
+                    if s.h[k] > H_DRY {
+                        let eta = s.h[k] + self.bed.b[k];
+                        s.h[k] = (s.h[k] - (1.0 - f) * (eta - sp.level)).max(0.0);
+                    }
+                }
+            }
+            if self.manning > 0.0 && s.h[k] > H_FRICTION_MIN {
+                let speed = s.hu[k].hypot(s.hv[k]) / s.h[k];
+                let f = manning_factor(s.h[k], speed, dt, self.manning);
+                s.hu[k] *= f;
+                s.hv[k] *= f;
+            }
+        }
+        self.clean_dry(s);
     }
 
     /// Zero the momentum of dry cells and remove rounding-level negative depth.
@@ -271,7 +359,7 @@ impl Solver {
         next
     }
 
-    fn rhs(&self, s: &State) -> Rhs {
+    fn rhs(&self, s: &State, t: f64) -> Rhs {
         let g = &self.grid;
         let n = g.cells();
         let mut out = Rhs {
@@ -317,6 +405,10 @@ impl Solver {
                 / g.dy
                 + y.source
                 - (x.high.flux[2] - x.low.flux[2]) / g.dx;
+            if let Some(drive) = &self.wavemaker {
+                let (px, py) = g.centre(i, j);
+                out.h[k] += drive.source(px, py, t);
+            }
         }
         out
     }

@@ -1,0 +1,357 @@
+//! Verification ladder, rungs 3-5: wave generation, shoaling, refraction, friction and
+//! runup, each against a known answer.
+
+use wavecore::{Bathymetry, G, GHOST, Grid, Solver, Sponge, State, WaveMaker, manning_factor};
+
+/// Complex amplitude of the component at angular frequency `omega`, per probe cell.
+struct Harmonic {
+    omega: f64,
+    window: (f64, f64),
+    sums: Vec<(f64, f64)>,
+}
+
+impl Harmonic {
+    fn new(omega: f64, window: (f64, f64), probes: usize) -> Self {
+        Self {
+            omega,
+            window,
+            sums: vec![(0.0, 0.0); probes],
+        }
+    }
+
+    fn record(&mut self, t: f64, dt: f64, eta: &[f64]) {
+        if t <= self.window.0 || t > self.window.1 {
+            return;
+        }
+        let (c, s) = ((self.omega * t).cos(), (self.omega * t).sin());
+        for (acc, e) in self.sums.iter_mut().zip(eta) {
+            acc.0 += e * c * dt;
+            acc.1 -= e * s * dt;
+        }
+    }
+
+    /// `(amplitude, phase)` per probe; the window must span whole periods.
+    fn result(&self) -> Vec<(f64, f64)> {
+        let scale = 2.0 / (self.window.1 - self.window.0);
+        self.sums
+            .iter()
+            .map(|&(re, im)| (scale * re.hypot(im), im.atan2(re)))
+            .collect()
+    }
+}
+
+/// Run to `t_end`, analysing the free surface at `probes` (padded cells) over `window`.
+fn run_and_analyse(
+    solver: &Solver,
+    s: &mut State,
+    t_end: f64,
+    omega: f64,
+    window: (f64, f64),
+    probes: &[(usize, usize)],
+) -> Vec<(f64, f64)> {
+    let g = &solver.grid;
+    let mut harmonic = Harmonic::new(omega, window, probes.len());
+    while s.time < t_end {
+        let dt = solver.stable_dt(s);
+        assert!(
+            dt.is_finite(),
+            "no water in the domain: nothing can propagate"
+        );
+        let dt = dt.min(t_end - s.time);
+        solver.step(s, dt);
+        let eta: Vec<f64> = probes
+            .iter()
+            .map(|&(i, j)| s.h[g.idx(i, j)] + solver.bed.b[g.idx(i, j)])
+            .collect();
+        harmonic.record(s.time, dt, &eta);
+    }
+    harmonic.result()
+}
+
+/// Padded index of the cell containing coordinate `x` metres.
+fn col(grid: &Grid, x: f64) -> usize {
+    GHOST + (x / grid.dx) as usize
+}
+
+#[test]
+fn wave_maker_radiates_the_requested_amplitude() {
+    let dx = 0.5;
+    let grid = Grid::new(800, 4, dx, dx);
+    let bed = Bathymetry::flat(&grid, 2.0);
+    let period = 20.0;
+    let amplitude = 0.05;
+    let maker = WaveMaker {
+        x: 200.0,
+        amplitude,
+        period,
+        angle: 0.0,
+        sigma: 2.0,
+        ramp_periods: 2.0,
+    };
+    let solver = Solver::new(grid, bed)
+        .with_wavemaker(maker)
+        .with_sponge(Sponge::new(120, 1.0).edges(true, true, false, false));
+    let mut s = State::lake_at_rest(&grid, &solver.bed, 0.0);
+
+    let j = GHOST + 2;
+    let probes = [(col(&grid, 120.0), j), (col(&grid, 290.0), j)];
+    let omega = std::f64::consts::TAU / period;
+    let out = run_and_analyse(&solver, &mut s, 180.0, omega, (100.0, 180.0), &probes);
+
+    for (name, (amp, _)) in ["west", "east"].iter().zip(&out) {
+        let err = (amp - amplitude).abs() / amplitude;
+        println!(
+            "{name}: amplitude {amp:.4} (target {amplitude}), error {:.1}%",
+            err * 100.0
+        );
+        assert!(
+            err < 0.05,
+            "{name} amplitude {amp} is {:.1}% off",
+            err * 100.0
+        );
+    }
+}
+
+#[test]
+fn shoaling_follows_greens_law() {
+    // Long waves climbing a gentle slope: amplitude grows as depth^(-1/4). This is a
+    // linear result, so the wave is kept small (a/h < 0.4%): at 3 cm, nonlinear
+    // steepening of shallow-water waves drains a few percent of the first harmonic
+    // over the probe spacing.
+    let dx = 0.5;
+    let grid = Grid::new(1200, 4, dx, dx);
+    let bed = Bathymetry::from_fn(&grid, |x, _| -3.0 + x / 300.0);
+    let period = 15.0;
+    let maker = WaveMaker {
+        x: 150.0,
+        amplitude: 0.005,
+        period,
+        angle: 0.0,
+        sigma: 2.0,
+        ramp_periods: 2.0,
+    };
+    let solver = Solver::new(grid, bed.clone())
+        .with_wavemaker(maker)
+        .with_sponge(Sponge::new(120, 1.0).edges(true, true, false, false));
+    let mut s = State::lake_at_rest(&grid, &solver.bed, 0.0);
+
+    let j = GHOST + 2;
+    let (i1, i2) = (col(&grid, 240.0), col(&grid, 400.0));
+    let omega = std::f64::consts::TAU / period;
+    let out = run_and_analyse(
+        &solver,
+        &mut s,
+        180.0,
+        omega,
+        (120.0, 180.0),
+        &[(i1, j), (i2, j)],
+    );
+
+    let (h1, h2) = (-bed.b[grid.idx(i1, j)], -bed.b[grid.idx(i2, j)]);
+    let expected = (h1 / h2).powf(0.25);
+    let measured = out[1].0 / out[0].0;
+    println!(
+        "Green's law: depths {h1:.3} -> {h2:.3} m, expected ratio {expected:.4}, measured {measured:.4}"
+    );
+    assert!(
+        (measured / expected - 1.0).abs() < 0.02,
+        "amplitude ratio {measured:.4} vs Green's law {expected:.4}"
+    );
+}
+
+#[test]
+fn oblique_waves_obey_snells_law_and_wave_action_conservation() {
+    // Long waves on a plane beach, periodic alongshore so the wave is uniform in y.
+    // Snell: k_y = k sin(theta) is conserved while the wave turns towards the shore.
+    // Wave action: a^2 c cos(theta) is constant, so amplitude follows from the local
+    // speed and angle.
+    let (dx, dy) = (0.5, 2.5);
+    let (nx, ny) = (900, 40);
+    let grid = Grid::new(nx, ny, dx, dy);
+    let bed = Bathymetry::from_fn(&grid, |x, _| -3.0 + x / 250.0);
+    let period = 10.0;
+    let omega = std::f64::consts::TAU / period;
+    let source_x = 70.0;
+    let c_source = (G * -bed.b[grid.idx(col(&grid, source_x), GHOST)]).sqrt();
+    // One whole alongshore wavelength fits the period Ly = ny * dy = 100 m.
+    let ky = std::f64::consts::TAU / (ny as f64 * dy);
+    let angle = (ky * c_source / omega).asin();
+    let maker = WaveMaker {
+        x: source_x,
+        amplitude: 0.005,
+        period,
+        angle,
+        sigma: 1.0,
+        ramp_periods: 2.0,
+    };
+    let solver = Solver::new(grid, bed.clone())
+        .with_periodic_y()
+        .with_wavemaker(maker)
+        .with_sponge(Sponge::new(100, 1.5).edges(true, true, false, false));
+    let mut s = State::lake_at_rest(&grid, &bed, 0.0);
+
+    let dj = 10; // 25 m alongshore
+    let cells = |x: f64| [(col(&grid, x), GHOST), (col(&grid, x), GHOST + dj)];
+    let probes = [cells(140.0), cells(230.0)].concat();
+    let out = run_and_analyse(&solver, &mut s, 120.0, omega, (80.0, 120.0), &probes);
+
+    let expected_lag = ky * dj as f64 * dy;
+    let depth = |x: f64| -bed.b[grid.idx(col(&grid, x), GHOST)];
+    let mut turned = Vec::new();
+    for (name, x, pair) in [("x=140", 140.0, &out[0..2]), ("x=230", 230.0, &out[2..4])] {
+        let lag = (pair[0].1 - pair[1].1).rem_euclid(std::f64::consts::TAU);
+        let c = (G * depth(x)).sqrt();
+        let theta = (ky * c / omega).asin();
+        println!(
+            "{name}: alongshore phase lag {lag:.4} rad (expected {expected_lag:.4}), \
+             depth {:.3} m, wave angle {:.1} deg, amplitude {:.4}, y-uniformity {:.4}",
+            depth(x),
+            theta.to_degrees(),
+            pair[0].0,
+            pair[1].0 / pair[0].0
+        );
+        assert!(
+            (lag - expected_lag).abs() < 0.05,
+            "{name}: k_y not conserved"
+        );
+        assert!(
+            (pair[1].0 / pair[0].0 - 1.0).abs() < 0.01,
+            "{name}: not uniform alongshore"
+        );
+        turned.push((c, theta));
+    }
+
+    let (c1, t1) = turned[0];
+    let (c2, t2) = turned[1];
+    let expected = (c1 * t1.cos() / (c2 * t2.cos())).sqrt();
+    let measured = out[2].0 / out[0].0;
+    println!(
+        "refraction + shoaling: expected amplitude ratio {expected:.4}, measured {measured:.4}"
+    );
+    assert!(
+        (measured / expected - 1.0).abs() < 0.02,
+        "amplitude ratio {measured:.4} vs wave-action law {expected:.4}"
+    );
+}
+
+#[test]
+fn friction_attenuates_waves_at_the_predicted_rate() {
+    let dx = 0.5;
+    let period = 20.0;
+    let amplitude = 0.05;
+    let depth = 2.0;
+    let n = 0.15;
+    let ratio = |manning: f64| {
+        let grid = Grid::new(800, 4, dx, dx);
+        let bed = Bathymetry::flat(&grid, depth);
+        let maker = WaveMaker {
+            x: 200.0,
+            amplitude,
+            period,
+            angle: 0.0,
+            sigma: 2.0,
+            ramp_periods: 2.0,
+        };
+        let solver = Solver::new(grid, bed)
+            .with_wavemaker(maker)
+            .with_sponge(Sponge::new(120, 1.0).edges(true, true, false, false))
+            .with_manning(manning);
+        let mut s = State::lake_at_rest(&grid, &solver.bed, 0.0);
+        let j = GHOST + 2;
+        let probes = [(col(&grid, 230.0), j), (col(&grid, 330.0), j)];
+        let omega = std::f64::consts::TAU / period;
+        let out = run_and_analyse(&solver, &mut s, 180.0, omega, (100.0, 180.0), &probes);
+        out[1].0 / out[0].0
+    };
+
+    let attenuation = ratio(n) / ratio(0.0);
+
+    // Quadratic drag acts on the waves like a linear drag r = (8 / 3 pi) k u_max,
+    // with k = g n^2 / h^(4/3) and u_max = a c / h. Amplitude decays as exp(-r t / 2)
+    // over the travel time t = distance / c.
+    let c = (G * depth).sqrt();
+    let k = G * n * n / depth.powf(4.0 / 3.0);
+    let r = 8.0 / (3.0 * std::f64::consts::PI) * k * amplitude * c / depth;
+    let predicted = (-0.5 * r * 100.0 / c).exp();
+    println!(
+        "friction attenuation over 100 m: measured {attenuation:.4}, predicted {predicted:.4}"
+    );
+    assert!(
+        (attenuation - predicted).abs() < 0.03,
+        "attenuation {attenuation:.4} vs predicted {predicted:.4}"
+    );
+}
+
+#[test]
+fn manning_factor_is_the_exact_quadratic_drag_step() {
+    // du/dt = -k u |u| has the solution u0 / (1 + k u0 t) in one direction.
+    let (h, u0, dt, n) = (1.5_f64, 0.8, 0.2, 0.03);
+    let k = G * n * n / h.powf(4.0 / 3.0);
+    let exact = u0 / (1.0 + k * u0 * dt);
+    assert!((manning_factor(h, u0, dt, n) * u0 - exact).abs() < 1e-15);
+    assert_eq!(manning_factor(h, u0, dt, 0.0), 1.0);
+    assert!(
+        manning_factor(h, 100.0, 100.0, 0.1) > 0.0,
+        "friction must never reverse the flow"
+    );
+}
+
+#[test]
+fn solitary_wave_runup_matches_synolakis_law() {
+    // Synolakis (1987): a non-breaking solitary wave of height H on a 1:19.85 beach
+    // in depth d runs up to R/d = 2.831 sqrt(cot(beta)) (H/d)^(5/4).
+    let (d, h_wave, cot_beta) = (1.0, 0.0185, 19.85);
+    let toe = 70.0;
+    let dx = 0.05;
+    let grid = Grid::new((96.0 / dx) as usize, 3, dx, dx);
+    let bed = Bathymetry::from_fn(&grid, |x, _| {
+        if x < toe {
+            -d
+        } else {
+            -d + (x - toe) / cot_beta
+        }
+    });
+
+    let gamma = (3.0 * h_wave / (4.0 * d.powi(3))).sqrt();
+    let crest = toe - 20.0_f64.sqrt().acosh() / gamma;
+    let mut s = State::zeros(&grid);
+    for (i, j) in grid.interior() {
+        let k = grid.idx(i, j);
+        let (x, _) = grid.centre(i, j);
+        let eta = h_wave / (gamma * (x - crest)).cosh().powi(2);
+        let depth = (eta - bed.b[k]).max(0.0);
+        s.h[k] = depth;
+        // Right-moving soliton, first-order velocity (Synolakis 1987).
+        s.hu[k] = depth * (G / d).sqrt() * eta * (1.0 - eta / (4.0 * d));
+    }
+    s.fill_walls(&grid);
+    let v0 = s.volume(&grid);
+    let solver = Solver::new(grid, bed);
+
+    let mut runup: f64 = 0.0;
+    while s.time < 30.0 {
+        let dt = solver.stable_dt(&s).min(30.0 - s.time);
+        solver.step(&mut s, dt);
+        for (i, j) in grid.interior().filter(|&(_, j)| j == GHOST + 1) {
+            let k = grid.idx(i, j);
+            if s.h[k] > 1e-3 {
+                runup = runup.max(s.h[k] + solver.bed.b[k]);
+            }
+        }
+    }
+
+    let expected = 2.831 * cot_beta.sqrt() * (h_wave / d).powf(1.25) * d;
+    println!(
+        "runup: measured {runup:.4} m, Synolakis law {expected:.4} m, error {:.1}%",
+        (runup / expected - 1.0) * 100.0
+    );
+    assert!(
+        (s.volume(&grid) - v0).abs() < 1e-9 * v0,
+        "volume not conserved"
+    );
+    assert!(s.min_depth(&grid) >= 0.0);
+    assert!(
+        (runup / expected - 1.0).abs() < 0.10,
+        "runup {runup:.4} m vs law {expected:.4} m"
+    );
+}
