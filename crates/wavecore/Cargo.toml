@@ -1,0 +1,11 @@
+[package]
+name = "wavecore"
+description = "Pure-numerics nearshore wave solver: no I/O, no graphics, no GDAL."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]

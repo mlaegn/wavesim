@@ -1,0 +1,25 @@
+# Rust build output
+/target
+
+# Fetched bathymetry and solver output: large, reproducible, never committed
+/data
+/out
+*.npy
+*.tif
+*.tiff
+
+# Secrets and local config
+.env
+.env.*
+!.env.example
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Python scratch environments used by the fetch tooling
+.venv/
+__pycache__/
+*.pyc
