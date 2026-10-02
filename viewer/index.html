@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>wavesim viewer</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+
+    <header class="bar top">
+      <strong class="brand">wavesim</strong>
+      <select id="runs" aria-label="Run"></select>
+      <label class="button" for="files">Open files…</label>
+      <input id="files" type="file" multiple hidden />
+      <span id="meta"></span>
+    </header>
+
+    <aside id="info" hidden>
+      <dl id="facts"></dl>
+      <p id="credit"></p>
+    </aside>
+
+    <div id="overlay">
+      <p id="message">Choose a run above, or drop <code>run.json</code>, <code>bed.f32</code> and <code>frames.f32</code> here.</p>
+      <progress id="progress" max="1" value="0" hidden></progress>
+    </div>
+
+    <footer class="bar bottom" id="controls" hidden>
+      <button id="play" type="button" aria-label="Play or pause">Pause</button>
+      <input id="scrub" type="range" min="0" max="1" step="any" value="0" aria-label="Time" />
+      <span id="clock">0.0 / 0 s</span>
+      <label>Speed
+        <select id="speed">
+          <option value="0.5">0.5×</option>
+          <option value="1">1×</option>
+          <option value="2" selected>2×</option>
+          <option value="4">4×</option>
+          <option value="8">8×</option>
+        </select>
+      </label>
+      <label>Height ×<input id="exag" type="range" min="1" max="12" step="0.5" value="2" /><output id="exag-out">2</output></label>
+      <label class="check"><input id="foam" type="checkbox" checked />Foam</label>
+      <label class="check"><input id="zones" type="checkbox" />Wave-maker &amp; absorbing zones</label>
+      <span class="group">
+        <button data-view="oblique" type="button">Oblique</button>
+        <button data-view="top" type="button">Top</button>
+        <button data-view="offshore" type="button">Offshore</button>
+      </span>
+    </footer>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

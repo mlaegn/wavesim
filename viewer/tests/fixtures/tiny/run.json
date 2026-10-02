@@ -1,0 +1,42 @@
+{
+  "format": "wavesim-run",
+  "version": 1,
+  "name": "tiny",
+  "nx": 6,
+  "ny": 4,
+  "dx": 3.0,
+  "dy": 2.0,
+  "bed": "bed.f32",
+  "frames": "frames.f32",
+  "fields": [
+    "eta"
+  ],
+  "dtype": "f32-le",
+  "layout": "per frame: row-major, y outer (increasing), x inner (increasing)",
+  "frame_count": 4,
+  "times": [
+    0.0,
+    2.0,
+    4.0,
+    6.0
+  ],
+  "frame": {
+    "crs": "EPSG:32604",
+    "origin_easting": 1000.0,
+    "origin_northing": 2000.0,
+    "x_bearing_deg": 130.0,
+    "note": "fixture"
+  },
+  "waves": {
+    "maker_x_m": 6.0,
+    "sponge_offshore_cells": 2,
+    "sponge_side_cells": 1,
+    "tide_m": 0.0,
+    "wave_height_m": 1.0,
+    "wave_period_s": 14.0
+  },
+  "source": {
+    "attribution": "none",
+    "name": "Synthetic fixture"
+  }
+}

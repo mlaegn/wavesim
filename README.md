@@ -15,6 +15,7 @@ It is a depth-averaged model. It captures shoaling and breaking as a bore, not a
 - [Architecture](#architecture)
 - [Quick Start](#quick-start)
 - [Run a swell over a real bed](#run-a-swell-over-a-real-bed)
+- [View a run](#view-a-run)
 - [Numerics](#numerics)
 - [Verification](#verification)
 - [Project Structure](#project-structure)
@@ -32,6 +33,7 @@ It is a depth-averaged model. It captures shoaling and breaking as a bore, not a
 | **Forcing** | Internal wave-maker (oblique incidence supported), absorbing sponge layers, Manning bottom friction, optional periodic boundaries in `y` |
 | **Bed files** | A documented format for a real seabed; `tools/fetch_spot.py` crops one from a remote GeoTIFF, rotated so `+x` is the wave direction |
 | **Runs** | `wavesim run` sends a swell over a bed and writes frames in a documented format a viewer can read |
+| **Viewer** | `viewer/`: a browser replay of a run in 3D (Three.js and TypeScript): terrain from the bed, the surface animated from the frames, foam on steep fronts |
 | **Solver** | Well-balanced finite-volume scheme: hydrostatic reconstruction, HLL flux, and either first order or second order (MUSCL with an MC limiter, SSP-RK2) |
 
 Design rules:
@@ -67,6 +69,7 @@ graph TD
     D --> R[State<br/>h, hu, hv, time]
     R --> C[wavesim run<br/>waveio writes frames]
     C --> O[Run directory<br/>run.json + frames.f32]
+    O --> V[viewer/<br/>Three.js replay in the browser]
 ```
 
 ## Quick Start
@@ -75,6 +78,7 @@ graph TD
 
 - Rust (stable), installed through [rustup](https://rustup.rs)
 - [uv](https://docs.astral.sh/uv/) for the fetch tool (only needed to get real bathymetry)
+- Node 20 or newer for the viewer (only needed to watch a run)
 
 `wavecore`, the numerical crate, has no dependencies. `waveio` and `wavesim` use `serde`, `serde_json`, `thiserror` and `clap`.
 
@@ -90,6 +94,12 @@ cargo test
 
 ```bash
 uv run --python 3.12 --with pytest --with rasterio --with numpy --with scipy --with pyproj pytest tools
+```
+
+### Test the viewer
+
+```bash
+cd viewer && npm install && npm test
 ```
 
 ### Lint and format
@@ -140,6 +150,22 @@ The swell travels along `+x` of the bed's frame, so its direction is chosen when
 
 **Its limit, stated plainly.** The equations have no dispersion, so large waves steepen into shocks within tens of metres. At 2.5 m, in 8 m of water, the swell has already lost about half its height to bores before it reaches the reef, and the offshore-going half is affected too. The run stays stable and the bores are real shock-captured breaking, but where and how a big wave breaks is not trustworthy until the model is dispersive. Use small swells to look at refraction and shoaling.
 
+## View a run
+
+```bash
+cd viewer
+npm install
+npm run dev
+```
+
+Open the address it prints (http://localhost:5173). The dev server lists every run in `out/` (set `WAVESIM_RUNS` to use another folder), and `?run=pipeline` opens one directly. You can also drop `run.json`, `bed.f32` and `frames.f32` onto the page, or use **Open files…**.
+
+The page draws the bed as terrain and the surface as a mesh displaced by the stored `eta`, re-uploaded every frame. Between stored frames it interpolates with a cubic, because a straight line between frames 2 s apart cuts the crest of a 14 s wave by 10%. Controls: play and pause (space), scrub, step by a frame (arrow keys), speed, a **Height ×** slider that stretches heights to make small waves visible, three camera views, and a toggle that marks the wave-maker line and the absorbing zones. Those zones are numerical, not sea, so they are shown on request.
+
+Foam appears where the surface is steep (a slope above about 0.05 to 0.13) and in very shallow water at the shoreline. It is a steepness rule for showing where fronts are, not a breaking model. With the 2.5 m swell it lights up the bores that the non-dispersive equations produce, including on the offshore side, which makes that limitation easy to see.
+
+`npm run build` makes a static site in `viewer/dist`; it contains no runs, which are large and git-ignored.
+
 ## Numerics
 
 The solver integrates the conservative nonlinear shallow-water equations for water depth `h` and depth-integrated momentum `(hu, hv)` over a bed elevation `b`:
@@ -189,6 +215,8 @@ Choose the order with `Solver::with_order(Order::First)`; the default is `Order:
 | Bed and run files | Round-trip exactly; wrong length, NaN values and unknown formats are rejected with a clear message |
 | Full run on a synthetic beach | Frame count and times are right, the first frame is still water, and the wave in the frames has the requested amplitude (between 0.6 and 1.3 times the request) |
 | Run planning | The wave-maker goes where the water first reaches the requested depth, moves seaward at high tide, and impossible setups are explained |
+| Viewer data layer | 24 tests: header and file validation, frame offsets, cubic interpolation (follows a wave with under 2% error where a straight line errs by 10%; never puts water below the bed), and reading the exact bytes the Rust writer produces |
+| Rust and viewer agree | `waveio`'s golden test writes a tiny run and compares it byte for byte with the fixture the viewer's tests read; if the format drifts, one of them fails |
 | Fetch tool | On a synthetic plane, `+x` follows the bearing and `+y` is 90° counter-clockwise from it, for four bearings; clipping is counted; a request outside the raster is an error |
 
 The lake-at-rest and dam-break conservation tests run for both orders. L1 error at a shock converges at rate 1 at best, so a rate near 1 is the target, not 2.
@@ -214,6 +242,18 @@ wavesim/
 │   └── data-format.md          # bed and run file formats
 ├── img/
 │   └── header-banner.png
+├── viewer/                     # browser replay: Vite, TypeScript, Three.js
+│   ├── index.html
+│   ├── vite.config.ts          # also serves out/ as /runs/
+│   ├── src/
+│   │   ├── run.ts              # header checks, frames, interpolation (no DOM)
+│   │   ├── load.ts             # fetch or file loading
+│   │   ├── view.ts             # terrain, water shader, camera
+│   │   ├── main.ts             # controls and playback
+│   │   └── style.css
+│   └── tests/
+│       ├── run.test.ts
+│       └── fixtures/tiny/      # written by waveio's golden test
 ├── tools/
 │   ├── fetch_spot.py           # crop, rotate and resample a remote GeoTIFF
 │   └── tests/test_fetch_spot.py
@@ -232,7 +272,7 @@ wavesim/
     │       └── waves.rs          # wave-maker, shoaling, refraction, friction, runup
     ├── waveio/                 # all file I/O: bed files and run directories
     │   ├── src/{lib,bed,run,error}.rs
-    │   └── tests/formats.rs
+    │   └── tests/{formats,golden}.rs
     └── wavesim/                # the command line: `run` and `info`
         ├── src/{lib,main}.rs
         └── tests/run.rs
@@ -254,6 +294,7 @@ wavesim/
 - The sponge reflects a little (a few percent at about one wavelength wide); measure well away from it.
 - Real bathymetry exists at 3 m only where measured surveys exist (see [docs/bathymetry.md](docs/bathymetry.md)). For most coasts, including Portugal's, no open reef-scale data was found.
 - `wavesim run` sends one monochromatic swell along `+x` of the bed's frame; the direction is fixed when the bed is fetched.
+- The viewer loads a whole run into memory (120 MB for the Pipeline run) and needs WebGL2. There is no compact export yet, so runs are for local viewing, not hosting.
 - The wave-maker sits at a single depth, and its amplitude is calibrated for the depth along the middle row.
 
 ## License
