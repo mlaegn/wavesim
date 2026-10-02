@@ -111,26 +111,33 @@ fn exact_wet_bed_solution_is_self_consistent() {
     assert!((lhs - rhs).abs() < 1e-9, "{lhs} vs {rhs}");
 }
 
-/// Second order must be much more accurate than first order and must converge at
+/// The higher orders must be much more accurate than first order and must converge at
 /// close to the rate 1 that is the limit for L1 error across a discontinuity.
+///
+/// The bed here sits at still-water level, so `eta / h` is 1 everywhere and the smoothness
+/// switch is 0: `Order::Third` falls back to the MC limiter and gives the same numbers as
+/// `Order::Second`. That makes this a check that the fallback is safe at shocks, not of the
+/// unlimited branch, which the solitary-wave and wave tests cover.
 fn check_dam_break(label: &str, h_l: f64, h_r: f64) {
     let t = 4.0;
     let first = dam_break_error(400, Order::First, h_l, h_r, t);
-    let coarse = dam_break_error(200, Order::Second, h_l, h_r, t);
-    let fine = dam_break_error(400, Order::Second, h_l, h_r, t);
-    let rate = (coarse / fine).log2();
-    println!(
-        "{label}: L1 error first(400)={first:.4} second(200)={coarse:.4} second(400)={fine:.4}, rate {rate:.2}"
-    );
+    for order in [Order::Second, Order::Third] {
+        let coarse = dam_break_error(200, order, h_l, h_r, t);
+        let fine = dam_break_error(400, order, h_l, h_r, t);
+        let rate = (coarse / fine).log2();
+        println!(
+            "{label}: L1 error first(400)={first:.4} {order:?}(200)={coarse:.4} {order:?}(400)={fine:.4}, rate {rate:.2}"
+        );
 
-    assert!(
-        fine < 0.25 * first,
-        "{label}: second order {fine} should be at least 4x better than first order {first}"
-    );
-    assert!(
-        rate > 0.9,
-        "{label}: observed convergence rate {rate:.2} is below 0.9"
-    );
+        assert!(
+            fine < 0.25 * first,
+            "{label}: {order:?} {fine} should be at least 4x better than first order {first}"
+        );
+        assert!(
+            rate > 0.9,
+            "{label}: {order:?} observed convergence rate {rate:.2} is below 0.9"
+        );
+    }
 }
 
 #[test]

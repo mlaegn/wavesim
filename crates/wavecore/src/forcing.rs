@@ -10,7 +10,9 @@ use crate::solver::G;
 ///
 /// The amplitude calibration assumes long waves, which is all the non-dispersive
 /// equations can carry: a source of strength `Q` per unit length radiates amplitude
-/// `Q / (2 c cos(angle))` on each side, with `c = sqrt(g h)` at the source.
+/// `Q / (2 c_g cos(angle))` on each side, with `c_g` the linear group speed at the source:
+/// it is the speed energy leaves at, so it sets the amplitude a given mass flux produces.
+/// (Using the phase speed instead overshoots by `1 + (kh)^2 / 3` for dispersive waves.)
 #[derive(Clone, Copy, Debug)]
 pub struct WaveMaker {
     /// Position of the source line in metres.
@@ -28,6 +30,48 @@ pub struct WaveMaker {
     pub ramp_periods: f64,
 }
 
+/// A linear wave of a given frequency in water of a given depth.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LinearWave {
+    /// Wavenumber in rad/m.
+    pub k: f64,
+    /// Phase speed `omega / k` in m/s.
+    pub phase_speed: f64,
+    /// Group speed `d omega / d k` in m/s, the speed energy travels at.
+    pub group_speed: f64,
+}
+
+/// The linear wave of angular frequency `omega` in water of depth `h`, for shallow water
+/// (`dispersive = false`: `omega = k sqrt(g h)`) or for the Serre-Green-Naghdi equations
+/// (`omega^2 = g h k^2 / (1 + (k h)^2 / 3)`, whose group speed is the phase speed divided
+/// by `1 + (k h)^2 / 3`).
+///
+/// Panics if the wave is too short for the dispersive model at this depth, which has
+/// no real wavenumber once `omega^2 h / g` reaches 3.
+pub fn linear_wave(omega: f64, h: f64, dispersive: bool) -> LinearWave {
+    if !dispersive {
+        let c = (G * h).sqrt();
+        return LinearWave {
+            k: omega / c,
+            phase_speed: c,
+            group_speed: c,
+        };
+    }
+    let nu = omega * omega * h / G;
+    assert!(
+        nu < 3.0,
+        "a wave of angular frequency {omega} is too short for the dispersive model in {h} m of water"
+    );
+    let kh = (nu / (1.0 - nu / 3.0)).sqrt();
+    let k = kh / h;
+    let phase_speed = omega / k;
+    LinearWave {
+        k,
+        phase_speed,
+        group_speed: phase_speed / (1.0 + kh * kh / 3.0),
+    }
+}
+
 /// A [`WaveMaker`] resolved against a grid and a still-water depth.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Drive {
@@ -39,14 +83,21 @@ pub(crate) struct Drive {
 }
 
 impl Drive {
-    pub(crate) fn new(spec: WaveMaker, grid: &Grid, still_depth: f64) -> Self {
+    pub(crate) fn new(spec: WaveMaker, grid: &Grid, still_depth: f64, dispersive: bool) -> Self {
         assert!(still_depth > 0.0, "wave-maker must sit in water");
         assert!(spec.period > 0.0 && spec.sigma > 0.0 && spec.amplitude >= 0.0);
-        let c = (G * still_depth).sqrt();
         let omega = std::f64::consts::TAU / spec.period;
-        let ky = omega / c * spec.angle.sin();
-        // Total flux per unit length that gives the requested amplitude...
-        let flux = 2.0 * c * spec.amplitude * spec.angle.cos();
+        let LinearWave {
+            k, group_speed: c, ..
+        } = linear_wave(omega, still_depth, dispersive);
+        let ky = k * spec.angle.sin();
+        let kx = k * spec.angle.cos();
+        // Total flux per unit length that gives the requested amplitude. A source of
+        // Gaussian width sigma radiates a wave of wavenumber kx with its strength scaled
+        // by exp(-kx^2 sigma^2 / 2), the Fourier transform of the profile, so that is
+        // undone here.
+        let rolloff = (0.5 * kx * kx * spec.sigma * spec.sigma).exp();
+        let flux = 2.0 * c * spec.amplitude * spec.angle.cos() * rolloff;
         // ...spread over the discrete Gaussian, so the amount injected is exact at any
         // resolution.
         let norm: f64 = (0..grid.nx)

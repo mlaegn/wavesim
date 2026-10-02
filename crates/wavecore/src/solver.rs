@@ -9,7 +9,10 @@
 //! Every face computation is a pure function of the states on its two sides, so the
 //! same kernels can be ported one-to-one to a compute shader.
 
+use std::cell::RefCell;
+
 use crate::bathymetry::Bathymetry;
+use crate::dispersion::{Breaking, Dispersion, DispersionStats, Work, switch};
 use crate::forcing::{Drive, H_FRICTION_MIN, Sponge, WaveMaker, manning_factor};
 use crate::grid::{GHOST, Grid, wrap_ghosts_y};
 use crate::state::State;
@@ -27,8 +30,16 @@ const H_FACE_MIN: f64 = 1e-4;
 pub enum Order {
     /// Piecewise-constant states, forward Euler.
     First,
-    /// MUSCL reconstruction with an MC limiter, SSP-RK2.
+    /// MUSCL reconstruction with an MC limiter, SSP-RK2. Robust at shocks, but the limiter
+    /// clips every smooth crest and trough to first order, which damps waves noticeably at
+    /// fewer than about 40 cells per wavelength.
     Second,
+    /// Unlimited third-order upwind-biased reconstruction where the solution is smooth
+    /// (the switch `phi` from [`crate::dispersion::switch`] near 1), blended back to the MC
+    /// limiter as waves steepen towards breaking. SSP-RK2 in time (SSP-RK3 was tried and made
+    /// no measurable difference). Keeps the height of
+    /// smooth waves on a coarse grid, which a TVD limiter cannot.
+    Third,
 }
 
 /// Cell-averaged primitive variables along one axis: depth, velocity normal to the
@@ -39,6 +50,8 @@ struct Cell {
     un: f64,
     ut: f64,
     b: f64,
+    /// Smoothness switch, 1 where the wave is smooth and 0 where it is steep or breaking.
+    phi: f64,
 }
 
 /// State on one side of a face: depth, normal and tangential velocity, and the bed
@@ -67,7 +80,7 @@ struct Axis {
     source: f64,
 }
 
-fn velocity(h: f64, hm: f64) -> f64 {
+pub(crate) fn velocity(h: f64, hm: f64) -> f64 {
     if h > H_DRY { hm / h } else { 0.0 }
 }
 
@@ -87,6 +100,25 @@ fn limited_slope(d_low: f64, d_high: f64) -> f64 {
     minmod3(2.0 * d_low, 0.5 * (d_low + d_high), 2.0 * d_high)
 }
 
+/// Values at the low and high face of a cell with value `c`, from its neighbours.
+///
+/// `blend` is 0 for the MC limiter and 1 for the unlimited third-order scheme
+/// `(2 low + 5 c - high) / 6`, `(-low + 5 c + 2 high) / 6`, which has the smallest
+/// dissipation of the upwind-biased family and is exact for quadratics.
+fn face_values(low: f64, c: f64, high: f64, blend: f64) -> (f64, f64) {
+    let s = limited_slope(c - low, high - c);
+    let (mc_lo, mc_hi) = (c - 0.5 * s, c + 0.5 * s);
+    if blend <= 0.0 {
+        return (mc_lo, mc_hi);
+    }
+    let third_lo = (2.0 * low + 5.0 * c - high) / 6.0;
+    let third_hi = (5.0 * c + 2.0 * high - low) / 6.0;
+    (
+        mc_lo + blend * (third_lo - mc_lo),
+        mc_hi + blend * (third_hi - mc_hi),
+    )
+}
+
 /// Face states of cell `c` on its low and high side, given its neighbours.
 ///
 /// The free surface `h + b`, not the depth, is reconstructed: over still water its
@@ -104,18 +136,27 @@ fn reconstruct(low: Cell, c: Cell, high: Cell, order: Order) -> (Side, Side) {
         return (first, first);
     }
     let eta = |x: Cell| x.h + x.b;
-    let s_eta = limited_slope(eta(c) - eta(low), eta(high) - eta(c));
-    let s_un = limited_slope(c.un - low.un, high.un - c.un);
-    let s_ut = limited_slope(c.ut - low.ut, high.ut - c.ut);
+    // Smooth only if the whole stencil is: a front next to the cell must keep the limiter.
+    let blend = if order == Order::Third {
+        low.phi.min(c.phi).min(high.phi)
+    } else {
+        0.0
+    };
+    let (eta_lo, eta_hi) = face_values(eta(low), eta(c), eta(high), blend);
+    let (un_lo, un_hi) = face_values(low.un, c.un, high.un, blend);
+    let (ut_lo, ut_hi) = face_values(low.ut, c.ut, high.ut, blend);
     let s_z = 0.25 * (high.b - low.b);
 
-    let side = |sign: f64| Side {
-        h: eta(c) + sign * 0.5 * s_eta - (c.b + sign * s_z),
-        un: c.un + sign * 0.5 * s_un,
-        ut: c.ut + sign * 0.5 * s_ut,
+    let side = |sign: f64, eta_f: f64, un: f64, ut: f64| Side {
+        h: eta_f - (c.b + sign * s_z),
+        un,
+        ut,
         z: c.b + sign * s_z,
     };
-    let (lo, hi) = (side(-1.0), side(1.0));
+    let (lo, hi) = (
+        side(-1.0, eta_lo, un_lo, ut_lo),
+        side(1.0, eta_hi, un_hi, ut_hi),
+    );
     if lo.h < H_FACE_MIN || hi.h < H_FACE_MIN {
         return (first, first);
     }
@@ -194,8 +235,12 @@ pub struct Solver {
     pub manning: f64,
     /// The south and north edges wrap around instead of reflecting.
     pub periodic_y: bool,
+    wavemaker_spec: Option<WaveMaker>,
     wavemaker: Option<Drive>,
     sponges: Vec<Sponge>,
+    dispersion: Option<(Dispersion, RefCell<Work>)>,
+    /// The smoothness switch, recomputed on every evaluation.
+    phi: RefCell<Vec<f64>>,
 }
 
 impl Solver {
@@ -207,8 +252,11 @@ impl Solver {
             order: Order::Second,
             manning: 0.0,
             periodic_y: false,
+            wavemaker_spec: None,
             wavemaker: None,
             sponges: Vec::new(),
+            dispersion: None,
+            phi: RefCell::new(vec![0.0; grid.cells()]),
         }
     }
 
@@ -233,12 +281,38 @@ impl Solver {
     /// Add an internal wave-maker. The still-water depth at the source line is read
     /// from the bed, so the bed must be set first and lie below `y = 0` there.
     pub fn with_wavemaker(mut self, spec: WaveMaker) -> Self {
+        self.wavemaker_spec = Some(spec);
+        self.rebuild_drive();
+        self
+    }
+
+    /// Replace shallow water with the Serre-Green-Naghdi equations: waves of different
+    /// lengths travel at different speeds, so big swells no longer steepen into shocks in
+    /// deep water, and dispersion fades out where waves break. See [`crate::dispersion`].
+    pub fn with_dispersion(mut self, dispersion: Dispersion) -> Self {
+        self.dispersion = Some((dispersion, RefCell::new(Work::new(&self.grid))));
+        self.rebuild_drive();
+        self
+    }
+
+    /// How hard the dispersive solves have worked so far, or `None` for shallow water.
+    pub fn dispersion_stats(&self) -> Option<DispersionStats> {
+        self.dispersion
+            .as_ref()
+            .map(|(_, work)| work.borrow().stats)
+    }
+
+    /// The wave-maker's strength depends on the linear wave relation, so it is worked out
+    /// again whenever the bed, the wave-maker or the dispersion changes.
+    fn rebuild_drive(&mut self) {
+        let Some(spec) = self.wavemaker_spec else {
+            return;
+        };
         let g = &self.grid;
         let i = ((spec.x / g.dx - 0.5).round().max(0.0) as usize).min(g.nx - 1) + GHOST;
         let depth = -self.bed.b[g.idx(i, GHOST + g.ny / 2)];
-        self.wavemaker = Some(Drive::new(spec, g, depth));
+        self.wavemaker = Some(Drive::new(spec, g, depth, self.dispersion.is_some()));
         self.check_periodic();
-        self
     }
 
     /// Make the domain periodic in `y`. Set the bed first; its ghost rows are wrapped.
@@ -288,7 +362,7 @@ impl Solver {
             Order::First => {
                 *s = self.advance(s, &self.rhs(s, t), dt);
             }
-            Order::Second => {
+            Order::Second | Order::Third => {
                 let mut s1 = self.advance(s, &self.rhs(s, t), dt);
                 s1.fill_boundaries(&self.grid, self.periodic_y);
                 let s2 = self.advance(&s1, &self.rhs(&s1, t + dt), dt);
@@ -359,9 +433,23 @@ impl Solver {
         next
     }
 
+    /// The breaking thresholds in force: the dispersive model's, or the defaults.
+    fn breaking(&self) -> Breaking {
+        self.dispersion
+            .as_ref()
+            .map_or_else(Breaking::default, |(d, _)| d.breaking)
+    }
+
     fn rhs(&self, s: &State, t: f64) -> Rhs {
         let g = &self.grid;
         let n = g.cells();
+        // How smooth the wave is, everywhere. The third-order reconstruction and the
+        // dispersive terms both fade out where it is not.
+        let mut phi_guard = self.phi.borrow_mut();
+        if self.order == Order::Third || self.dispersion.is_some() {
+            switch(g, &self.bed, s, self.breaking(), &mut phi_guard);
+        }
+        let phi: &[f64] = &phi_guard;
         let mut out = Rhs {
             h: vec![0.0; n],
             hu: vec![0.0; n],
@@ -379,6 +467,7 @@ impl Solver {
                 un: velocity(s.h[k], un),
                 ut: velocity(s.h[k], ut),
                 b: self.bed.b[k],
+                phi: phi[k],
             }
         };
 
@@ -409,6 +498,18 @@ impl Solver {
                 let (px, py) = g.centre(i, j);
                 out.h[k] += drive.source(px, py, t);
             }
+        }
+        if let Some((dispersion, work)) = &self.dispersion {
+            dispersion.apply(
+                g,
+                self.periodic_y,
+                s,
+                &out.h,
+                &mut out.hu,
+                &mut out.hv,
+                phi,
+                &mut work.borrow_mut(),
+            );
         }
         out
     }

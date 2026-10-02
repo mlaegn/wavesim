@@ -38,6 +38,10 @@ enum Command {
         /// Manning roughness in s/m^(1/3); 0 switches friction off
         #[arg(long, default_value_t = 0.0)]
         manning: f64,
+        /// Dispersive (Serre-Green-Naghdi) equations; `false` runs plain shallow water,
+        /// where tall waves steepen into shocks
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        dispersive: bool,
         /// Output directory (default: out/<bed name>)
         #[arg(long)]
         out: Option<PathBuf>,
@@ -71,6 +75,7 @@ fn real_main() -> Result<(), Error> {
             frame_interval,
             maker_depth,
             manning,
+            dispersive,
             out,
         } => {
             let name = bed
@@ -87,6 +92,7 @@ fn real_main() -> Result<(), Error> {
                 frame_interval,
                 maker_depth,
                 manning,
+                dispersive,
             };
             let mut last_decile = -1;
             let summary = wavesim::run(&opts, |p| {
@@ -113,6 +119,14 @@ fn real_main() -> Result<(), Error> {
                 "{} frames, {} steps in {:.1} s; highest surface {:+.2} m above still water",
                 summary.frames, summary.steps, summary.wall_seconds, summary.max_rise
             );
+            if let Some(d) = summary.dispersion {
+                println!(
+                    "dispersive solves: {} ({:.1} iterations each, {} unconverged)",
+                    d.solves,
+                    d.iterations as f64 / d.solves.max(1) as f64,
+                    d.unconverged
+                );
+            }
             println!("wrote {}", summary.header.display());
             Ok(())
         }

@@ -42,6 +42,7 @@ fn options(dir: &std::path::Path, bed: PathBuf) -> RunOptions {
         frame_interval: 5.0,
         maker_depth: 4.0,
         manning: 0.0,
+        dispersive: false,
     }
 }
 
@@ -152,4 +153,40 @@ fn the_run_directory_is_self_describing() {
     assert_eq!(out.header.waves["wave_height_m"], 0.02);
     assert_eq!(out.header.fields, vec!["eta"]);
     assert!(opts.out.join("bed.f32").exists());
+}
+
+#[test]
+fn a_dispersive_run_writes_the_same_kind_of_frames_and_reports_its_solver_work() {
+    let dir = scratch("dispersive");
+    let mut opts = options(&dir, beach(&dir));
+    opts.dispersive = true;
+    let summary = run(&opts, |_| {}).unwrap();
+
+    let out = Run::read(&opts.out).unwrap();
+    assert_eq!(out.header.frame_count, 13);
+    assert_eq!(out.header.waves["dispersive"], true);
+    assert!(
+        out.header.waves["model"]
+            .as_str()
+            .unwrap()
+            .contains("Serre")
+    );
+    assert!(out.eta.iter().all(|v| v.is_finite()));
+
+    let stats = summary.dispersion.expect("dispersive run reports stats");
+    assert!(stats.solves > 0 && stats.unconverged == 0, "{stats:?}");
+    assert!(summary.max_rise > 0.0);
+}
+
+#[test]
+fn a_wave_too_short_for_the_dispersive_model_is_explained() {
+    let dir = scratch("short");
+    let mut opts = options(&dir, beach(&dir));
+    opts.dispersive = true;
+    // omega^2 h / g = 20 at 5 m for a 1 s wave: far beyond what the dispersive model can carry.
+    opts.period = 1.0;
+    opts.maker_depth = 5.0;
+    let bed = Bed::read(&opts.bed).unwrap();
+    let err = plan(&bed, &opts).unwrap_err();
+    assert!(err.to_string().contains("too short"), "{err}");
 }

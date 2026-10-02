@@ -4,7 +4,7 @@
 
 A nearshore wave solver in Rust, built to be verified before it is trusted.
 
-`wavesim` solves the nonlinear shallow-water equations on a Cartesian grid to model how water moves over a sloping or uneven bed, including real 3 m bathymetry cropped from NOAA data. The numerical core, `wavecore`, is a pure library with no I/O, no graphics and no GDAL, and its kernels are pure functions of the cells they touch.
+`wavesim` solves the nonlinear shallow-water equations, with optional Serre–Green–Naghdi dispersion so that big swells shoal and break where they should, on a Cartesian grid to model how water moves over a sloping or uneven bed, including real 3 m bathymetry cropped from NOAA data. The numerical core, `wavecore`, is a pure library with no I/O, no graphics and no GDAL, and its kernels are pure functions of the cells they touch.
 
 It is a depth-averaged model. It captures shoaling and breaking as a bore, not an overturning lip.
 
@@ -34,7 +34,8 @@ It is a depth-averaged model. It captures shoaling and breaking as a bore, not a
 | **Bed files** | A documented format for a real seabed; `tools/fetch_spot.py` crops one from a remote GeoTIFF, rotated so `+x` is the wave direction |
 | **Runs** | `wavesim run` sends a swell over a bed and writes frames in a documented format a viewer can read |
 | **Viewer** | `viewer/`: a browser replay of a run in 3D (Three.js and TypeScript): terrain from the bed, the surface animated from the frames, foam on steep fronts |
-| **Solver** | Well-balanced finite-volume scheme: hydrostatic reconstruction, HLL flux, and either first order or second order (MUSCL with an MC limiter, SSP-RK2) |
+| **Solver** | Well-balanced finite-volume scheme: hydrostatic reconstruction, HLL flux, and first order, second order (MUSCL with an MC limiter), or third order (unlimited where the wave is smooth, blended back to the limiter near steep fronts), with SSP-RK2 |
+| **Dispersion** | Serre–Green–Naghdi correction solved by preconditioned conjugate gradients, switched off where waves break; see [docs/dispersion.md](docs/dispersion.md) |
 
 Design rules:
 
@@ -47,6 +48,7 @@ Design rules:
 | Doc | What it covers |
 |---|---|
 | [docs/data-format.md](docs/data-format.md) | The bed and run file formats, the coordinate frame, and how to read a run from Python or JavaScript |
+| [docs/dispersion.md](docs/dispersion.md) | The dispersive model, the breaking switch, what was tried and dropped, the verification numbers and the limits |
 | [docs/bathymetry.md](docs/bathymetry.md) | Notes on real-world bed data: NOAA CUDEM for Hawaii, its provenance and caveats, and what was found for Portugal |
 
 ## Architecture
@@ -60,10 +62,13 @@ graph TD
     B[Bathymetry<br/>from a bed file or a generator] --> S
     I[Initial state<br/>lake at rest / dam break / solitary wave] --> S
     subgraph wavecore
-        S[Solver] --> M[MUSCL reconstruction<br/>free surface + velocities, MC limiter]
+        S[Solver] --> P[Smoothness switch φ<br/>surface slope, η/h]
+        P --> M[Reconstruction<br/>MC limiter / third order blended by φ]
         M --> F[Face flux<br/>hydrostatic reconstruction + HLL]
+        F --> G[Dispersive correction<br/>SGN, conjugate gradients, scaled by φ]
+        P --> G
         W[Wave-maker<br/>mass source line] --> U
-        F --> U[Time step<br/>SSP-RK2, CFL-limited]
+        G --> U[Time step<br/>SSP-RK2, CFL-limited]
         U --> D[Sponge layers<br/>+ Manning friction]
     end
     D --> R[State<br/>h, hu, hv, time]
@@ -178,23 +183,24 @@ The solver integrates the conservative nonlinear shallow-water equations for wat
 
 | Aspect | Choice | Why |
 |---|---|---|
-| Grid | Uniform Cartesian, metres, two ghost layers | Matches raster bed data; a second-order boundary face reaches two cells out |
+| Grid | Uniform Cartesian, metres, three ghost layers | Matches raster bed data; the dispersive terms take a divergence, then a gradient of it, then a gradient again, which reaches three cells out |
 | Discretisation | Cell-centred finite volume | Conserves mass and momentum exactly |
 | Bed source term | Hydrostatic reconstruction (Audusse et al. 2004) | Still water stays still over any bed; depth stays non-negative at a shoreline |
-| Reconstruction | MUSCL on the free surface `h + b` and the velocities, MC limiter | Reconstructing the surface, not the depth, keeps a flat surface exactly flat |
+| Reconstruction | The free surface `h + b` and the velocities; MC limiter (`Order::Second`) or unlimited third order blended to it by `φ` (`Order::Third`) | Reconstructing the surface, not the depth, keeps a flat surface exactly flat; the limiter clips every smooth crest, which damps waves on a coarse grid |
 | Flux | HLL Riemann solver | Robust at shocks and wet/dry fronts |
-| Breaking | Shocks captured by the Riemann solver | No tunable breaking closure |
+| Breaking | Shocks captured by the Riemann solver, with the dispersive terms and the third-order reconstruction faded out by `φ` where the wave is steep or tall for its depth | The shock dissipates the wave, so there is no separate breaking closure; the thresholds are tuned to textbook breaking indices |
+| Dispersion | Serre–Green–Naghdi (flat-bed operator), `h w − ∇(c ∇·w) = r`, solved each stage by Jacobi-preconditioned conjugate gradients from the previous solution | Fully nonlinear; symmetric positive definite; 7 to 11 iterations per solve |
 | Boundaries | Reflective walls; optionally periodic in `y` | Periodic gives an alongshore-uniform wave with no edge diffraction |
 | Wave input | Internal mass source on a line (Wei et al. 1999), Gaussian-weighted, normalised over the discrete grid | Injects exactly the requested amplitude at any resolution; oblique waves via a phase shift along the line |
 | Absorption | Sponge layer: momentum decays, surface relaxes to still water, quadratic ramp | Lets waves leave without reflecting |
 | Friction | Manning, semi-implicit | Exact for one-directional quadratic drag; never reverses the flow |
-| Time step | Adaptive, CFL 0.4; SSP-RK2 (second order) or forward Euler (first order) | |
+| Time step | Adaptive, CFL 0.4; SSP-RK2 (second and third order) or forward Euler (first order) | |
 
 Cells shallower than `1e-8` m count as dry and carry no velocity. A cell drops to first order where it or a neighbour is shallower than 1 mm, or where reconstruction would leave a face without water, so wet/dry fronts stay positive and well-balanced.
 
-Choose the order with `Solver::with_order(Order::First)`; the default is `Order::Second`.
+Choose the order with `Solver::with_order`; the default is `Order::Second`. Add dispersion with `Solver::with_dispersion(Dispersion::default())`; `wavesim run` uses `Order::Third` with dispersion unless you pass `--dispersive false`.
 
-**Wave-maker calibration.** A source of strength `Q` per unit length radiates amplitude `Q / (2 c cos θ)` on each side, with `c = sqrt(g h)` at the source. That relation holds for long waves, which is the regime the non-dispersive equations describe. A sponge behind the maker absorbs the half that travels away from the domain of interest. With `periodic_y`, an oblique maker's `k_y · Ly` must be a whole multiple of 2π; `Solver` panics if it is not.
+**Wave-maker calibration.** A source of strength `Q` per unit length radiates amplitude `Q / (2 c_g cos θ)` on each side, with `c_g` the linear **group** speed at the source (`sqrt(g h)` in shallow water; the phase speed divided by `1 + (kh)²/3` with dispersion), and the strength is boosted to undo the roll-off `exp(−k_x²σ²/2)` of the source's Gaussian profile. A sponge behind the maker absorbs the half that travels away from the domain of interest. With `periodic_y`, an oblique maker's `k_y · Ly` must be a whole multiple of 2π; `Solver` panics if it is not.
 
 ## Verification
 
@@ -206,12 +212,20 @@ Choose the order with `Solver::with_order(Order::First)`; the default is `Order:
 | Wet-bed dam break vs the Stoker solution | Second order at least 4× more accurate than first order; observed L1 convergence rate above 0.9 (measured 1.07) |
 | Dry-bed dam break vs the Ritter solution | The same criteria (measured rate 1.03) |
 | Exact-solution self-check | The Stoker middle state satisfies the Rankine–Hugoniot conditions |
-| Wave-maker amplitude | Radiated amplitude within 5% of the request on both sides (measured 1.4% and 1.6% low, from numerical dissipation) |
+| Wave-maker amplitude | Radiated amplitude within 2% of the request on both sides (measured 0.4% and 0.6% low, after correcting for the source's spectral roll-off; it was 1.4% and 1.6% before) |
 | Green's law | Amplitude ratio over a sloping bed within 2% of `(h₁/h₂)^¼` (measured 0.14% off) |
 | Snell's law and wave action | Oblique long waves on a beach: alongshore phase lag equals the imposed `k_y` (within 0.05 rad, measured 0.003), the wave turns from 29.3° to 26.8°, and amplitude follows `a² c cos θ = const` (measured 0.02% off) |
 | Solitary-wave runup | Non-breaking runup within 10% of Synolakis' law (measured 1.5% high) |
 | Friction | Attenuation over 100 m within 0.03 of the quadratic-drag prediction (measured 0.919 against 0.911) |
 | Manning factor | Equals the exact solution of quadratic drag |
+| Dispersion operator | Symmetric and positive definite to 1e-10, with walls and with periodic wrapping, so conjugate gradients is safe |
+| Dispersion relation | A standing wave oscillates at 1.4261 rad/s (third order) against the SGN theory's 1.4247; shallow water would give 1.7629 (24% off) |
+| Exact SGN solitary wave | `a/h = 0.2` for 20 s: amplitude 0.2001, crest within 0.01 m of the exact position, shape error 0.2%; shallow water steepens and ends 57% off |
+| Wave-maker with dispersion | Amplitude 0.0498 and 0.0499 against 0.05, wavelength within 0.1 rad of the SGN phase lag over 40 m (shallow water would be off by 0.25 rad) |
+| Big swell in deep water | A 2.5 m, 14 s swell in 8 m keeps at least 90% of its energy over 400 m (measured 93%); shallow water keeps 14% |
+| Shoaling and breaking on a 1:30 beach | Shoaling from 6 to 3.5 m of x1.14 matches Green's law; the tallest wave has `H/h` 0.68 at 3.0 m depth (textbook 0.55 to 1.2); the surf zone stays depth-limited (`H/h` 0.96 at most in 1 to 2.5 m) |
+| Dispersive solves | Converge every time, in under 20 iterations on average |
+| Still water with dispersion | Over a rough bed, with and without dry bumps, momentum stays below 1e-9 for both orders |
 | Bed and run files | Round-trip exactly; wrong length, NaN values and unknown formats are rejected with a clear message |
 | Full run on a synthetic beach | Frame count and times are right, the first frame is still water, and the wave in the frames has the requested amplitude (between 0.6 and 1.3 times the request) |
 | Run planning | The wave-maker goes where the water first reaches the requested depth, moves seaward at high tide, and impossible setups are explained |
@@ -221,9 +235,11 @@ Choose the order with `Solver::with_order(Order::First)`; the default is `Order:
 
 The lake-at-rest and dam-break conservation tests run for both orders. L1 error at a shock converges at rate 1 at best, so a rate near 1 is the target, not 2.
 
+**The dispersive tests fix their bounds before running.** Where there is an exact answer (the dispersion relation, the solitary wave) the test compares against it; for breaking there is none, so the bounds are the textbook range for the quantity. Two of them were revised after a first run, and each says why in its comment: the surf-zone check originally looked as shallow as 0.3 m, which is the swash, where a bore's height exceeds the still depth by definition; and the wave-maker test originally compared crest-to-trough height, which is not conserved for a wave in the Ursell regime (see [docs/dispersion.md](docs/dispersion.md)).
+
 **Two shoaling tests run in the linear regime.** Green's law and the wave-action law are linear results. At 3 cm in about 2 m of water, nonlinear steepening of shallow-water waves already drains a few percent of the first harmonic over 160 m, so those two tests use 5 mm waves. The beaches are long enough that the measurement points sit well away from the sponge, whose small reflection otherwise ripples the amplitude by a few percent.
 
-`cargo test` takes about 20 seconds: the wave tests are simulations, so the test profile is optimised (`[profile.test] opt-level = 3`).
+`cargo test` takes about a minute: the wave tests are simulations, so the test profile is optimised (`[profile.test] opt-level = 3`).
 
 ```bash
 cargo test
@@ -239,6 +255,7 @@ wavesim/
 ├── spots.toml                  # real-world spots the fetch tool can crop
 ├── docs/
 │   ├── bathymetry.md           # real-world bed data notes
+│   ├── dispersion.md           # the dispersive model, what was tried, limits
 │   └── data-format.md          # bed and run file formats
 ├── img/
 │   └── header-banner.png
@@ -263,13 +280,16 @@ wavesim/
     │   │   ├── lib.rs
     │   │   ├── grid.rs         # padded Cartesian grid, metres, two ghost layers
     │   │   ├── bathymetry.rs   # flat, plane beach, rough bed, from raw values
+    │   │   ├── dispersion.rs   # SGN correction: operator, conjugate gradients, smoothness switch
     │   │   ├── forcing.rs      # wave-maker, sponge layers, Manning friction
     │   │   ├── state.rs        # h, hu, hv, time, boundaries, diagnostics
-    │   │   └── solver.rs       # MUSCL + hydrostatic reconstruction, HLL flux, SSP-RK2
+    │   │   └── solver.rs       # reconstruction (MC / third order), hydrostatic reconstruction, HLL flux, SSP-RK2
     │   └── tests/
     │       ├── well_balanced.rs  # still water stays still; conservation
+    │       ├── common/mod.rs     # harmonic analysis shared by the wave tests
     │       ├── stoker.rs         # dam breaks against exact solutions
-    │       └── waves.rs          # wave-maker, shoaling, refraction, friction, runup
+    │       ├── waves.rs          # wave-maker, shoaling, refraction, friction, runup
+    │       └── dispersion.rs     # dispersion relation, solitary wave, deep swell, beach breaking
     ├── waveio/                 # all file I/O: bed files and run directories
     │   ├── src/{lib,bed,run,error}.rs
     │   └── tests/{formats,golden}.rs
@@ -288,7 +308,12 @@ wavesim/
 
 - Depth-averaged: no overturning lip, so no barrels.
 - First order at shorelines: cells at or beside a wet/dry front drop to first order to stay positive, so runup is more diffusive than the open water.
-- Non-dispersive: inaccurate once kh (wavenumber times depth) exceeds roughly 0.3, i.e. where depth is more than about 5% of the wavelength.
+- Dispersion is the Serre–Green–Naghdi flat-bed operator: accurate in `kh` (wavenumber times depth) up to about 1 to 2, with the bed-slope terms of the dispersive operator omitted. Plain shallow water (`--dispersive false`) is accurate only up to `kh` of about 0.3 and steepens tall waves into shocks wherever they are.
+- Breaking is a switch tuned to textbook breaking indices, not a model fitted to measurements. On a 1:30 beach it begins somewhat early (`H/h` about 0.7 where Goda's formula suggests 0.9), and it has no spilling or plunging distinction.
+- Dispersion costs about three times as much as shallow water per step (78 ms against 25 ms on 200,000 cells, single-threaded).
+- Numerical damping remains at 3 m cells: an 8 s, 1.5 m swell arrives with an energy height of 1.45 m. Refining the grid helps; see [docs/dispersion.md](docs/dispersion.md).
+- A sinusoidal wave in the cnoidal regime (Ursell number above about 25) changes shape as it travels, so its crest-to-trough height is not the requested height; its energy is.
+- Oblique waves with dispersion are not covered by the tests.
 - Wave input is monochromatic and calibrated for long waves; there is no irregular sea state or spectrum.
 - Non-dispersive waves steepen as they travel, so a sinusoid loses first-harmonic amplitude to higher harmonics over long distances.
 - The sponge reflects a little (a few percent at about one wavelength wide); measure well away from it.

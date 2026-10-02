@@ -8,7 +8,9 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use wavecore::{G, GHOST, Solver, Sponge, State, WaveMaker};
+use wavecore::{
+    Dispersion, DispersionStats, G, GHOST, Order, Solver, Sponge, State, WaveMaker, linear_wave,
+};
 use waveio::{Bed, RunWriter};
 
 #[derive(Debug, thiserror::Error)]
@@ -41,6 +43,10 @@ pub struct RunOptions {
     pub maker_depth: f64,
     /// Manning roughness in s/m^(1/3); zero switches friction off.
     pub manning: f64,
+    /// Use the dispersive (Serre-Green-Naghdi) equations with the third-order scheme.
+    /// `false` runs plain shallow water with the MC limiter, in which tall waves steepen
+    /// into shocks wherever they are.
+    pub dispersive: bool,
 }
 
 /// Where the forcing goes, worked out from the bed and the options.
@@ -75,6 +81,8 @@ pub struct Summary {
     pub max_rise: f64,
     pub header: PathBuf,
     pub plan: Plan,
+    /// How hard the dispersive solves worked, or `None` for shallow water.
+    pub dispersion: Option<DispersionStats>,
 }
 
 const SPONGE_STRENGTH: f64 = 1.5;
@@ -127,6 +135,14 @@ pub fn plan(bed: &Bed, opts: &RunOptions) -> Result<Plan, Error> {
     };
     let maker_x = (i as f64 + 0.5) * grid.dx;
     let h = depth(i);
+    let omega = std::f64::consts::TAU / opts.period;
+    if opts.dispersive && omega * omega * h / G >= 3.0 {
+        return Err(setup(format!(
+            "a {} s wave is too short for the dispersive model in {h:.1} m of water; \
+             use a longer --period or a shallower --maker-depth",
+            opts.period
+        )));
+    }
     if opts.height > 0.6 * h {
         return Err(setup(format!(
             "a {} m wave is too big for {h:.2} m of water at the wave-maker (it would break at \
@@ -134,7 +150,7 @@ pub fn plan(bed: &Bed, opts: &RunOptions) -> Result<Plan, Error> {
             opts.height
         )));
     }
-    let wavelength = opts.period * (G * h).sqrt();
+    let wavelength = std::f64::consts::TAU / linear_wave(omega, h, opts.dispersive).k;
 
     let cells = |spacing: f64| (1.5 * wavelength / spacing).ceil() as usize;
     let sponge_offshore = cells(grid.dx).clamp(4, (grid.nx / 3).max(4));
@@ -172,7 +188,13 @@ pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<
         sigma: SIGMA_CELLS * grid.dx,
         ramp_periods: 2.0,
     };
-    let solver = Solver::new(grid, bed.bathymetry(opts.tide))
+    let mut solver = Solver::new(grid, bed.bathymetry(opts.tide));
+    if opts.dispersive {
+        solver = solver
+            .with_order(Order::Third)
+            .with_dispersion(Dispersion::default());
+    }
+    let solver = solver
         .with_wavemaker(maker)
         .with_sponge(
             Sponge::new(plan.sponge_offshore, SPONGE_STRENGTH).edges(true, false, false, false),
@@ -193,7 +215,12 @@ pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<
         "sponge_side_cells": plan.sponge_side,
         "manning": opts.manning,
         "direction": "along +x of the bed frame",
-        "model": "nonlinear shallow water, second order, non-dispersive",
+        "model": if opts.dispersive {
+            "Serre-Green-Naghdi (flat-bed operator), hybrid breaking, third-order upwind-biased scheme"
+        } else {
+            "nonlinear shallow water, MC limiter, non-dispersive"
+        },
+        "dispersive": opts.dispersive,
     });
     let mut writer = RunWriter::create(&opts.out, &bed, settings)?;
 
@@ -258,5 +285,6 @@ pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<
         max_rise,
         header,
         plan,
+        dispersion: solver.dispersion_stats(),
     })
 }

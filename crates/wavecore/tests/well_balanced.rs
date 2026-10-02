@@ -2,7 +2,7 @@
 
 use wavecore::{Bathymetry, GHOST, Grid, Order, Solver, State};
 
-const ORDERS: [Order; 2] = [Order::First, Order::Second];
+const ORDERS: [Order; 3] = [Order::First, Order::Second, Order::Third];
 
 fn run(solver: &Solver, s: &mut State, steps: usize) {
     for _ in 0..steps {

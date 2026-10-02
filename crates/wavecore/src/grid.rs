@@ -1,6 +1,7 @@
-/// Ghost layers on every side. Second-order reconstruction of a face needs the
-/// two cells on each side of it, so a boundary face reaches two cells outward.
-pub const GHOST: usize = 2;
+/// Ghost layers on every side. Second-order reconstruction of a face needs two cells on
+/// each side of it; the dispersive terms take the divergence of the velocity, then its
+/// gradient, then a gradient again, which reaches three cells outward.
+pub const GHOST: usize = 3;
 
 /// Uniform Cartesian grid in metres, stored with [`GHOST`] ghost layers on every side.
 ///
@@ -82,5 +83,32 @@ pub(crate) fn wrap_ghosts_y(grid: &Grid, a: &mut [f64]) {
             a[grid.idx(i, GHOST - 1 - k)] = a[grid.idx(i, GHOST + ny - 1 - k)];
             a[grid.idx(i, GHOST + ny + k)] = a[grid.idx(i, GHOST + k)];
         }
+    }
+}
+
+/// Ghost cells for a vector field `(vx, vy)` between reflective walls: both components
+/// mirror, and the component normal to a wall flips sign. With `periodic_y`, the south
+/// and north ghosts wrap around instead.
+pub(crate) fn fill_vector_ghosts(grid: &Grid, vx: &mut [f64], vy: &mut [f64], periodic_y: bool) {
+    mirror_ghosts(grid, vx);
+    mirror_ghosts(grid, vy);
+    let (nx, ny, w) = (grid.nx, grid.ny, grid.width());
+    for j in 0..ny + 2 * GHOST {
+        for k in 0..GHOST {
+            let (l, r) = (grid.idx(GHOST - 1 - k, j), grid.idx(GHOST + nx + k, j));
+            vx[l] = -vx[l];
+            vx[r] = -vx[r];
+        }
+    }
+    for i in 0..w {
+        for k in 0..GHOST {
+            let (lo, hi) = (grid.idx(i, GHOST - 1 - k), grid.idx(i, GHOST + ny + k));
+            vy[lo] = -vy[lo];
+            vy[hi] = -vy[hi];
+        }
+    }
+    if periodic_y {
+        wrap_ghosts_y(grid, vx);
+        wrap_ghosts_y(grid, vy);
     }
 }

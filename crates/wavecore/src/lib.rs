@@ -43,13 +43,15 @@
 //! ```
 
 pub mod bathymetry;
+pub mod dispersion;
 pub mod forcing;
 pub mod grid;
 pub mod solver;
 pub mod state;
 
 pub use bathymetry::Bathymetry;
-pub use forcing::{Sponge, WaveMaker, manning_factor};
+pub use dispersion::{Breaking, Dispersion, DispersionStats};
+pub use forcing::{LinearWave, Sponge, WaveMaker, linear_wave, manning_factor};
 pub use grid::{GHOST, Grid};
 pub use solver::{G, H_DRY, Order, Solver};
 pub use state::State;
