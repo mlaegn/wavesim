@@ -136,9 +136,11 @@ impl Drive {
     }
 }
 
-/// Absorbing layer along chosen edges. Inside it, momentum decays and the free
-/// surface relaxes to `level`; the rate ramps quadratically from `strength` at the
-/// domain edge to nearly zero at `width` cells in. Mass is not conserved there, by design.
+/// Absorbing layer along chosen edges. Inside it, the water relaxes towards still water at
+/// `level`: the depth towards the still-water depth (none on land above `level`) and the
+/// momentum towards zero, at the same rate, so it never speeds water up. The rate ramps
+/// quadratically from `strength` at the domain edge to nearly zero at `width` cells in. Mass
+/// is not conserved there, by design.
 #[derive(Clone, Copy, Debug)]
 pub struct Sponge {
     /// Layer thickness in cells.

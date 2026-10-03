@@ -144,20 +144,26 @@ cargo run --release -p wavesim -- info data/pipeline.json
 Send a swell over it:
 
 ```bash
-cargo run --release -p wavesim -- run data/pipeline.json --height 2.5 --period 14 --duration 120
+cargo run --release -p wavesim -- run data/pipeline.json --height 2.5 --period 14
 ```
 
-That writes `out/pipeline/` (both `data/` and `out/` are git-ignored). Options: `--tide` (metres above mean sea level), `--maker-depth` (where the wave-maker goes), `--frame-interval`, `--manning`, `--dispersive false` (plain shallow water, for comparison), `--threads`, `--out`.
+That writes `out/pipeline/` (both `data/` and `out/` are git-ignored). Options: `--tide` (metres above mean sea level), `--duration`, `--frame-interval`, `--manning`, `--dispersive false` (plain shallow water, for comparison), `--threads`, `--out`.
+
+**What the run plans for itself.**
+
+- **Where the wave-maker goes.** It makes a sinusoid, and a real swell is only close to one in deep enough water: in shallow water a second harmonic is bound to it (sharper crests, flatter troughs), and a sinusoid sheds the harmonic it lacks as a separate wave that beats with the swell and moves where it breaks. So the maker goes in the shallowest water where that harmonic is at most 10% of the wave, along its whole line: about 23 m for a 2.5 m, 14 s swell at Pipeline, which puts it beyond the 10–14 m shelf the swell crosses for a kilometre before the reef. The bigger and longer the swell, the deeper it goes; a bed that does not reach deep enough is an error that says so.
+- **How much bed it uses.** Everything further offshore than the maker and its sponge (one and a half wavelengths) need is cropped off, so one long bed serves every swell.
+- **How long it runs.** By default, long enough for the swell to ramp up, reach the shore at its group speed, and break four times (about 240 s at Pipeline).
+- **The sides are walls.** For a swell travelling along `+x` a wall is a mirror, so an alongshore-uniform bed gives an exactly uniform run. On a real bed refraction carries energy sideways, and the mirror image of the bed at a wall can focus it: over the Pipeline shelf, a 600 m wide domain gets wave heights in its middle wrong by 10% (median, up to 36%) against a 2 km wide one, and a 1.2 km wide one by 4% (up to 12%). Keep the part you look at at least 300 m from the sides.
 
 The swell travels along `+x` of the bed's frame, so its direction is chosen when the bed is fetched (`bearing` in `spots.toml`). Add your own spot by adding a table to `spots.toml`.
 
 **Running it on a laptop.**
 
-- The default `pipeline` domain is the compact one, 300 × 267 cells of 3 m. Most of a larger domain would be the strip behind the wave-maker and the side strips that exist only to absorb waves, which no viewer shows. `pipeline_wide` is the 200,000-cell version (1.5 km × 1.2 km) if you want more sea.
-- The solver uses **4 threads** by default, not every core, which keeps a laptop cool. Raise it with `--threads`; `--threads 0` uses all. The results are byte-identical for any number. On a 10-core M5, 20 simulated seconds of the compact case take 12 s on one thread and 4.5 s on four.
-- Simulated time is the main cost. The swell needs about a minute to reach the shore and a few periods after that to show the break, so `--duration 120` is plenty.
+- A 2.5 m, 14 s swell at Pipeline runs on 616 × 200 cells of 3 m (after cropping) for 243 simulated seconds: 3.2 minutes on four threads of an M5 at normal priority. Most of that is the shelf crossing, which the swell needs: it is where refraction decides which parts of the reef get the big waves.
+- The solver uses **4 threads** by default, not every core, which keeps a laptop cool. Raise it with `--threads`; `--threads 0` uses all. The results are byte-identical for any number.
 - On macOS the run is moved to the efficiency cores automatically (see the next section), so it is quiet but slower; pass `--priority normal` for full speed.
-- For a quick look, fetch a coarser bed with `tools/fetch_spot.py pipeline --cell 6` (a quarter of the cells; writes `data/pipeline_6m.json`).
+- For a quick look, fetch a coarser bed with `tools/fetch_spot.py pipeline --cell 6` (a quarter of the cells and half the steps; writes `data/pipeline_6m.json`). 6 m cells get the refraction over the shelf right but are too coarse for the break itself.
 
 ## View a run
 
@@ -173,7 +179,7 @@ The page draws the bed as terrain and the surface as a mesh displaced by the sto
 
 **What it shows.**
 
-- **Only the sea.** The strip seaward of the wave-maker and the strips along the two sides exist for the numerics (the source radiates both ways, and the sponges absorb), so the viewer hides them. **Sea only** switches that off, and **Model zones** marks the wave-maker line and the strips.
+- **Only the sea.** The strip seaward of the wave-maker exists for the numerics (the source radiates both ways, and the sponge absorbs the seaward half), so the viewer hides it. **Sea only** switches that off, and **Model zones** marks the wave-maker line and the sponge.
 - **Foam where the model says the wave breaks.** The solver writes a `breaking` field for each frame, and the foam follows it. Runs without that field fall back to a slope rule.
 - **Side view.** A chart of one line across the break: the bed, the water, and the surface coloured by how close to breaking it is, with the steepest face marked and a readout. A yellow line in the 3D view shows where it is taken; the slider moves it along the shore. Besides the instantaneous values it reports, for that line over the whole run, where it gets steepest and where it breaks.
 - **Maps.** A colour overlay of what happened over the whole run: **where it breaks** (the fraction of the run each cell spent breaking) or **how steep** (the steepest the surface ever got, clear below a slope of 0.06 and full red at 0.4).
@@ -203,7 +209,7 @@ The solver integrates the conservative nonlinear shallow-water equations for wat
 | Dispersion | Serre–Green–Naghdi (flat-bed operator), `h w − ∇(c ∇·w) = r`, solved each stage by Jacobi-preconditioned conjugate gradients from the previous solution | Fully nonlinear; symmetric positive definite; 7 to 11 iterations per solve |
 | Boundaries | Reflective walls; optionally periodic in `y` | Periodic gives an alongshore-uniform wave with no edge diffraction |
 | Wave input | Internal mass source on a line (Wei et al. 1999), Gaussian-weighted, normalised over the discrete grid | Injects exactly the requested amplitude at any resolution; oblique waves via a phase shift along the line |
-| Absorption | Sponge layer: momentum decays, surface relaxes to still water, quadratic ramp | Lets waves leave without reflecting |
+| Absorption | Sponge layer: depth relaxes to that of still water (none on land) and momentum to zero at the same rate, quadratic ramp | Lets waves leave without reflecting, and never speeds water up |
 | Friction | Manning, semi-implicit | Exact for one-directional quadratic drag; never reverses the flow |
 | Time step | Adaptive, CFL 0.4; SSP-RK2 (second and third order) or forward Euler (first order) | |
 
@@ -244,7 +250,10 @@ Choose the order with `Solver::with_order`; the default is `Order::Second`. Add 
 | Still water with dispersion | Over a rough bed, with and without dry bumps, momentum stays below 1e-9 for both orders |
 | Bed and run files | Round-trip exactly; wrong length, NaN values and unknown formats are rejected with a clear message |
 | Full run on a synthetic beach | Frame count and times are right, the first frame is still water, and the wave in the frames has the requested amplitude (between 0.6 and 1.3 times the request) |
-| Run planning | The wave-maker goes where the water first reaches the requested depth, moves seaward at high tide, and impossible setups are explained |
+| Run planning | The wave-maker sits where a sinusoid lacks at most a 10% second harmonic and one cell shoreward it would lack more; the second harmonic has the Stokes deep- and shallow-water limits; a higher tide lets it sit further shoreward; the planned duration matches the analytic travel time up a plane beach within 5%; impossible setups are explained |
+| Walls at the sides | On an alongshore-uniform beach every row of every frame is the same to 1e-6 m (fails with absorbing side strips) |
+| Cropping | Dropping offshore columns keeps the values exactly and moves the frame's origin along `+x` |
+| Sponge over land | A sponge relaxes depth and momentum at the same rate, so water on land inside it keeps its velocity to 1e-6 (the old rule sped it up 14% in three steps; on Pipeline it left films microns deep at tens of metres per second, which cut the time step eightfold) |
 | Viewer data layer | 24 tests: header and file validation, frame offsets, cubic interpolation (follows a wave with under 2% error where a straight line errs by 10%; never puts water below the bed), and reading the exact bytes the Rust writer produces |
 | Rust and viewer agree | `waveio`'s golden test writes a tiny run and compares it byte for byte with the fixture the viewer's tests read; if the format drifts, one of them fails |
 | Fetch tool | On a synthetic plane, `+x` follows the bearing and `+y` is 90° counter-clockwise from it, for four bearings; clipping is counted; a request outside the raster is an error |
@@ -356,7 +365,8 @@ Because background priority is slow, a long run is better started once and left 
 - Real bathymetry exists at 3 m only where measured surveys exist (see [docs/bathymetry.md](docs/bathymetry.md)). For most coasts, including Portugal's, no open reef-scale data was found.
 - `wavesim run` sends one monochromatic swell along `+x` of the bed's frame; the direction is fixed when the bed is fetched.
 - The viewer loads a whole run into memory (120 MB for the Pipeline run) and needs WebGL2. There is no compact export yet, so runs are for local viewing, not hosting.
-- The wave-maker sits at a single depth, and its amplitude is calibrated for the depth along the middle row.
+- The wave-maker's amplitude is calibrated for the depth along the middle row; where the depth along its line varies (23.5 to 25.8 m at Pipeline), so does the amplitude, by about half as much in proportion.
+- The sides are walls, which mirror the bed; see *What the run plans for itself*.
 
 ## License
 

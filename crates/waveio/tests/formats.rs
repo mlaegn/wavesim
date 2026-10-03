@@ -34,6 +34,25 @@ fn bed_round_trips_exactly() {
 }
 
 #[test]
+fn cropping_drops_offshore_columns_and_moves_the_origin_with_them() {
+    let mut bed = sample_bed(7, 5);
+    bed.header.frame.origin_easting = 1000.0;
+    bed.header.frame.origin_northing = 2000.0;
+    // +x points east: dropping 2 columns of 3 m moves the corner 6 m east.
+    bed.header.frame.x_bearing_deg = 90.0;
+    let cropped = bed.crop_x(2);
+    assert_eq!((cropped.header.nx, cropped.header.ny), (5, 5));
+    for j in 0..5 {
+        assert_eq!(
+            cropped.elevation[j * 5..j * 5 + 5],
+            bed.elevation[j * 7 + 2..j * 7 + 7]
+        );
+    }
+    assert!((cropped.header.frame.origin_easting - 1006.0).abs() < 1e-9);
+    assert!((cropped.header.frame.origin_northing - 2000.0).abs() < 1e-9);
+}
+
+#[test]
 fn bathymetry_moves_still_water_to_zero() {
     let dir = scratch("tide");
     let bed = sample_bed(4, 3);

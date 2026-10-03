@@ -422,13 +422,16 @@ impl Solver {
                     for sp in sponges {
                         let rate = sp.rate(&g, i, j);
                         if rate > 0.0 {
+                            // Relax towards still water: the depth towards that of still
+                            // water, which is none on land above the sponge's level, and the
+                            // momentum towards zero, at the same rate. Relaxing the surface
+                            // towards the level instead drained swash on land to a film microns
+                            // deep that kept its momentum and moved at tens of metres per
+                            // second, which set the time step for the whole grid.
                             let f = (-rate * dt).exp();
                             rhu[i] *= f;
                             rhv[i] *= f;
-                            if rh[i] > H_DRY {
-                                let eta = rh[i] + bed[k];
-                                rh[i] = (rh[i] - (1.0 - f) * (eta - sp.level)).max(0.0);
-                            }
+                            rh[i] = f * rh[i] + (1.0 - f) * (sp.level - bed[k]).max(0.0);
                         }
                     }
                     if manning > 0.0 && rh[i] > H_FRICTION_MIN {

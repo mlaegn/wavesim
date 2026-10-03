@@ -65,7 +65,7 @@ out/pipeline/
 
 A frame is the blocks of its fields, one after another, each `nx · ny` values in the same layout as the bed; field `f` of frame `k` starts at value `(k · len(fields) + f) · nx · ny`. A reader must look fields up by name, not assume `eta` comes first.
 
-`waves` also records `maker_x_m` (the wave-maker line), `maker_sigma_m` (the source's Gaussian width), `sponge_offshore_cells` and `sponge_side_cells` (the absorbing strips), and `near_field_end_m`, the distance along `x` past which the wave-maker's own bump has died away (six source widths beyond the line). **Seaward of `near_field_end_m` and inside the side strips the surface is the source and the sponges, not sea**; a viewer should start at `near_field_end_m` and trim the sides. The Pipeline viewer does.
+`waves` also records `maker_x_m` (the wave-maker line), `maker_sigma_m` (the source's Gaussian width), `maker_depth_m` and `maker_depth_min_m` (the depth there along the middle row, and the shallowest along the line), `maker_second_harmonic` (the second harmonic a sinusoid lacks there, relative to the wave), `sponge_offshore_cells` (the absorbing strip behind the maker), `cropped_offshore_m` (how much of the bed file's offshore end the run left out; `nx`, the bed and `frame.origin_*` describe the cropped grid), and `near_field_end_m`, the distance along `x` past which the wave-maker's own bump has died away (six source widths beyond the line). **Seaward of `near_field_end_m` the surface is the source and the sponge, not sea**; a viewer should start there. The sides are walls. Runs written before the sides were walls also record `sponge_side_cells`, the width of absorbing strips along them, which a viewer should trim.
 
 ## Reading a run
 
@@ -108,5 +108,5 @@ One table per spot, read by `tools/fetch_spot.py`:
 | `offshore_m`, `onshore_m` | Domain extent seaward and landward of the anchor, along `+x` |
 | `width_m` | Domain extent along `y`, centred on the anchor |
 | `cell_m` | Cell size |
-| `clip_above`, `clip_below` | Elevation limits, in metres |
+| `clip_above`, `clip_below` | Elevation limits, in metres (optional) |
 | `datum`, `source`, `attribution`, `description` | Recorded in the header |

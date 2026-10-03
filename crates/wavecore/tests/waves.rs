@@ -288,3 +288,43 @@ fn solitary_wave_runup_matches_synolakis_law() {
         "runup {runup:.4} m vs law {expected:.4} m"
     );
 }
+
+#[test]
+fn a_sponge_over_land_never_speeds_the_water_up() {
+    // Regression: a sponge relaxed the surface towards its level, which on land above that
+    // level drained the swash faster than its momentum, so the water sped up. In the side
+    // sponges of the Pipeline run it left films microns deep moving at tens of metres per
+    // second, which cut the time step eightfold. A sponge relaxes depth and momentum at the
+    // same rate, so a uniform sheet of water on flat land must keep its velocity exactly.
+    let grid = Grid::new(20, 20, 2.0, 2.0);
+    let bed = Bathymetry::flat(&grid, -0.5);
+    let mut s = State::zeros(&grid);
+    for (i, j) in grid.interior() {
+        let k = grid.idx(i, j);
+        s.h[k] = 1.0;
+        s.hu[k] = 1.0;
+        s.hv[k] = 0.5;
+    }
+    // A sponge so wide that its rate is the same everywhere here to within 0.004%, so the land
+    // drains evenly and no slope builds up to push the water.
+    let solver = Solver::new(grid, bed)
+        .with_sponge(Sponge::new(1_000_000, 1.5).edges(true, false, false, false));
+    for _ in 0..3 {
+        solver.step(&mut s, 0.05);
+    }
+    // The walls reach four cells inward per step; look at the middle, well away from them.
+    for i in GHOST + 7..GHOST + 13 {
+        for j in GHOST + 7..GHOST + 13 {
+            let k = grid.idx(i, j);
+            assert!(
+                s.h[k] < 1.0,
+                "the sponge did not drain the land at ({i}, {j})"
+            );
+            let (u, v) = (s.hu[k] / s.h[k], s.hv[k] / s.h[k]);
+            assert!(
+                (u - 1.0).abs() < 1e-6 && (v - 0.5).abs() < 1e-6,
+                "the sponge changed the velocity at ({i}, {j}) to ({u}, {v})"
+            );
+        }
+    }
+}

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use wavesim::{Bed, Error, RunOptions, estimate_seconds};
+use wavesim::{Bed, Error, RunOptions, estimate_seconds, plan};
 
 /// How the run is scheduled by the operating system.
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -35,15 +35,13 @@ enum Command {
         /// Still-water level in metres above mean sea level
         #[arg(long, default_value_t = 0.0, allow_negative_numbers = true)]
         tide: f64,
-        /// Simulated seconds
-        #[arg(long, default_value_t = 300.0)]
-        duration: f64,
+        /// Simulated seconds (default: long enough for the swell to reach the shore and
+        /// break four times)
+        #[arg(long)]
+        duration: Option<f64>,
         /// Seconds between output frames
         #[arg(long, default_value_t = 2.0)]
         frame_interval: f64,
-        /// Put the wave-maker where the water first gets this shallow, in metres
-        #[arg(long, default_value_t = 8.0)]
-        maker_depth: f64,
         /// Manning roughness in s/m^(1/3); 0 switches friction off
         #[arg(long, default_value_t = 0.0)]
         manning: f64,
@@ -94,7 +92,6 @@ fn real_main() -> Result<(), Error> {
             tide,
             duration,
             frame_interval,
-            maker_depth,
             manning,
             dispersive,
             threads,
@@ -116,12 +113,13 @@ fn real_main() -> Result<(), Error> {
                 tide,
                 duration,
                 frame_interval,
-                maker_depth,
                 manning,
                 dispersive,
                 max_wall_seconds: (max_minutes > 0.0).then_some(max_minutes * 60.0),
             };
-            if let Ok(bed) = Bed::read(&opts.bed) {
+            if let Ok(bed) = Bed::read(&opts.bed)
+                && let Ok(plan) = plan(&bed, &opts)
+            {
                 // On the efficiency cores the same work takes about three and a half times as long
                 // (measured: 15.5 s against 4.4 s for 20 simulated seconds on the Pipeline bed).
                 let slower = if cfg!(target_os = "macos") && priority == Priority::Background {
@@ -129,7 +127,16 @@ fn real_main() -> Result<(), Error> {
                 } else {
                     1.0
                 };
-                let guess = estimate_seconds(&bed, &opts, threads) * slower;
+                eprintln!(
+                    "wave-maker at x = {:.0} m in {:.1} to {:.1} m of water (a sinusoid there lacks a \
+                     second harmonic of {:.0}%); {:.0} simulated seconds",
+                    plan.maker_x,
+                    plan.maker_depth_min,
+                    plan.maker_depth,
+                    100.0 * plan.second_harmonic,
+                    plan.duration
+                );
+                let guess = estimate_seconds(&bed, &opts, &plan, threads) * slower;
                 eprintln!(
                     "estimated about {} on {threads} thread(s) (a rough guess){}",
                     human(guess),
@@ -157,12 +164,8 @@ fn real_main() -> Result<(), Error> {
             let plan = summary.plan;
             println!(
                 "wave-maker at x = {:.0} m in {:.1} m of water (wavelength about {:.0} m); \
-                 sponges {} cells offshore, {} at the sides",
-                plan.maker_x,
-                plan.maker_depth,
-                plan.wavelength,
-                plan.sponge_offshore,
-                plan.sponge_side
+                 sponge {} cells offshore, walls at the sides",
+                plan.maker_x, plan.maker_depth, plan.wavelength, plan.sponge_offshore
             );
             println!(
                 "{} frames, {} steps in {:.1} s; highest surface {:+.2} m above still water",

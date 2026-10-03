@@ -160,6 +160,26 @@ impl Bed {
         }
     }
 
+    /// The bed without its first `columns` columns (the offshore end), with the frame's origin
+    /// moved along +x to the new lower-left corner. Panics unless a column is left.
+    pub fn crop_x(&self, columns: usize) -> Self {
+        let h = &self.header;
+        assert!(columns < h.nx, "cannot crop {columns} of {} columns", h.nx);
+        let nx = h.nx - columns;
+        let elevation = self
+            .elevation
+            .chunks(h.nx)
+            .flat_map(|row| row[columns..].iter().copied())
+            .collect();
+        let shift = columns as f64 * h.dx;
+        let bearing = h.frame.x_bearing_deg.to_radians();
+        let mut header = h.clone();
+        header.nx = nx;
+        header.frame.origin_easting += shift * bearing.sin();
+        header.frame.origin_northing += shift * bearing.cos();
+        Self { header, elevation }
+    }
+
     pub fn grid(&self) -> Grid {
         Grid::new(
             self.header.nx,

@@ -6,10 +6,12 @@
 # the offshore edge and `onshore_m` from the landward edge, and the domain is
 # `width_m` wide, centred on the anchor.
 
-# The compact domain is the default: about 80,000 cells, which is what a laptop can run
-# comfortably. The wave-maker sits 8 m deep, about 325 m from the left edge, with room for
-# its sponge behind it, and the sides keep a strip each for theirs. `pipeline_wide` is the
-# larger domain (200,000 cells) used for the first runs.
+# A spot's bed reaches far enough offshore for the biggest swell you want to run there: the
+# wave-maker goes where a sinusoid is still the right wave, which for a 2.5 m, 14 s swell is
+# about 23 m deep and for a 4 m, 16 s swell about 34 m (see MAX_SECOND_HARMONIC in
+# crates/wavesim/src/lib.rs). A run crops off whatever is further offshore than its own
+# wave-maker and sponge need, so a long bed costs a small swell nothing. Onshore, keep a little
+# more land than the run-up reaches; `clip_above` flattens the rest.
 
 [pipeline]
 description = "Banzai Pipeline, Oahu North Shore, Hawaii"
@@ -21,26 +23,8 @@ lat = 21.665
 lon = -158.051
 utm_crs = "EPSG:32604"
 bearing = 130.0      # shore-normal, estimated from the seabed gradient (median 131 deg)
-offshore_m = 650.0
-onshore_m = 250.0
-width_m = 800.0
+offshore_m = 2400.0  # the shelf is 10-14 m deep for a kilometre; 25-45 m beyond 1.5 km
+onshore_m = 50.0
+width_m = 600.0
 cell_m = 3.0
-clip_above = 10.0    # land higher than this is flattened; waves never reach it
-clip_below = -15.0   # water deeper than this is flattened; only the sponge lives there
-
-[pipeline_wide]
-description = "Banzai Pipeline, Oahu North Shore, Hawaii (wide: 1.5 km x 1.2 km)"
-source = "NOAA NCEI CUDEM 1/9 arc-second topobathy, Hawaii"
-url = "https://noaa-nos-coastal-lidar-pds.s3.amazonaws.com/dem/NCEI_ninth_Topobathy_Hawaii_9428/tiles/ncei19_n21x75_w158x25_2021v1.tif"
-datum = "local mean sea level"
-attribution = "NOAA National Centers for Environmental Information"
-lat = 21.665
-lon = -158.051
-utm_crs = "EPSG:32604"
-bearing = 130.0      # shore-normal, estimated from the seabed gradient (median 131 deg)
-offshore_m = 1100.0
-onshore_m = 400.0
-width_m = 1200.0
-cell_m = 3.0
-clip_above = 10.0    # land higher than this is flattened; waves never reach it
-clip_below = -15.0   # water deeper than this is flattened; only the sponge lives there
+clip_above = 6.0     # land higher than this is flattened; waves never reach it
