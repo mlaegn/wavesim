@@ -46,6 +46,7 @@ pub mod bathymetry;
 pub mod dispersion;
 pub mod forcing;
 pub mod grid;
+mod par;
 pub mod solver;
 pub mod state;
 

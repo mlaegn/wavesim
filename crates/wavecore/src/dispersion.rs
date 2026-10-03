@@ -32,6 +32,7 @@
 
 use crate::bathymetry::Bathymetry;
 use crate::grid::{GHOST, Grid, fill_vector_ghosts};
+use crate::par::{rows1, rows2, rows3, sum_rows};
 use crate::solver::{H_DRY, velocity};
 use crate::state::State;
 
@@ -108,23 +109,27 @@ pub(crate) fn switch(
     let w = grid.width();
     let rows = grid.ny + 2 * GHOST;
     let (ix, iy) = (0.5 / grid.dx, 0.5 / grid.dy);
-    let eta = |m: usize| s.h[m] + bed.b[m];
-    for j in 1..rows - 1 {
-        for i in 1..w - 1 {
+    let h = &s.h[..];
+    let b = &bed.b[..];
+    let eta = |m: usize| h[m] + b[m];
+    rows1(w, phi, |j, row| {
+        if j == 0 || j == rows - 1 {
+            return;
+        }
+        for (i, out) in row.iter_mut().enumerate().take(w - 1).skip(1) {
             let k = j * w + i;
-            let h = s.h[k];
-            if h < H_DISPERSION_MIN {
-                phi[k] = 0.0;
+            if h[k] < H_DISPERSION_MIN {
+                *out = 0.0;
                 continue;
             }
             let ex = (eta(k + 1) - eta(k - 1)) * ix;
             let ey = (eta(k + w) - eta(k - w)) * iy;
-            let ratio = (eta(k) / h).max(0.0);
+            let ratio = (eta(k) / h[k]).max(0.0);
             let off = smoothstep(breaking.eta_ratio.0, breaking.eta_ratio.1, ratio)
                 .max(smoothstep(breaking.slope.0, breaking.slope.1, ex.hypot(ey)));
-            phi[k] = 1.0 - off;
+            *out = 1.0 - off;
         }
-    }
+    });
     for j in 0..rows {
         phi[j * w] = phi[j * w + 1];
         phi[j * w + w - 1] = phi[j * w + w - 2];
@@ -133,6 +138,33 @@ pub(crate) fn switch(
         phi[i] = phi[w + i];
         phi[(rows - 1) * w + i] = phi[(rows - 2) * w + i];
     }
+}
+
+/// How close each interior cell is to breaking: 0 for smooth water up to 1 where the surface
+/// is steep or tall for its depth (the dispersive terms are off there and the shock
+/// dissipates the wave). Row-major over the interior, `y` outer. It is 0 in water too thin
+/// to carry a wave, so dry land and the film at the waterline never read as breaking.
+pub(crate) fn breaking_indicator(
+    grid: &Grid,
+    bed: &Bathymetry,
+    s: &State,
+    breaking: Breaking,
+    periodic_y: bool,
+) -> Vec<f64> {
+    let mut filled = s.clone();
+    filled.fill_boundaries(grid, periodic_y);
+    let mut phi = vec![0.0; grid.cells()];
+    switch(grid, bed, &filled, breaking, &mut phi);
+    grid.interior()
+        .map(|(i, j)| {
+            let k = grid.idx(i, j);
+            if s.h[k] < H_DISPERSION_MIN {
+                0.0
+            } else {
+                1.0 - phi[k]
+            }
+        })
+        .collect()
 }
 
 /// Scratch arrays, all padded like the grid. Allocated once.
@@ -219,32 +251,48 @@ fn matvec(
     ay: &mut [f64],
 ) {
     fill_vector_ghosts(grid, px, py, periodic_y);
+    let (px, py): (&[f64], &[f64]) = (px, py);
     let w = grid.width();
     let (ix, iy) = (0.5 / grid.dx, 0.5 / grid.dy);
+    let (nx, ny) = (grid.nx, grid.ny);
     // c div p over the interior and one ring of ghost cells.
-    for j in GHOST - 1..grid.ny + GHOST + 1 {
-        for i in GHOST - 1..grid.nx + GHOST + 1 {
-            let k = j * w + i;
-            f[k] = c[k] * ((px[k + 1] - px[k - 1]) * ix + (py[k + w] - py[k - w]) * iy);
+    rows1(w, f, |j, row| {
+        if j < GHOST - 1 || j > ny + GHOST {
+            return;
         }
-    }
-    for (i, j) in grid.interior() {
-        let k = j * w + i;
-        ax[k] = mask[k] * (heff[k] * px[k] - (f[k + 1] - f[k - 1]) * ix);
-        ay[k] = mask[k] * (heff[k] * py[k] - (f[k + w] - f[k - w]) * iy);
-    }
+        for (i, out) in row
+            .iter_mut()
+            .enumerate()
+            .take(nx + GHOST + 1)
+            .skip(GHOST - 1)
+        {
+            let k = j * w + i;
+            *out = c[k] * ((px[k + 1] - px[k - 1]) * ix + (py[k + w] - py[k - w]) * iy);
+        }
+    });
+    let f: &[f64] = f;
+    rows2(w, ax, ay, |j, rx, ry| {
+        if j < GHOST || j >= ny + GHOST {
+            return;
+        }
+        for i in GHOST..nx + GHOST {
+            let k = j * w + i;
+            rx[i] = mask[k] * (heff[k] * px[k] - (f[k + 1] - f[k - 1]) * ix);
+            ry[i] = mask[k] * (heff[k] * py[k] - (f[k + w] - f[k - w]) * iy);
+        }
+    });
 }
 
 fn dot(grid: &Grid, ax: &[f64], ay: &[f64], bx: &[f64], by: &[f64]) -> f64 {
-    let w = grid.width();
-    let mut s = 0.0;
-    for j in GHOST..grid.ny + GHOST {
-        let row = j * w;
-        for k in row + GHOST..row + GHOST + grid.nx {
+    let (w, nx) = (grid.width(), grid.nx);
+    sum_rows(GHOST, GHOST + grid.ny, w, |j| {
+        let row = j * w + GHOST;
+        let mut s = 0.0;
+        for k in row..row + nx {
             s += ax[k] * bx[k] + ay[k] * by[k];
         }
-    }
-    s
+        s
+    })
 }
 
 impl Dispersion {
@@ -263,135 +311,294 @@ impl Dispersion {
         work: &mut Work,
     ) {
         let w = grid.width();
-        let rows = grid.ny + 2 * GHOST;
+        let (nx, ny) = (grid.nx, grid.ny);
+        let rows = ny + 2 * GHOST;
         let (dx, dy) = (grid.dx, grid.dy);
         let (ix, iy) = (0.5 / dx, 0.5 / dy);
-        let wk = work;
+        let nonlinear = self.nonlinear;
+        let Work {
+            u,
+            v,
+            mask,
+            um,
+            vm,
+            div,
+            c,
+            f,
+            heff,
+            diag_x,
+            diag_y,
+            wx,
+            wy,
+            bx,
+            by,
+            rx,
+            ry,
+            zx,
+            zy,
+            px,
+            py,
+            ax,
+            ay,
+            stats,
+        } = work;
+        let (h, hu, hv) = (&s.h[..], &s.hu[..], &s.hv[..]);
 
         // Water thinner than H_DISPERSION_MIN follows plain shallow water: it takes no part
         // in the dispersive system, neither as unknown nor as a source of divergence. Left
         // in, a film a millimetre deep has an enormous acceleration w = r / h that leaks into
         // its neighbours, and their dispersive force feeds back into it divided by that
         // depth: a loop that grows without bound at the edge of a run-up.
-        for k in 0..grid.cells() {
-            wk.u[k] = velocity(s.h[k], s.hu[k]);
-            wk.v[k] = velocity(s.h[k], s.hv[k]);
-            wk.mask[k] = if s.h[k] >= H_DISPERSION_MIN { 1.0 } else { 0.0 };
-            wk.um[k] = wk.mask[k] * wk.u[k];
-            wk.vm[k] = wk.mask[k] * wk.v[k];
-        }
-        for j in 1..rows - 1 {
-            for i in 1..w - 1 {
+        rows2(w, u, v, |j, ru, rv| {
+            for i in 0..w {
                 let k = j * w + i;
-                wk.div[k] = (wk.um[k + 1] - wk.um[k - 1]) * ix + (wk.vm[k + w] - wk.vm[k - w]) * iy;
+                ru[i] = velocity(h[k], hu[k]);
+                rv[i] = velocity(h[k], hv[k]);
             }
-        }
+        });
+        let (u, v): (&[f64], &[f64]) = (u, v);
+        rows3(w, mask, um, vm, |j, rm, rum, rvm| {
+            for i in 0..w {
+                let k = j * w + i;
+                let m = if h[k] >= H_DISPERSION_MIN { 1.0 } else { 0.0 };
+                rm[i] = m;
+                rum[i] = m * u[k];
+                rvm[i] = m * v[k];
+            }
+        });
+        let (mask, um, vm): (&[f64], &[f64], &[f64]) = (mask, um, vm);
+        rows1(w, div, |j, row| {
+            if j == 0 || j == rows - 1 {
+                return;
+            }
+            for (i, out) in row.iter_mut().enumerate().take(w - 1).skip(1) {
+                let k = j * w + i;
+                *out = (um[k + 1] - um[k - 1]) * ix + (vm[k + w] - vm[k - w]) * iy;
+            }
+        });
+        let div: &[f64] = div;
 
         // The coefficient c = phi h^3 / 3 and the nonlinear forcing c N, over the interior
         // and one ring of ghost cells.
-        for j in GHOST - 1..grid.ny + GHOST + 1 {
-            for i in GHOST - 1..grid.nx + GHOST + 1 {
+        rows2(w, c, f, |j, rc, rf| {
+            if j < GHOST - 1 || j > ny + GHOST {
+                return;
+            }
+            for i in GHOST - 1..nx + GHOST + 1 {
                 let k = j * w + i;
-                let h = s.h[k];
-                let c = if h < H_DISPERSION_MIN {
+                let depth = h[k];
+                let coeff = if depth < H_DISPERSION_MIN {
                     0.0
                 } else {
-                    phi[k] * h * h * h / 3.0
+                    phi[k] * depth * depth * depth / 3.0
                 };
-                wk.c[k] = c;
-                wk.f[k] = if self.nonlinear && c > 0.0 {
-                    let n = wk.um[k] * (wk.div[k + 1] - wk.div[k - 1]) * ix
-                        + wk.vm[k] * (wk.div[k + w] - wk.div[k - w]) * iy
-                        - wk.div[k] * wk.div[k];
-                    c * n
+                rc[i] = coeff;
+                rf[i] = if nonlinear && coeff > 0.0 {
+                    let n = um[k] * (div[k + 1] - div[k - 1]) * ix
+                        + vm[k] * (div[k + w] - div[k - w]) * iy
+                        - div[k] * div[k];
+                    coeff * n
                 } else {
                     0.0
                 };
             }
-        }
+        });
+        let c: &[f64] = c;
 
-        // Right-hand side, the effective depth, and the Jacobi preconditioner.
-        for (i, j) in grid.interior() {
-            let k = j * w + i;
-            let h = s.h[k];
-            wk.heff[k] = h.max(H_DRY);
-            if wk.mask[k] == 0.0 {
-                wk.bx[k] = 0.0;
-                wk.by[k] = 0.0;
-                wk.wx[k] = 0.0;
-                wk.wy[k] = 0.0;
-                wk.diag_x[k] = 1.0;
-                wk.diag_y[k] = 1.0;
-                continue;
-            } else {
-                wk.bx[k] = lhu[k] - wk.u[k] * lh[k] + (wk.f[k + 1] - wk.f[k - 1]) * ix;
-                wk.by[k] = lhv[k] - wk.v[k] * lh[k] + (wk.f[k + w] - wk.f[k - w]) * iy;
+        // The effective depth and the Jacobi preconditioner.
+        rows3(w, heff, diag_x, diag_y, |j, rh, rdx, rdy| {
+            if j < GHOST || j >= ny + GHOST {
+                return;
             }
-            wk.diag_x[k] = wk.heff[k] + (wk.c[k + 1] + wk.c[k - 1]) * 0.25 / (dx * dx);
-            wk.diag_y[k] = wk.heff[k] + (wk.c[k + w] + wk.c[k - w]) * 0.25 / (dy * dy);
+            for i in GHOST..nx + GHOST {
+                let k = j * w + i;
+                rh[i] = h[k].max(H_DRY);
+                if mask[k] == 0.0 {
+                    rdx[i] = 1.0;
+                    rdy[i] = 1.0;
+                } else {
+                    rdx[i] = rh[i] + (c[k + 1] + c[k - 1]) * 0.25 / (dx * dx);
+                    rdy[i] = rh[i] + (c[k + w] + c[k - w]) * 0.25 / (dy * dy);
+                }
+            }
+        });
+        let (heff, diag_x, diag_y): (&[f64], &[f64], &[f64]) = (heff, diag_x, diag_y);
+
+        // The right-hand side, and a zero first guess where a cell takes no part. `f` holds
+        // c N here and is scratch for the matrix product afterwards.
+        {
+            let (lhu_r, lhv_r, f_r): (&[f64], &[f64], &[f64]) = (lhu, lhv, f);
+            rows2(w, bx, by, |j, rbx, rby| {
+                if j < GHOST || j >= ny + GHOST {
+                    return;
+                }
+                for i in GHOST..nx + GHOST {
+                    let k = j * w + i;
+                    if mask[k] == 0.0 {
+                        rbx[i] = 0.0;
+                        rby[i] = 0.0;
+                    } else {
+                        rbx[i] = lhu_r[k] - u[k] * lh[k] + (f_r[k + 1] - f_r[k - 1]) * ix;
+                        rby[i] = lhv_r[k] - v[k] * lh[k] + (f_r[k + w] - f_r[k - w]) * iy;
+                    }
+                }
+            });
         }
+        rows2(w, wx, wy, |j, rwx, rwy| {
+            if j < GHOST || j >= ny + GHOST {
+                return;
+            }
+            for i in GHOST..nx + GHOST {
+                if mask[j * w + i] == 0.0 {
+                    rwx[i] = 0.0;
+                    rwy[i] = 0.0;
+                }
+            }
+        });
+        let (bx, by): (&[f64], &[f64]) = (bx, by);
 
         // Preconditioned conjugate gradients, starting from the previous solution.
-        matvec(
-            grid, periodic_y, &wk.heff, &wk.mask, &wk.c, &mut wk.f, &mut wk.wx, &mut wk.wy,
-            &mut wk.ax, &mut wk.ay,
-        );
-        for (i, j) in grid.interior() {
-            let k = j * w + i;
-            wk.rx[k] = wk.bx[k] - wk.ax[k];
-            wk.ry[k] = wk.by[k] - wk.ay[k];
-            wk.zx[k] = wk.rx[k] / wk.diag_x[k];
-            wk.zy[k] = wk.ry[k] / wk.diag_y[k];
-            wk.px[k] = wk.zx[k];
-            wk.py[k] = wk.zy[k];
+        matvec(grid, periodic_y, heff, mask, c, f, wx, wy, ax, ay);
+        {
+            let (ax_r, ay_r): (&[f64], &[f64]) = (ax, ay);
+            rows2(w, rx, ry, |j, rrx, rry| {
+                if j < GHOST || j >= ny + GHOST {
+                    return;
+                }
+                for i in GHOST..nx + GHOST {
+                    let k = j * w + i;
+                    rrx[i] = bx[k] - ax_r[k];
+                    rry[i] = by[k] - ay_r[k];
+                }
+            });
         }
-        let bnorm = dot(grid, &wk.bx, &wk.by, &wk.bx, &wk.by).sqrt();
+        precondition(w, nx, ny, rx, ry, diag_x, diag_y, zx, zy);
+        copy_interior(w, nx, ny, zx, zy, px, py);
+        let bnorm = dot(grid, bx, by, bx, by).sqrt();
         let target = self.tolerance * bnorm + 1e-10;
-        let mut rz = dot(grid, &wk.rx, &wk.ry, &wk.zx, &wk.zy);
+        let mut rz = dot(grid, rx, ry, zx, zy);
         let mut iterations = 0;
-        let mut converged = dot(grid, &wk.rx, &wk.ry, &wk.rx, &wk.ry).sqrt() <= target;
+        let mut converged = dot(grid, rx, ry, rx, ry).sqrt() <= target;
         while !converged && iterations < self.max_iterations {
-            matvec(
-                grid, periodic_y, &wk.heff, &wk.mask, &wk.c, &mut wk.f, &mut wk.px, &mut wk.py,
-                &mut wk.ax, &mut wk.ay,
-            );
-            let pap = dot(grid, &wk.px, &wk.py, &wk.ax, &wk.ay);
+            matvec(grid, periodic_y, heff, mask, c, f, px, py, ax, ay);
+            let pap = dot(grid, px, py, ax, ay);
             let alpha = rz / pap;
-            for (i, j) in grid.interior() {
-                let k = j * w + i;
-                wk.wx[k] += alpha * wk.px[k];
-                wk.wy[k] += alpha * wk.py[k];
-                wk.rx[k] -= alpha * wk.ax[k];
-                wk.ry[k] -= alpha * wk.ay[k];
-                wk.zx[k] = wk.rx[k] / wk.diag_x[k];
-                wk.zy[k] = wk.ry[k] / wk.diag_y[k];
-            }
+            axpy(w, nx, ny, alpha, px, py, wx, wy);
+            axpy(w, nx, ny, -alpha, ax, ay, rx, ry);
+            precondition(w, nx, ny, rx, ry, diag_x, diag_y, zx, zy);
             iterations += 1;
-            converged = dot(grid, &wk.rx, &wk.ry, &wk.rx, &wk.ry).sqrt() <= target;
-            let rz_next = dot(grid, &wk.rx, &wk.ry, &wk.zx, &wk.zy);
+            converged = dot(grid, rx, ry, rx, ry).sqrt() <= target;
+            let rz_next = dot(grid, rx, ry, zx, zy);
             let beta = rz_next / rz;
             rz = rz_next;
-            for (i, j) in grid.interior() {
-                let k = j * w + i;
-                wk.px[k] = wk.zx[k] + beta * wk.px[k];
-                wk.py[k] = wk.zy[k] + beta * wk.py[k];
+            {
+                let (zx_r, zy_r): (&[f64], &[f64]) = (zx, zy);
+                rows2(w, px, py, |j, rpx, rpy| {
+                    if j < GHOST || j >= ny + GHOST {
+                        return;
+                    }
+                    for i in GHOST..nx + GHOST {
+                        let k = j * w + i;
+                        rpx[i] = zx_r[k] + beta * rpx[i];
+                        rpy[i] = zy_r[k] + beta * rpy[i];
+                    }
+                });
             }
         }
-        wk.stats.solves += 1;
-        wk.stats.iterations += iterations as u64;
+        stats.solves += 1;
+        stats.iterations += iterations as u64;
         if !converged {
-            wk.stats.unconverged += 1;
+            stats.unconverged += 1;
         }
 
         // d(hu)/dt = h w + u dh/dt.
-        for (i, j) in grid.interior() {
-            let k = j * w + i;
-            if wk.mask[k] > 0.0 {
-                lhu[k] = s.h[k] * wk.wx[k] + wk.u[k] * lh[k];
-                lhv[k] = s.h[k] * wk.wy[k] + wk.v[k] * lh[k];
-            }
+        {
+            let (wx_r, wy_r): (&[f64], &[f64]) = (wx, wy);
+            rows2(w, lhu, lhv, |j, rlu, rlv| {
+                if j < GHOST || j >= ny + GHOST {
+                    return;
+                }
+                for i in GHOST..nx + GHOST {
+                    let k = j * w + i;
+                    if mask[k] > 0.0 {
+                        rlu[i] = h[k] * wx_r[k] + u[k] * lh[k];
+                        rlv[i] = h[k] * wy_r[k] + v[k] * lh[k];
+                    }
+                }
+            });
         }
     }
+}
+
+/// `z = r / diag` over the interior, for both components.
+#[allow(clippy::too_many_arguments)]
+fn precondition(
+    w: usize,
+    nx: usize,
+    ny: usize,
+    rx: &[f64],
+    ry: &[f64],
+    diag_x: &[f64],
+    diag_y: &[f64],
+    zx: &mut [f64],
+    zy: &mut [f64],
+) {
+    rows2(w, zx, zy, |j, rzx, rzy| {
+        if j < GHOST || j >= ny + GHOST {
+            return;
+        }
+        for i in GHOST..nx + GHOST {
+            let k = j * w + i;
+            rzx[i] = rx[k] / diag_x[k];
+            rzy[i] = ry[k] / diag_y[k];
+        }
+    });
+}
+
+/// `dst = src` over the interior, for both components.
+fn copy_interior(
+    w: usize,
+    nx: usize,
+    ny: usize,
+    sx: &[f64],
+    sy: &[f64],
+    dx_: &mut [f64],
+    dy_: &mut [f64],
+) {
+    rows2(w, dx_, dy_, |j, rdx, rdy| {
+        if j < GHOST || j >= ny + GHOST {
+            return;
+        }
+        for i in GHOST..nx + GHOST {
+            let k = j * w + i;
+            rdx[i] = sx[k];
+            rdy[i] = sy[k];
+        }
+    });
+}
+
+/// `y += a * x` over the interior, for both components.
+#[allow(clippy::too_many_arguments)]
+fn axpy(
+    w: usize,
+    nx: usize,
+    ny: usize,
+    a: f64,
+    xx: &[f64],
+    xy: &[f64],
+    yx: &mut [f64],
+    yy: &mut [f64],
+) {
+    rows2(w, yx, yy, |j, ryx, ryy| {
+        if j < GHOST || j >= ny + GHOST {
+            return;
+        }
+        for i in GHOST..nx + GHOST {
+            let k = j * w + i;
+            ryx[i] += a * xx[k];
+            ryy[i] += a * xy[k];
+        }
+    });
 }
 
 #[cfg(test)]

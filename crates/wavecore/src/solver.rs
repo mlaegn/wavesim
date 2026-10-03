@@ -12,9 +12,10 @@
 use std::cell::RefCell;
 
 use crate::bathymetry::Bathymetry;
-use crate::dispersion::{Breaking, Dispersion, DispersionStats, Work, switch};
+use crate::dispersion::{Breaking, Dispersion, DispersionStats, Work, breaking_indicator, switch};
 use crate::forcing::{Drive, H_FRICTION_MIN, Sponge, WaveMaker, manning_factor};
 use crate::grid::{GHOST, Grid, wrap_ghosts_y};
+use crate::par::{max_rows, rows3};
 use crate::state::State;
 
 pub const G: f64 = 9.81;
@@ -295,6 +296,21 @@ impl Solver {
         self
     }
 
+    /// How close each interior cell is to breaking, from 0 (smooth) to 1 (steep or tall for
+    /// its depth), row-major with `y` outer. These are the criteria that switch the dispersive
+    /// terms off, so with dispersion this is where the model treats the wave as breaking; for
+    /// shallow water it marks where the same criteria hold. It is 0 where there is no water
+    /// deep enough to carry a wave.
+    pub fn breaking_indicator(&self, s: &State) -> Vec<f64> {
+        breaking_indicator(
+            &self.grid,
+            &self.bed,
+            s,
+            self.breaking_config(),
+            self.periodic_y,
+        )
+    }
+
     /// How hard the dispersive solves have worked so far, or `None` for shallow water.
     pub fn dispersion_stats(&self) -> Option<DispersionStats> {
         self.dispersion
@@ -338,14 +354,17 @@ impl Solver {
     /// Largest stable time step for the current state. Infinite if nothing can move.
     pub fn stable_dt(&self, s: &State) -> f64 {
         let g = &self.grid;
-        let mut rate: f64 = 0.0;
-        for (i, j) in g.interior() {
-            let k = g.idx(i, j);
-            let c = (G * s.h[k]).sqrt();
-            let u = velocity(s.h[k], s.hu[k]).abs();
-            let v = velocity(s.h[k], s.hv[k]).abs();
-            rate = rate.max((u + c) / g.dx + (v + c) / g.dy);
-        }
+        let w = g.width();
+        let rate = max_rows(GHOST, GHOST + g.ny, w, |j| {
+            let mut rate: f64 = 0.0;
+            for k in j * w + GHOST..j * w + GHOST + g.nx {
+                let c = (G * s.h[k]).sqrt();
+                let u = velocity(s.h[k], s.hu[k]).abs();
+                let v = velocity(s.h[k], s.hv[k]).abs();
+                rate = rate.max((u + c) / g.dx + (v + c) / g.dy);
+            }
+            rate
+        });
         if rate > 0.0 {
             self.cfl / rate
         } else {
@@ -366,11 +385,15 @@ impl Solver {
                 let mut s1 = self.advance(s, &self.rhs(s, t), dt);
                 s1.fill_boundaries(&self.grid, self.periodic_y);
                 let s2 = self.advance(&s1, &self.rhs(&s1, t + dt), dt);
-                for (a, b) in [(&mut s.h, &s2.h), (&mut s.hu, &s2.hu), (&mut s.hv, &s2.hv)] {
-                    for (x, y) in a.iter_mut().zip(b) {
-                        *x = 0.5 * (*x + y);
+                let w = self.grid.width();
+                rows3(w, &mut s.h, &mut s.hu, &mut s.hv, |j, rh, rhu, rhv| {
+                    for i in 0..w {
+                        let k = j * w + i;
+                        rh[i] = 0.5 * (rh[i] + s2.h[k]);
+                        rhu[i] = 0.5 * (rhu[i] + s2.hu[k]);
+                        rhv[i] = 0.5 * (rhv[i] + s2.hv[k]);
                     }
-                }
+                });
                 self.clean_dry(s);
             }
         }
@@ -383,58 +406,87 @@ impl Solver {
         if self.sponges.is_empty() && self.manning == 0.0 {
             return;
         }
-        let g = &self.grid;
-        for (i, j) in g.interior() {
-            let k = g.idx(i, j);
-            for sp in &self.sponges {
-                let rate = sp.rate(g, i, j);
-                if rate > 0.0 {
-                    let f = (-rate * dt).exp();
-                    s.hu[k] *= f;
-                    s.hv[k] *= f;
-                    if s.h[k] > H_DRY {
-                        let eta = s.h[k] + self.bed.b[k];
-                        s.h[k] = (s.h[k] - (1.0 - f) * (eta - sp.level)).max(0.0);
+        let g = self.grid;
+        let (sponges, manning, bed) = (&self.sponges, self.manning, &self.bed.b);
+        rows3(
+            g.width(),
+            &mut s.h,
+            &mut s.hu,
+            &mut s.hv,
+            |j, rh, rhu, rhv| {
+                if j < GHOST || j >= g.ny + GHOST {
+                    return;
+                }
+                for i in GHOST..g.nx + GHOST {
+                    let k = j * g.width() + i;
+                    for sp in sponges {
+                        let rate = sp.rate(&g, i, j);
+                        if rate > 0.0 {
+                            let f = (-rate * dt).exp();
+                            rhu[i] *= f;
+                            rhv[i] *= f;
+                            if rh[i] > H_DRY {
+                                let eta = rh[i] + bed[k];
+                                rh[i] = (rh[i] - (1.0 - f) * (eta - sp.level)).max(0.0);
+                            }
+                        }
+                    }
+                    if manning > 0.0 && rh[i] > H_FRICTION_MIN {
+                        let speed = rhu[i].hypot(rhv[i]) / rh[i];
+                        let f = manning_factor(rh[i], speed, dt, manning);
+                        rhu[i] *= f;
+                        rhv[i] *= f;
                     }
                 }
-            }
-            if self.manning > 0.0 && s.h[k] > H_FRICTION_MIN {
-                let speed = s.hu[k].hypot(s.hv[k]) / s.h[k];
-                let f = manning_factor(s.h[k], speed, dt, self.manning);
-                s.hu[k] *= f;
-                s.hv[k] *= f;
-            }
-        }
+            },
+        );
         self.clean_dry(s);
     }
 
     /// Zero the momentum of dry cells and remove rounding-level negative depth.
     fn clean_dry(&self, s: &mut State) {
-        for (i, j) in self.grid.interior() {
-            let k = self.grid.idx(i, j);
-            if s.h[k] < H_DRY {
-                s.h[k] = s.h[k].max(0.0);
-                s.hu[k] = 0.0;
-                s.hv[k] = 0.0;
+        let (w, nx, ny) = (self.grid.width(), self.grid.nx, self.grid.ny);
+        rows3(w, &mut s.h, &mut s.hu, &mut s.hv, |j, rh, rhu, rhv| {
+            if j < GHOST || j >= ny + GHOST {
+                return;
             }
-        }
+            for i in GHOST..nx + GHOST {
+                if rh[i] < H_DRY {
+                    rh[i] = rh[i].max(0.0);
+                    rhu[i] = 0.0;
+                    rhv[i] = 0.0;
+                }
+            }
+        });
     }
 
     /// `s + dt * rhs`, interior only; ghost cells are refilled by the caller.
     fn advance(&self, s: &State, rhs: &Rhs, dt: f64) -> State {
         let mut next = s.clone();
-        for (i, j) in self.grid.interior() {
-            let k = self.grid.idx(i, j);
-            next.h[k] += dt * rhs.h[k];
-            next.hu[k] += dt * rhs.hu[k];
-            next.hv[k] += dt * rhs.hv[k];
-        }
+        let (w, nx, ny) = (self.grid.width(), self.grid.nx, self.grid.ny);
+        rows3(
+            w,
+            &mut next.h,
+            &mut next.hu,
+            &mut next.hv,
+            |j, rh, rhu, rhv| {
+                if j < GHOST || j >= ny + GHOST {
+                    return;
+                }
+                for i in GHOST..nx + GHOST {
+                    let k = j * w + i;
+                    rh[i] += dt * rhs.h[k];
+                    rhu[i] += dt * rhs.hu[k];
+                    rhv[i] += dt * rhs.hv[k];
+                }
+            },
+        );
         self.clean_dry(&mut next);
         next
     }
 
     /// The breaking thresholds in force: the dispersive model's, or the defaults.
-    fn breaking(&self) -> Breaking {
+    fn breaking_config(&self) -> Breaking {
         self.dispersion
             .as_ref()
             .map_or_else(Breaking::default, |(d, _)| d.breaking)
@@ -447,7 +499,7 @@ impl Solver {
         // dispersive terms both fade out where it is not.
         let mut phi_guard = self.phi.borrow_mut();
         if self.order == Order::Third || self.dispersion.is_some() {
-            switch(g, &self.bed, s, self.breaking(), &mut phi_guard);
+            switch(g, &self.bed, s, self.breaking_config(), &mut phi_guard);
         }
         let phi: &[f64] = &phi_guard;
         let mut out = Rhs {
@@ -455,6 +507,10 @@ impl Solver {
             hu: vec![0.0; n],
             hv: vec![0.0; n],
         };
+        let bed = &self.bed.b[..];
+        let order = self.order;
+        let drive = self.wavemaker.as_ref();
+        let g = *g;
         let cell = |i: usize, j: usize, normal_is_x: bool| {
             let k = g.idx(i, j);
             let (un, ut) = if normal_is_x {
@@ -466,39 +522,52 @@ impl Solver {
                 h: s.h[k],
                 un: velocity(s.h[k], un),
                 ut: velocity(s.h[k], ut),
-                b: self.bed.b[k],
+                b: bed[k],
                 phi: phi[k],
             }
         };
 
-        for (i, j) in g.interior() {
-            let k = g.idx(i, j);
-            let x = axis_terms(
-                std::array::from_fn(|m| cell(i + m - 2, j, true)),
-                g.dx,
-                self.order,
-            );
-            let y = axis_terms(
-                std::array::from_fn(|m| cell(i, j + m - 2, false)),
-                g.dy,
-                self.order,
-            );
+        rows3(
+            g.width(),
+            &mut out.h,
+            &mut out.hu,
+            &mut out.hv,
+            |j, rh, rhu, rhv| {
+                if j < GHOST || j >= g.ny + GHOST {
+                    return;
+                }
+                for i in GHOST..g.nx + GHOST {
+                    let x = axis_terms(
+                        std::array::from_fn(|m| cell(i + m - 2, j, true)),
+                        g.dx,
+                        order,
+                    );
+                    let y = axis_terms(
+                        std::array::from_fn(|m| cell(i, j + m - 2, false)),
+                        g.dy,
+                        order,
+                    );
 
-            out.h[k] =
-                -(x.high.flux[0] - x.low.flux[0]) / g.dx - (y.high.flux[0] - y.low.flux[0]) / g.dy;
-            out.hu[k] = -((x.high.flux[1] + x.high.corr_left) - (x.low.flux[1] + x.low.corr_right))
-                / g.dx
-                + x.source
-                - (y.high.flux[2] - y.low.flux[2]) / g.dy;
-            out.hv[k] = -((y.high.flux[1] + y.high.corr_left) - (y.low.flux[1] + y.low.corr_right))
-                / g.dy
-                + y.source
-                - (x.high.flux[2] - x.low.flux[2]) / g.dx;
-            if let Some(drive) = &self.wavemaker {
-                let (px, py) = g.centre(i, j);
-                out.h[k] += drive.source(px, py, t);
-            }
-        }
+                    rh[i] = -(x.high.flux[0] - x.low.flux[0]) / g.dx
+                        - (y.high.flux[0] - y.low.flux[0]) / g.dy;
+                    rhu[i] = -((x.high.flux[1] + x.high.corr_left)
+                        - (x.low.flux[1] + x.low.corr_right))
+                        / g.dx
+                        + x.source
+                        - (y.high.flux[2] - y.low.flux[2]) / g.dy;
+                    rhv[i] = -((y.high.flux[1] + y.high.corr_left)
+                        - (y.low.flux[1] + y.low.corr_right))
+                        / g.dy
+                        + y.source
+                        - (x.high.flux[2] - x.low.flux[2]) / g.dx;
+                    if let Some(drive) = drive {
+                        let (px, py) = g.centre(i, j);
+                        rh[i] += drive.source(px, py, t);
+                    }
+                }
+            },
+        );
+        let g = &self.grid;
         if let Some((dispersion, work)) = &self.dispersion {
             dispersion.apply(
                 g,

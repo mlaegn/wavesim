@@ -8,4 +8,10 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Run the per-cell loops across threads. Off by default: the numerics crate has no
+# dependencies and compiles to WASM without it. Results are bit-identical either way.
+parallel = ["dep:rayon"]
+
 [dependencies]
+rayon = { version = "1", optional = true }
