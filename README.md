@@ -32,8 +32,8 @@ It is a depth-averaged model. It captures shoaling and breaking as a bore, not a
 | **State** | Depth `h` and momentum `hu`, `hv`; reflective walls; volume and momentum diagnostics |
 | **Forcing** | Internal wave-maker (oblique incidence supported), absorbing sponge layers, Manning bottom friction, optional periodic boundaries in `y` |
 | **Bed files** | A documented format for a real seabed; `tools/fetch_spot.py` crops one from a remote GeoTIFF, rotated so `+x` is the wave direction |
-| **Runs** | `wavesim run` sends a swell over a bed and writes frames in a documented format a viewer can read |
-| **Viewer** | `viewer/`: a browser replay of a run in 3D (Three.js and TypeScript): terrain from the bed, the surface animated from the frames, foam on steep fronts |
+| **Runs** | `wavesim run` sends a swell over a bed and writes frames (the surface and a breaking indicator) in a documented format a viewer can read; it runs on 4 threads by default |
+| **Viewer** | `viewer/`: a browser replay of a run in 3D (Three.js and TypeScript): terrain from the bed, the surface animated from the frames, foam where the model says the wave breaks, a side view of one line across the break, and maps of where waves break and how steep they get |
 | **Solver** | Well-balanced finite-volume scheme: hydrostatic reconstruction, HLL flux, and first order, second order (MUSCL with an MC limiter), or third order (unlimited where the wave is smooth, blended back to the limiter near steep fronts), with SSP-RK2 |
 | **Dispersion** | Serre–Green–Naghdi correction solved by preconditioned conjugate gradients, switched off where waves break; see [docs/dispersion.md](docs/dispersion.md) |
 
@@ -130,7 +130,7 @@ solver.step(&mut state, dt);
 
 ## Run a swell over a real bed
 
-Fetch the seabed once. This reads only the window it needs (about 1 MB) from NOAA's public bucket:
+Fetch the seabed once. This reads only the window it needs (under 1 MB) from NOAA's public bucket:
 
 ```bash
 uv run --python 3.12 --with rasterio --with numpy --with scipy --with pyproj \
@@ -144,16 +144,20 @@ cargo run --release -p wavesim -- info data/pipeline.json
 Send a swell over it:
 
 ```bash
-cargo run --release -p wavesim -- run data/pipeline.json --height 1.0 --period 14 --duration 300
+cargo run --release -p wavesim -- run data/pipeline.json --height 2.5 --period 14 --duration 120
 ```
 
-That writes `out/pipeline/` (about 120 MB for 151 frames of 200,000 cells; both `data/` and `out/` are git-ignored). On a laptop it takes about 4.5 minutes for 300 simulated seconds. Options: `--tide` (metres above mean sea level), `--maker-depth` (where the wave-maker goes), `--frame-interval`, `--manning`, `--out`.
+That writes `out/pipeline/` (both `data/` and `out/` are git-ignored). Options: `--tide` (metres above mean sea level), `--maker-depth` (where the wave-maker goes), `--frame-interval`, `--manning`, `--dispersive false` (plain shallow water, for comparison), `--threads`, `--out`.
 
 The swell travels along `+x` of the bed's frame, so its direction is chosen when the bed is fetched (`bearing` in `spots.toml`). Add your own spot by adding a table to `spots.toml`.
 
-**What a run on Pipeline shows.** With a 1 m, 14 s swell the crest lines curve with the seabed (refraction), the wavelength shortens as the water shoals, and the local wave height grows from about 0.9 m offshore to about 1.7 m near the reef ledge before it falls off again over the last 100 m to the shore.
+**Running it on a laptop.**
 
-**Its limit, stated plainly.** The equations have no dispersion, so large waves steepen into shocks within tens of metres. At 2.5 m, in 8 m of water, the swell has already lost about half its height to bores before it reaches the reef, and the offshore-going half is affected too. The run stays stable and the bores are real shock-captured breaking, but where and how a big wave breaks is not trustworthy until the model is dispersive. Use small swells to look at refraction and shoaling.
+- The default `pipeline` domain is the compact one, 300 × 267 cells of 3 m. Most of a larger domain would be the strip behind the wave-maker and the side strips that exist only to absorb waves, which no viewer shows. `pipeline_wide` is the 200,000-cell version (1.5 km × 1.2 km) if you want more sea.
+- The solver uses **4 threads** by default, not every core, which keeps a laptop cool. Raise it with `--threads`; `--threads 0` uses all. The results are byte-identical for any number. On a 10-core M5, 20 simulated seconds of the compact case take 12 s on one thread and 4.5 s on four.
+- Simulated time is the main cost. The swell needs about a minute to reach the shore and a few periods after that to show the break, so `--duration 120` is plenty.
+- On macOS the run is moved to the efficiency cores automatically (see the next section), so it is quiet but slower; pass `--priority normal` for full speed.
+- For a quick look, fetch a coarser bed with `tools/fetch_spot.py pipeline --cell 6` (a quarter of the cells; writes `data/pipeline_6m.json`).
 
 ## View a run
 
@@ -165,9 +169,16 @@ npm run dev
 
 Open the address it prints (http://localhost:5173). The dev server lists every run in `out/` (set `WAVESIM_RUNS` to use another folder), and `?run=pipeline` opens one directly. You can also drop `run.json`, `bed.f32` and `frames.f32` onto the page, or use **Open files…**.
 
-The page draws the bed as terrain and the surface as a mesh displaced by the stored `eta`, re-uploaded every frame. Between stored frames it interpolates with a cubic, because a straight line between frames 2 s apart cuts the crest of a 14 s wave by 10%. Controls: play and pause (space), scrub, step by a frame (arrow keys), speed, a **Height ×** slider that stretches heights to make small waves visible, three camera views, and a toggle that marks the wave-maker line and the absorbing zones. Those zones are numerical, not sea, so they are shown on request.
+The page draws the bed as terrain and the surface as a mesh displaced by the stored `eta`, re-uploaded every frame. Between stored frames it interpolates with a cubic, because a straight line between frames 2 s apart cuts the crest of a 14 s wave by 10%.
 
-Foam appears where the surface is steep (a slope above about 0.05 to 0.13) and in very shallow water at the shoreline. It is a steepness rule for showing where fronts are, not a breaking model. With the 2.5 m swell it lights up the bores that the non-dispersive equations produce, including on the offshore side, which makes that limitation easy to see.
+**What it shows.**
+
+- **Only the sea.** The strip seaward of the wave-maker and the strips along the two sides exist for the numerics (the source radiates both ways, and the sponges absorb), so the viewer hides them. **Sea only** switches that off, and **Model zones** marks the wave-maker line and the strips.
+- **Foam where the model says the wave breaks.** The solver writes a `breaking` field for each frame, and the foam follows it. Runs without that field fall back to a slope rule.
+- **Side view.** A chart of one line across the break: the bed, the water, and the surface coloured by how close to breaking it is, with the steepest face marked and a readout. A yellow line in the 3D view shows where it is taken; the slider moves it along the shore. Besides the instantaneous values it reports, for that line over the whole run, where it gets steepest and where it breaks.
+- **Maps.** A colour overlay of what happened over the whole run: **where it breaks** (the fraction of the run each cell spent breaking) or **how steep** (the steepest the surface ever got, clear below a slope of 0.06 and full red at 0.4).
+- **Cameras.** *Oblique* along the break, *Top*, and *Beach*, a surf-cam view from the waterline looking out along the lineup.
+- **Controls.** Play and pause (space), scrub, step by a frame (arrow keys), speed, and a **Height ×** slider (default 4) that stretches heights so small waves show.
 
 `npm run build` makes a static site in `viewer/dist`; it contains no runs, which are large and git-ignored.
 
@@ -225,6 +236,11 @@ Choose the order with `Solver::with_order`; the default is `Order::Second`. Add 
 | Big swell in deep water | A 2.5 m, 14 s swell in 8 m keeps at least 90% of its energy over 400 m (measured 93%); shallow water keeps 14% |
 | Shoaling and breaking on a 1:30 beach | Shoaling from 6 to 3.5 m of x1.14 matches Green's law; the tallest wave has `H/h` 0.68 at 3.0 m depth (textbook 0.55 to 1.2); the surf zone stays depth-limited (`H/h` 0.96 at most in 1 to 2.5 m) |
 | Dispersive solves | Converge every time, in under 20 iterations on average |
+| Thin film at a run-up | A white-box test: changing a 1 mm film's speed from 1 to 1000 m/s changes nothing about its neighbours, and the test fails if the masking is removed |
+| Masked dispersive operator | Symmetric and positive definite with a patchy mask, masked cells exactly zero |
+| Threads | The threaded and serial builds give byte-identical `frames.f32` on the real Pipeline bed (same SHA-256), so threading cannot change a result |
+| Breaking field | Written for every frame; 0 in still water; a clear reading (above 0.8) occurs only in shallow water on a beach test |
+| Steepness and break maps | Peak slope per cell over the run, ignoring shallow water; the fraction of frames each cell was breaking, cached per threshold |
 | Still water with dispersion | Over a rough bed, with and without dry bumps, momentum stays below 1e-9 for both orders |
 | Bed and run files | Round-trip exactly; wrong length, NaN values and unknown formats are rejected with a clear message |
 | Full run on a synthetic beach | Frame count and times are right, the first frame is still water, and the wave in the frames has the requested amplitude (between 0.6 and 1.3 times the request) |
@@ -265,7 +281,8 @@ wavesim/
 │   ├── src/
 │   │   ├── run.ts              # header checks, frames, interpolation (no DOM)
 │   │   ├── load.ts             # fetch or file loading
-│   │   ├── view.ts             # terrain, water shader, camera
+│   │   ├── view.ts             # terrain, water shader, camera, overlays
+│   │   ├── profile.ts          # the side view of one line across the break
 │   │   ├── main.ts             # controls and playback
 │   │   └── style.css
 │   └── tests/
@@ -282,6 +299,7 @@ wavesim/
     │   │   ├── bathymetry.rs   # flat, plane beach, rough bed, from raw values
     │   │   ├── dispersion.rs   # SGN correction: operator, conjugate gradients, smoothness switch
     │   │   ├── forcing.rs      # wave-maker, sponge layers, Manning friction
+    │   │   ├── par.rs          # row loops, threaded on big grids with the `parallel` feature
     │   │   ├── state.rs        # h, hu, hv, time, boundaries, diagnostics
     │   │   └── solver.rs       # reconstruction (MC / third order), hydrostatic reconstruction, HLL flux, SSP-RK2
     │   └── tests/
@@ -298,9 +316,27 @@ wavesim/
         └── tests/run.rs
 ```
 
+## Keeping the machine cool
+
+Nothing here is meant to use a laptop flat out, and the limits are built in so they do not depend on remembering a flag.
+
+| What | Limit | Where it comes from | Override |
+|---|---|---|---|
+| The solver (`wavesim run`) | 4 threads by default, never more than half the machine's cores | `--threads`; the ceiling is in `crates/wavesim/src/main.rs` | `WAVESIM_ALL_CORES=1` lifts the ceiling |
+| How long a run may go on | Stops itself after **10 minutes** of wall-clock time and keeps what it has: a shorter run that is complete and viewable, marked `truncated` in its header | `--max-minutes` | `--max-minutes 0` for no limit |
+| Scheduling | **Background priority on macOS**, which keeps the run on the efficiency cores: quiet and cool, but about **3.5 times slower** (20 simulated seconds took 15.5 s instead of 4.4 s on an M5) | `--priority` | `--priority normal` for full speed |
+| Knowing what to expect | Prints a rough time estimate before it starts, and warns if the run will probably hit its limit | `estimate_seconds` in `crates/wavesim/src/lib.rs` | |
+| `cargo test` | 3 tests at a time; the solver's pool in tests is 4 threads | `.cargo/config.toml` (`RUST_TEST_THREADS`, `RAYON_NUM_THREADS`) | set the variable for one command |
+| Compiling | 4 jobs | `.cargo/config.toml` (`build.jobs`) | `CARGO_BUILD_JOBS` |
+| The viewer's tests | 2 workers | `viewer/vite.config.ts` | |
+
+The results do not depend on any of these: a run on 1 thread and on 4 give byte-identical files. The estimate is calibrated on one Apple M5, so treat it as the right order of magnitude, not a promise. There is no way to read a laptop's temperature without administrator rights, so the guarantee here is by construction (fewer cores, lower priority, a time limit), not by measurement.
+
+Because background priority is slow, a long run is better started once and left alone than watched. For a quick look, a coarser bed is a quarter of the work: `tools/fetch_spot.py pipeline --cell 6`.
+
 ## Development
 
-- **Pure core.** `wavecore` stays free of file I/O, threads, GDAL and graphics.
+- **Pure core.** `wavecore` has no dependencies and stays free of file I/O, GDAL and graphics. Its only optional dependency is `rayon`, behind the `parallel` feature, and a threaded build gives byte-identical results.
 - **No unsafe.** The workspace forbids `unsafe_code`.
 - **Numerics changes come with a test that has a known answer.** A plausible-looking result is not evidence.
 

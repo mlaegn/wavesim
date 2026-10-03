@@ -6,8 +6,30 @@
 # the offshore edge and `onshore_m` from the landward edge, and the domain is
 # `width_m` wide, centred on the anchor.
 
+# The compact domain is the default: about 80,000 cells, which is what a laptop can run
+# comfortably. The wave-maker sits 8 m deep, about 325 m from the left edge, with room for
+# its sponge behind it, and the sides keep a strip each for theirs. `pipeline_wide` is the
+# larger domain (200,000 cells) used for the first runs.
+
 [pipeline]
 description = "Banzai Pipeline, Oahu North Shore, Hawaii"
+source = "NOAA NCEI CUDEM 1/9 arc-second topobathy, Hawaii"
+url = "https://noaa-nos-coastal-lidar-pds.s3.amazonaws.com/dem/NCEI_ninth_Topobathy_Hawaii_9428/tiles/ncei19_n21x75_w158x25_2021v1.tif"
+datum = "local mean sea level"
+attribution = "NOAA National Centers for Environmental Information"
+lat = 21.665
+lon = -158.051
+utm_crs = "EPSG:32604"
+bearing = 130.0      # shore-normal, estimated from the seabed gradient (median 131 deg)
+offshore_m = 650.0
+onshore_m = 250.0
+width_m = 800.0
+cell_m = 3.0
+clip_above = 10.0    # land higher than this is flattened; waves never reach it
+clip_below = -15.0   # water deeper than this is flattened; only the sponge lives there
+
+[pipeline_wide]
+description = "Banzai Pipeline, Oahu North Shore, Hawaii (wide: 1.5 km x 1.2 km)"
 source = "NOAA NCEI CUDEM 1/9 arc-second topobathy, Hawaii"
 url = "https://noaa-nos-coastal-lidar-pds.s3.amazonaws.com/dem/NCEI_ninth_Topobathy_Hawaii_9428/tiles/ncei19_n21x75_w158x25_2021v1.tif"
 datum = "local mean sea level"

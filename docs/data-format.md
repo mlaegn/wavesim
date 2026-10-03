@@ -58,7 +58,14 @@ out/pipeline/
 
 `run.json` carries `nx`, `ny`, `dx`, `dy`, `frame` (copied from the bed), `source`, `frame_count`, `times` (seconds, one per frame), `fields` and `waves` (the settings used: wave height, period, tide, wave-maker position, sponge widths, friction).
 
-`fields` lists what each frame contains, in order. Today it is `["eta"]`: the free-surface elevation in metres above mean sea level. Where a cell is dry, `eta` equals the bed elevation, so `depth = max(eta − bed, 0)` and a cell is wet where `eta > bed`. A frame is `nx · ny` values in the same layout as the bed; frame `k` starts at value `k · nx · ny · len(fields)`.
+`fields` lists what each frame contains, in order. `wavesim run` writes `["eta", "breaking"]`:
+
+- **`eta`** is the free-surface elevation in metres above mean sea level. Where a cell is dry, `eta` equals the bed elevation, so `depth = max(eta − bed, 0)` and a cell is wet where `eta > bed`.
+- **`breaking`** is how close each cell is to breaking, from 0 to 1. It is the switch that turns the dispersive terms off: 0 for smooth water, rising to 1 where the surface is steep or tall for its depth, and 0 where there is too little water (under 5 cm) to carry a wave. A value above about 0.8 means the model treats the wave as breaking there. Mid values (0.3 to 0.6) mean *tall or steep for this depth, not yet breaking*. With `--dispersive false` it is the same criteria applied to plain shallow water.
+
+A frame is the blocks of its fields, one after another, each `nx · ny` values in the same layout as the bed; field `f` of frame `k` starts at value `(k · len(fields) + f) · nx · ny`. A reader must look fields up by name, not assume `eta` comes first.
+
+`waves` also records `maker_x_m` (the wave-maker line), `maker_sigma_m` (the source's Gaussian width), `sponge_offshore_cells` and `sponge_side_cells` (the absorbing strips), and `near_field_end_m`, the distance along `x` past which the wave-maker's own bump has died away (six source widths beyond the line). **Seaward of `near_field_end_m` and inside the side strips the surface is the source and the sponges, not sea**; a viewer should start at `near_field_end_m` and trim the sides. The Pipeline viewer does.
 
 ## Reading a run
 
@@ -67,8 +74,10 @@ Python:
 ```python
 import json, numpy as np
 h = json.load(open("out/pipeline/run.json"))
-eta = np.memmap("out/pipeline/frames.f32", dtype="<f4", mode="r",
-                shape=(h["frame_count"], h["ny"], h["nx"]))
+frames = np.memmap("out/pipeline/frames.f32", dtype="<f4", mode="r",
+                   shape=(h["frame_count"], len(h["fields"]), h["ny"], h["nx"]))
+eta = frames[:, h["fields"].index("eta")]
+breaking = frames[:, h["fields"].index("breaking")]
 bed = np.fromfile("out/pipeline/bed.f32", dtype="<f4").reshape(h["ny"], h["nx"])
 depth = np.maximum(eta[10] - bed, 0)
 ```
@@ -77,8 +86,11 @@ JavaScript:
 
 ```js
 const h = await (await fetch("run.json")).json();
-const eta = new Float32Array(await (await fetch("frames.f32")).arrayBuffer());
-const frame = k => eta.subarray(k * h.nx * h.ny, (k + 1) * h.nx * h.ny);
+const frames = new Float32Array(await (await fetch("frames.f32")).arrayBuffer());
+const field = (name, k) => {
+  const f = h.fields.indexOf(name), n = h.nx * h.ny;
+  return frames.subarray((k * h.fields.length + f) * n, (k * h.fields.length + f + 1) * n);
+};
 ```
 
 `Float32Array` uses the machine's byte order, which is little-endian on every current browser and desktop CPU.
