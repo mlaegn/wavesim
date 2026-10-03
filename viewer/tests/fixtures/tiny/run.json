@@ -9,10 +9,11 @@
   "bed": "bed.f32",
   "frames": "frames.f32",
   "fields": [
-    "eta"
+    "eta",
+    "breaking"
   ],
   "dtype": "f32-le",
-  "layout": "per frame: row-major, y outer (increasing), x inner (increasing)",
+  "layout": "per frame: one block per field, in `fields` order; each block row-major, y outer (increasing), x inner (increasing)",
   "frame_count": 4,
   "times": [
     0.0,

@@ -16,7 +16,7 @@ fn fixture_dir() -> PathBuf {
 }
 
 /// A 6 x 4 bed rising 0.75 m per cell from -2 m, so the last three columns are dry,
-/// with four frames. Every value is a multiple of 1/16, exact in f32 on any platform.
+/// with four frames of two fields (surface and breaking). Every value is a multiple of 1/16, exact in f32 on any platform.
 fn write_tiny(dir: &Path) {
     let (nx, ny) = (6, 4);
     let elevation: Vec<f32> = (0..nx * ny)
@@ -42,7 +42,7 @@ fn write_tiny(dir: &Path) {
         "sponge_offshore_cells": 2,
         "sponge_side_cells": 1,
     });
-    let mut writer = RunWriter::create(dir, &bed, waves).unwrap();
+    let mut writer = RunWriter::create(dir, &bed, &["eta", "breaking"], waves).unwrap();
     for k in 0..4 {
         let eta: Vec<f32> = bed
             .elevation
@@ -57,7 +57,22 @@ fn write_tiny(dir: &Path) {
                 }
             })
             .collect();
-        writer.write_frame(2.0 * k as f64, &eta).unwrap();
+        // How close to breaking each wet cell is: 0, 0.25, 0.5 or 0.75, dry cells 0.
+        let breaking: Vec<f32> = bed
+            .elevation
+            .iter()
+            .enumerate()
+            .map(|(n, &z)| {
+                if z < 0.0 {
+                    0.25 * ((n + k) % 4) as f32
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+        writer
+            .write_frame(2.0 * k as f64, &[&eta, &breaking])
+            .unwrap();
     }
     writer.finish().unwrap();
 }

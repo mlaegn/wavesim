@@ -23,8 +23,9 @@ pub struct RunHeader {
     pub bed: String,
     /// Frames file: `frame_count` frames of every field in `fields`, back to back.
     pub frames: String,
-    /// Field names in storage order within one frame. Currently `["eta"]`: free-surface
-    /// elevation in metres above mean sea level (equal to the bed where it is dry).
+    /// Field names in storage order within one frame. `eta` is the free-surface elevation in
+    /// metres above mean sea level (equal to the bed where it is dry); `breaking` is how close
+    /// each cell is to breaking, from 0 (smooth) to 1 (steep or tall for its depth).
     pub fields: Vec<String>,
     pub dtype: String,
     pub layout: String,
@@ -46,9 +47,18 @@ pub struct RunWriter {
 }
 
 impl RunWriter {
-    /// Create `dir`, copy the bed into it and open the frames file. `waves` records
-    /// the settings so the run can be reproduced and labelled.
-    pub fn create(dir: &Path, bed: &Bed, waves: serde_json::Value) -> Result<Self, Error> {
+    /// Create `dir`, copy the bed into it and open the frames file. `fields` names what each
+    /// frame holds, in order (it must include `eta`); `waves` records the settings so the run
+    /// can be reproduced and labelled.
+    pub fn create(
+        dir: &Path,
+        bed: &Bed,
+        fields: &[&str],
+        waves: serde_json::Value,
+    ) -> Result<Self, Error> {
+        if !fields.contains(&"eta") {
+            return Err(Error::format(dir, "a run must have an \"eta\" field"));
+        }
         fs::create_dir_all(dir).map_err(|e| Error::io(dir, e))?;
         let bed_path = dir.join("bed.f32");
         let bytes: Vec<u8> = bed.elevation.iter().flat_map(|v| v.to_le_bytes()).collect();
@@ -69,9 +79,9 @@ impl RunWriter {
                 dy: h.dy,
                 bed: "bed.f32".into(),
                 frames: "frames.f32".into(),
-                fields: vec!["eta".into()],
+                fields: fields.iter().map(|f| (*f).to_string()).collect(),
                 dtype: "f32-le".into(),
-                layout: "per frame: row-major, y outer (increasing), x inner (increasing)".into(),
+                layout: "per frame: one block per field, in `fields` order; each block row-major, y outer (increasing), x inner (increasing)".into(),
                 frame_count: 0,
                 times: Vec::new(),
                 frame: h.frame.clone(),
@@ -82,17 +92,36 @@ impl RunWriter {
         })
     }
 
-    /// Append one frame of `eta` (`nx * ny` values) taken at `time` seconds.
-    pub fn write_frame(&mut self, time: f64, eta: &[f32]) -> Result<(), Error> {
+    /// Record an extra setting in the run's header, for example that it was cut short.
+    pub fn note(&mut self, key: &str, value: serde_json::Value) {
+        if !self.header.waves.is_object() {
+            self.header.waves = serde_json::json!({});
+        }
+        self.header.waves[key] = value;
+    }
+
+    /// Append one frame taken at `time` seconds: one slice of `nx * ny` values per field, in
+    /// the order the run was created with.
+    pub fn write_frame(&mut self, time: f64, fields: &[&[f32]]) -> Result<(), Error> {
         let path = self.dir.join("frames.f32");
         let want = self.header.nx * self.header.ny;
-        if eta.len() != want {
+        if fields.len() != self.header.fields.len() {
             return Err(Error::format(
                 &path,
-                format!("frame has {} values, expected {want}", eta.len()),
+                format!(
+                    "frame has {} fields, expected {}",
+                    fields.len(),
+                    self.header.fields.len()
+                ),
             ));
         }
-        for v in eta {
+        if let Some(bad) = fields.iter().find(|f| f.len() != want) {
+            return Err(Error::format(
+                &path,
+                format!("a field has {} values, expected {want}", bad.len()),
+            ));
+        }
+        for v in fields.iter().flat_map(|f| f.iter()) {
             self.frames
                 .write_all(&v.to_le_bytes())
                 .map_err(|e| Error::io(&path, e))?;
@@ -121,8 +150,8 @@ impl RunWriter {
 /// A finished run read back from disk.
 pub struct Run {
     pub header: RunHeader,
-    /// All frames, concatenated: `frame_count * nx * ny` values.
-    pub eta: Vec<f32>,
+    /// All frames, concatenated: `frame_count * fields * nx * ny` values.
+    pub data: Vec<f32>,
 }
 
 impl Run {
@@ -145,18 +174,25 @@ impl Run {
                 format!("{} bytes, header promises {expected}", bytes.len()),
             ));
         }
-        let eta = bytes
+        let data = bytes
             .as_chunks::<4>()
             .0
             .iter()
             .map(|b| f32::from_le_bytes(*b))
             .collect();
-        Ok(Self { header, eta })
+        Ok(Self { header, data })
     }
 
-    /// Frame `k` of the first field (`eta`).
-    pub fn frame(&self, k: usize) -> &[f32] {
+    /// Field `name` of frame `k`, or `None` if the run does not have that field.
+    pub fn field(&self, name: &str, k: usize) -> Option<&[f32]> {
+        let f = self.header.fields.iter().position(|n| n == name)?;
         let n = self.header.nx * self.header.ny;
-        &self.eta[k * n..(k + 1) * n]
+        let start = (k * self.header.fields.len() + f) * n;
+        Some(&self.data[start..start + n])
+    }
+
+    /// Frame `k` of the free-surface elevation.
+    pub fn frame(&self, k: usize) -> &[f32] {
+        self.field("eta", k).expect("every run has an eta field")
     }
 }

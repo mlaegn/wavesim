@@ -83,10 +83,11 @@ fn a_different_format_is_rejected() {
 fn run_round_trips_frames_and_times() {
     let dir = scratch("run");
     let bed = sample_bed(6, 4);
-    let mut w = RunWriter::create(&dir, &bed, serde_json::json!({"period": 12.0})).unwrap();
+    let mut w =
+        RunWriter::create(&dir, &bed, &["eta"], serde_json::json!({"period": 12.0})).unwrap();
     for k in 0..3 {
         let eta: Vec<f32> = (0..24).map(|n| k as f32 + n as f32 * 0.5).collect();
-        w.write_frame(2.0 * k as f64, &eta).unwrap();
+        w.write_frame(2.0 * k as f64, &[&eta]).unwrap();
     }
     w.finish().unwrap();
 
@@ -103,6 +104,59 @@ fn run_round_trips_frames_and_times() {
 fn a_frame_of_the_wrong_size_is_rejected() {
     let dir = scratch("badframe");
     let bed = sample_bed(6, 4);
-    let mut w = RunWriter::create(&dir, &bed, serde_json::Value::Null).unwrap();
-    assert!(w.write_frame(0.0, &[0.0; 23]).is_err());
+    let mut w = RunWriter::create(&dir, &bed, &["eta"], serde_json::Value::Null).unwrap();
+    assert!(w.write_frame(0.0, &[&[0.0; 23]]).is_err());
+}
+
+#[test]
+fn a_run_can_carry_several_fields_per_frame() {
+    let dir = scratch("fields");
+    let bed = sample_bed(6, 4);
+    let mut w =
+        RunWriter::create(&dir, &bed, &["eta", "breaking"], serde_json::Value::Null).unwrap();
+    for k in 0..3 {
+        let eta: Vec<f32> = (0..24).map(|n| 10.0 * k as f32 + n as f32).collect();
+        let breaking: Vec<f32> = (0..24).map(|n| 0.5 + 100.0 * k as f32 + n as f32).collect();
+        w.write_frame(k as f64, &[&eta, &breaking]).unwrap();
+    }
+    w.finish().unwrap();
+
+    let run = Run::read(&dir).unwrap();
+    assert_eq!(run.header.fields, vec!["eta", "breaking"]);
+    assert_eq!(run.frame(2)[5], 25.0);
+    assert_eq!(run.field("breaking", 2).unwrap()[5], 205.5);
+    assert_eq!(run.field("breaking", 0).unwrap()[0], 0.5);
+    assert!(run.field("velocity", 0).is_none());
+    assert_eq!(
+        fs::read(dir.join("frames.f32")).unwrap().len(),
+        3 * 2 * 24 * 4
+    );
+}
+
+#[test]
+fn the_wrong_number_of_fields_or_a_missing_eta_is_rejected() {
+    let dir = scratch("badfields");
+    let bed = sample_bed(6, 4);
+    assert!(RunWriter::create(&dir, &bed, &["breaking"], serde_json::Value::Null).is_err());
+    let mut w =
+        RunWriter::create(&dir, &bed, &["eta", "breaking"], serde_json::Value::Null).unwrap();
+    assert!(
+        w.write_frame(0.0, &[&[0.0; 24]]).is_err(),
+        "one field where two are expected"
+    );
+    assert!(
+        w.write_frame(0.0, &[&[0.0; 24], &[0.0; 23]]).is_err(),
+        "a short field"
+    );
+}
+
+#[test]
+fn a_note_is_recorded_in_the_header() {
+    let dir = scratch("note");
+    let bed = sample_bed(6, 4);
+    let mut w = RunWriter::create(&dir, &bed, &["eta"], serde_json::Value::Null).unwrap();
+    w.write_frame(0.0, &[&[0.0; 24]]).unwrap();
+    w.note("truncated", serde_json::json!(true));
+    w.finish().unwrap();
+    assert_eq!(Run::read(&dir).unwrap().header.waves["truncated"], true);
 }

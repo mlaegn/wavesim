@@ -11,7 +11,8 @@ use std::time::Instant;
 use wavecore::{
     Dispersion, DispersionStats, G, GHOST, Order, Solver, Sponge, State, WaveMaker, linear_wave,
 };
-use waveio::{Bed, RunWriter};
+pub use waveio::Bed;
+use waveio::RunWriter;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -47,6 +48,10 @@ pub struct RunOptions {
     /// `false` runs plain shallow water with the MC limiter, in which tall waves steepen
     /// into shocks wherever they are.
     pub dispersive: bool,
+    /// Stop after this many seconds of wall-clock time and keep what has been simulated, as a
+    /// valid run marked `truncated`. `None` runs to the end. This is the guard that stops a
+    /// run from using a laptop for longer than intended.
+    pub max_wall_seconds: Option<f64>,
 }
 
 /// Where the forcing goes, worked out from the bed and the options.
@@ -83,6 +88,9 @@ pub struct Summary {
     pub plan: Plan,
     /// How hard the dispersive solves worked, or `None` for shallow water.
     pub dispersion: Option<DispersionStats>,
+    /// The run hit its wall-clock limit before reaching `duration`; the frames written so
+    /// far are a valid, shorter run.
+    pub truncated: bool,
 }
 
 const SPONGE_STRENGTH: f64 = 1.5;
@@ -172,6 +180,28 @@ pub fn plan(bed: &Bed, opts: &RunOptions) -> Result<Plan, Error> {
     })
 }
 
+/// A rough guess of how long a run will take in wall-clock seconds on `threads` threads, so
+/// that a long one can be seen coming before it starts. It is calibrated on one Apple M5
+/// (the Pipeline bed took about 140 ns per cell per step on 4 threads at the start of a run
+/// and two to three times that once the waves reach the shore), so treat it as the right
+/// order of magnitude, not a promise.
+pub fn estimate_seconds(bed: &Bed, opts: &RunOptions, threads: usize) -> f64 {
+    let grid = bed.grid();
+    let deepest = bed
+        .elevation
+        .iter()
+        .fold(f64::INFINITY, |m, &z| m.min(f64::from(z)));
+    let depth = (opts.tide - deepest).max(1.0);
+    let c = (G * depth).sqrt();
+    let dt = 0.4 / (c / grid.dx + c / grid.dy);
+    let steps = opts.duration / dt;
+    let cells = (grid.nx * grid.ny) as f64;
+    let one_thread = if opts.dispersive { 380e-9 } else { 190e-9 };
+    let speedup = (threads.clamp(1, 6) as f64).powf(0.8);
+    let late_phase = 2.5;
+    cells * steps * one_thread / speedup * late_phase
+}
+
 /// Run the simulation and write the run directory. `on_progress` is called after
 /// every frame.
 pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<Summary, Error> {
@@ -210,6 +240,10 @@ pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<
         "duration_s": opts.duration,
         "frame_interval_s": opts.frame_interval,
         "maker_x_m": plan.maker_x,
+        "maker_sigma_m": SIGMA_CELLS * grid.dx,
+        // Where the wave-maker's own bump has died away. Seaward of this the surface is the
+        // source and the sponge, not sea, so a viewer should start here.
+        "near_field_end_m": plan.maker_x + 6.0 * SIGMA_CELLS * grid.dx,
         "maker_depth_m": plan.maker_depth,
         "sponge_offshore_cells": plan.sponge_offshore,
         "sponge_side_cells": plan.sponge_side,
@@ -222,13 +256,15 @@ pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<
         },
         "dispersive": opts.dispersive,
     });
-    let mut writer = RunWriter::create(&opts.out, &bed, settings)?;
+    let mut writer = RunWriter::create(&opts.out, &bed, &["eta", "breaking"], settings)?;
 
     let mut eta = vec![0.0_f32; grid.nx * grid.ny];
+    let mut breaking = vec![0.0_f32; grid.nx * grid.ny];
     let mut frames = 0;
     let mut steps = 0_u64;
     let mut max_rise = 0.0_f64;
     let mut next_frame = 0.0_f64;
+    let mut truncated = false;
 
     let snapshot = |state: &State, eta: &mut [f32]| -> f64 {
         let mut rise = 0.0_f64;
@@ -252,7 +288,10 @@ pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<
                 });
             }
             max_rise = max_rise.max(rise);
-            writer.write_frame(state.time, &eta)?;
+            for (b, v) in breaking.iter_mut().zip(solver.breaking_indicator(&state)) {
+                *b = v as f32;
+            }
+            writer.write_frame(state.time, &[&eta, &breaking])?;
             frames += 1;
             next_frame += opts.frame_interval;
             on_progress(&Progress {
@@ -266,6 +305,13 @@ pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<
         if state.time >= opts.duration - 1e-9 {
             break;
         }
+        if opts
+            .max_wall_seconds
+            .is_some_and(|limit| started.elapsed().as_secs_f64() > limit)
+        {
+            truncated = true;
+            break;
+        }
         let stable = solver.stable_dt(&state);
         if !stable.is_finite() {
             return Err(setup("no water in the domain at this tide"));
@@ -277,6 +323,10 @@ pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<
         steps += 1;
     }
 
+    if truncated {
+        writer.note("truncated", serde_json::json!(true));
+        writer.note("stopped_at_s", serde_json::json!(state.time));
+    }
     let header = writer.finish()?;
     Ok(Summary {
         steps,
@@ -286,5 +336,6 @@ pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<
         header,
         plan,
         dispersion: solver.dispersion_stats(),
+        truncated,
     })
 }

@@ -8,9 +8,15 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Spread the solver's loops over all cores. The results are identical with or without.
+default = ["parallel"]
+parallel = ["wavecore/parallel", "dep:rayon"]
+
 [dependencies]
 wavecore = { path = "../wavecore" }
 waveio = { path = "../waveio" }
 clap = { version = "4", features = ["derive"] }
+rayon = { version = "1", optional = true }
 serde_json = "1"
 thiserror = "2"

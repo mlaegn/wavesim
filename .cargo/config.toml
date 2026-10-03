@@ -1,0 +1,12 @@
+# Keep this project from using every core of a laptop. Everything here can be overridden for
+# a single command by setting the same variable (CARGO_BUILD_JOBS, RUST_TEST_THREADS, ...).
+
+[build]
+# Compile on at most four cores.
+jobs = 4
+
+[env]
+# `cargo test` runs tests side by side; three at a time keeps the machine comfortable.
+RUST_TEST_THREADS = "3"
+# The solver's own thread pool, for anything that does not pass --threads (the tests).
+RAYON_NUM_THREADS = "4"
