@@ -70,6 +70,14 @@ Dissipation does not vanish at 3 m cells: the offshore energy height is 1.45 aga
 
 A source of strength `Q` per unit length radiates an amplitude `Q / (2 c_g cos θ)` on each side, where **`c_g` is the group speed**, not the phase speed. The first dispersive version used the phase speed and radiated waves 11% too tall at `kh = 0.59` — exactly `1 + (kh)²/3`. In shallow water the two speeds coincide, which is why the shallow-water tests never showed it. The source also has a finite width, so a Gaussian of width `σ` radiates a wave of wavenumber `k_x` with its strength scaled by `exp(−k_x²σ²/2)`; the strength is boosted by the inverse. That accounts for about 1% of the amplitude deficit the wave-maker had before dispersion was added (1.4–1.6% before, 0.4–0.6% after).
 
+## A failure on the real bed, and the mask that fixed it
+
+The synthetic tests all passed, then the first run on the Pipeline bed blew up at 52 s (88 s on the coarser 6 m grid). The time step had been collapsing for several seconds before, which made the run look merely slow. Stepping the 6 m case and reporting the fastest cell showed a **thin-film runaway** at the edge of the run-up: a 1 to 2 mm film on a bed 0.9 m above sea level, whose speed grew by a factor of about 1.3 every half second until it reached hundreds of kilometres per second.
+
+The dispersive terms were already switched off in water thinner than 5 cm (`c = 0`), but the *linear system was still coupled* across those cells. A film's acceleration is `w = r / h`, which is enormous for `h` of a millimetre; it entered its neighbours' divergence, and the neighbours' dispersive force fed back into the film's equation, again divided by that depth. The system `A w = r` is positive definite and has a bounded solution at every step; the loop was in the time evolution.
+
+The fix removes cells shallower than 5 cm from the dispersive system entirely. They are not unknowns, they contribute zero velocity to the divergence and to the nonlinear term, and their own momentum rate passes through as plain shallow water, as it did before dispersion existed. The restricted operator `M A M` is still symmetric and positive definite (unit-tested with a patchy mask, including that masked cells stay exactly zero). A white-box regression test checks that changing a film's speed from 1 to 1000 m/s changes nothing about its neighbours, and fails when the masking is removed. On the 6 m bed the same case now runs the full 200 s.
+
 ## Verification
 
 | Check | Result | Reference |
@@ -81,7 +89,7 @@ A source of strength `Q` per unit length radiates an amplitude `Q / (2 c_g cos �
 | 1:30 beach, 8 s, 1.5 m: shoaling from 6 m to 3.5 m | ×1.14 | Green's law ×1.14 |
 | Same beach: breaking | peak `H/h` 0.68 at 3.0 m depth; surf zone `H/h` up to 0.96 in 1.0–2.5 m | textbook range 0.7–1.2 (see the caveat above) |
 | Still water over a rough bed, with and without dry bumps | momentum below 1e-9 | zero |
-| Linear solves | 7–11 iterations each, none unconverged | |
+| Linear solves | 4–11 iterations each, none unconverged | |
 
 ## Known limits
 

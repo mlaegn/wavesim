@@ -139,6 +139,11 @@ pub(crate) fn switch(
 pub(crate) struct Work {
     u: Vec<f64>,
     v: Vec<f64>,
+    /// 1 in cells deep enough to take part in the dispersive system, 0 elsewhere.
+    mask: Vec<f64>,
+    /// The velocities with thin cells zeroed, for the divergence and the nonlinear term.
+    um: Vec<f64>,
+    vm: Vec<f64>,
     div: Vec<f64>,
     /// `c = phi h^3 / 3`.
     c: Vec<f64>,
@@ -170,6 +175,9 @@ impl Work {
         Self {
             u: z(),
             v: z(),
+            mask: z(),
+            um: z(),
+            vm: z(),
             div: z(),
             c: z(),
             f: z(),
@@ -193,13 +201,16 @@ impl Work {
     }
 }
 
-/// `A p` on the interior, with `A p = h p - grad(c div p)`. Fills the ghost cells of `p`
-/// first, and uses `f` to hold `c div p`.
+/// `A p` on the interior, with `A p = h p - grad(c div p)`, restricted to the cells in
+/// `mask`: `p` must be zero outside it and the result is zeroed there, which keeps the
+/// operator symmetric and positive definite. Fills the ghost cells of `p` first, and uses
+/// `f` to hold `c div p`.
 #[allow(clippy::too_many_arguments)]
 fn matvec(
     grid: &Grid,
     periodic_y: bool,
     heff: &[f64],
+    mask: &[f64],
     c: &[f64],
     f: &mut [f64],
     px: &mut [f64],
@@ -219,8 +230,8 @@ fn matvec(
     }
     for (i, j) in grid.interior() {
         let k = j * w + i;
-        ax[k] = heff[k] * px[k] - (f[k + 1] - f[k - 1]) * ix;
-        ay[k] = heff[k] * py[k] - (f[k + w] - f[k - w]) * iy;
+        ax[k] = mask[k] * (heff[k] * px[k] - (f[k + 1] - f[k - 1]) * ix);
+        ay[k] = mask[k] * (heff[k] * py[k] - (f[k + w] - f[k - w]) * iy);
     }
 }
 
@@ -257,14 +268,22 @@ impl Dispersion {
         let (ix, iy) = (0.5 / dx, 0.5 / dy);
         let wk = work;
 
+        // Water thinner than H_DISPERSION_MIN follows plain shallow water: it takes no part
+        // in the dispersive system, neither as unknown nor as a source of divergence. Left
+        // in, a film a millimetre deep has an enormous acceleration w = r / h that leaks into
+        // its neighbours, and their dispersive force feeds back into it divided by that
+        // depth: a loop that grows without bound at the edge of a run-up.
         for k in 0..grid.cells() {
             wk.u[k] = velocity(s.h[k], s.hu[k]);
             wk.v[k] = velocity(s.h[k], s.hv[k]);
+            wk.mask[k] = if s.h[k] >= H_DISPERSION_MIN { 1.0 } else { 0.0 };
+            wk.um[k] = wk.mask[k] * wk.u[k];
+            wk.vm[k] = wk.mask[k] * wk.v[k];
         }
         for j in 1..rows - 1 {
             for i in 1..w - 1 {
                 let k = j * w + i;
-                wk.div[k] = (wk.u[k + 1] - wk.u[k - 1]) * ix + (wk.v[k + w] - wk.v[k - w]) * iy;
+                wk.div[k] = (wk.um[k + 1] - wk.um[k - 1]) * ix + (wk.vm[k + w] - wk.vm[k - w]) * iy;
             }
         }
 
@@ -281,8 +300,8 @@ impl Dispersion {
                 };
                 wk.c[k] = c;
                 wk.f[k] = if self.nonlinear && c > 0.0 {
-                    let n = wk.u[k] * (wk.div[k + 1] - wk.div[k - 1]) * ix
-                        + wk.v[k] * (wk.div[k + w] - wk.div[k - w]) * iy
+                    let n = wk.um[k] * (wk.div[k + 1] - wk.div[k - 1]) * ix
+                        + wk.vm[k] * (wk.div[k + w] - wk.div[k - w]) * iy
                         - wk.div[k] * wk.div[k];
                     c * n
                 } else {
@@ -296,11 +315,14 @@ impl Dispersion {
             let k = j * w + i;
             let h = s.h[k];
             wk.heff[k] = h.max(H_DRY);
-            if h <= H_DRY {
+            if wk.mask[k] == 0.0 {
                 wk.bx[k] = 0.0;
                 wk.by[k] = 0.0;
                 wk.wx[k] = 0.0;
                 wk.wy[k] = 0.0;
+                wk.diag_x[k] = 1.0;
+                wk.diag_y[k] = 1.0;
+                continue;
             } else {
                 wk.bx[k] = lhu[k] - wk.u[k] * lh[k] + (wk.f[k + 1] - wk.f[k - 1]) * ix;
                 wk.by[k] = lhv[k] - wk.v[k] * lh[k] + (wk.f[k + w] - wk.f[k - w]) * iy;
@@ -311,8 +333,8 @@ impl Dispersion {
 
         // Preconditioned conjugate gradients, starting from the previous solution.
         matvec(
-            grid, periodic_y, &wk.heff, &wk.c, &mut wk.f, &mut wk.wx, &mut wk.wy, &mut wk.ax,
-            &mut wk.ay,
+            grid, periodic_y, &wk.heff, &wk.mask, &wk.c, &mut wk.f, &mut wk.wx, &mut wk.wy,
+            &mut wk.ax, &mut wk.ay,
         );
         for (i, j) in grid.interior() {
             let k = j * w + i;
@@ -330,8 +352,8 @@ impl Dispersion {
         let mut converged = dot(grid, &wk.rx, &wk.ry, &wk.rx, &wk.ry).sqrt() <= target;
         while !converged && iterations < self.max_iterations {
             matvec(
-                grid, periodic_y, &wk.heff, &wk.c, &mut wk.f, &mut wk.px, &mut wk.py, &mut wk.ax,
-                &mut wk.ay,
+                grid, periodic_y, &wk.heff, &wk.mask, &wk.c, &mut wk.f, &mut wk.px, &mut wk.py,
+                &mut wk.ax, &mut wk.ay,
             );
             let pap = dot(grid, &wk.px, &wk.py, &wk.ax, &wk.ay);
             let alpha = rz / pap;
@@ -364,8 +386,10 @@ impl Dispersion {
         // d(hu)/dt = h w + u dh/dt.
         for (i, j) in grid.interior() {
             let k = j * w + i;
-            lhu[k] = s.h[k] * wk.wx[k] + wk.u[k] * lh[k];
-            lhv[k] = s.h[k] * wk.wy[k] + wk.v[k] * lh[k];
+            if wk.mask[k] > 0.0 {
+                lhu[k] = s.h[k] * wk.wx[k] + wk.u[k] * lh[k];
+                lhv[k] = s.h[k] * wk.wy[k] + wk.v[k] * lh[k];
+            }
         }
     }
 }
@@ -392,6 +416,7 @@ mod tests {
         let mut rng = Lcg(7);
         for k in 0..grid.cells() {
             work.heff[k] = 0.5 + 4.0 * (rng.next() + 1.0);
+            work.mask[k] = 1.0;
             work.c[k] = 3.0 * (rng.next() + 1.0);
         }
         // c and heff are only read at the interior and one ring around it, but filling
@@ -422,6 +447,7 @@ mod tests {
             grid,
             periodic,
             &work.heff,
+            &work.mask,
             &work.c,
             &mut work.f,
             &mut px,
@@ -462,6 +488,100 @@ mod tests {
                     dot(&grid, &x1, &y1, &ax1, &ay1) > 0.0,
                     "periodic={periodic}: not positive"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn with_thin_cells_masked_out_the_operator_is_still_symmetric_and_positive_definite() {
+        // The mask removes shallow cells from the system. A patchy mask must leave `M A M`
+        // symmetric and positive definite, and a masked cell must stay exactly zero.
+        let (grid, mut work, mut rng) = setup(false);
+        crate::grid::mirror_ghosts(&grid, &mut work.c);
+        for k in 0..grid.cells() {
+            work.mask[k] = if rng.next() > -0.3 { 1.0 } else { 0.0 };
+        }
+        crate::grid::mirror_ghosts(&grid, &mut work.mask);
+        let masked = |grid: &Grid, mask: &[f64], mut v: (Vec<f64>, Vec<f64>)| {
+            for (i, j) in grid.interior() {
+                let k = grid.idx(i, j);
+                v.0[k] *= mask[k];
+                v.1[k] *= mask[k];
+            }
+            v
+        };
+        assert!(
+            grid.interior()
+                .any(|(i, j)| work.mask[grid.idx(i, j)] == 0.0),
+            "the test mask removes nothing"
+        );
+        for _ in 0..5 {
+            let (x1, y1) = masked(&grid, &work.mask, random_field(&grid, &mut rng));
+            let (x2, y2) = masked(&grid, &work.mask, random_field(&grid, &mut rng));
+            let (ax1, ay1) = apply_a(&grid, &mut work, false, &x1, &y1);
+            let (ax2, ay2) = apply_a(&grid, &mut work, false, &x2, &y2);
+            let left = dot(&grid, &x2, &y2, &ax1, &ay1);
+            let right = dot(&grid, &x1, &y1, &ax2, &ay2);
+            assert!(
+                (left - right).abs() < 1e-10 * left.abs().max(1.0),
+                "<y, A x> = {left}, <x, A y> = {right}"
+            );
+            assert!(dot(&grid, &x1, &y1, &ax1, &ay1) > 0.0);
+            for (i, j) in grid.interior() {
+                let k = grid.idx(i, j);
+                if work.mask[k] == 0.0 {
+                    assert_eq!(
+                        (ax1[k], ay1[k]),
+                        (0.0, 0.0),
+                        "a masked cell was not left at zero"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_thin_film_neither_feels_nor_feeds_the_dispersive_system() {
+        // Regression: a film a millimetre deep at the edge of a run-up once had an enormous
+        // acceleration that leaked into its neighbours and fed back divided by its depth,
+        // growing without bound. Its velocity must not change what its neighbours get, and
+        // its own momentum rate must pass through untouched.
+        let grid = Grid::new(12, 8, 2.0, 2.0);
+        let film = grid.idx(GHOST + 6, GHOST + 4);
+        let run = |film_speed: f64| {
+            let mut s = State::zeros(&grid);
+            for (i, j) in grid.interior() {
+                let k = grid.idx(i, j);
+                s.h[k] = 2.0;
+                s.hu[k] = 2.0 * 0.3 * (0.7 * i as f64).sin();
+                s.hv[k] = 2.0 * 0.2 * (0.5 * j as f64).cos();
+            }
+            s.h[film] = 0.001;
+            s.hu[film] = 0.001 * film_speed;
+            s.hv[film] = 0.0;
+            s.fill_boundaries(&grid, false);
+            let bed = Bathymetry::flat(&grid, 2.0);
+            let mut phi = vec![1.0; grid.cells()];
+            phi[film] = 0.0;
+            let lh: Vec<f64> = (0..grid.cells()).map(|k| 0.01 * (k % 7) as f64).collect();
+            let mut lhu: Vec<f64> = (0..grid.cells()).map(|k| 0.05 * (k % 5) as f64).collect();
+            let mut lhv: Vec<f64> = (0..grid.cells()).map(|k| 0.03 * (k % 3) as f64).collect();
+            let before = (lhu[film], lhv[film]);
+            let mut work = Work::new(&grid);
+            let _ = bed;
+            Dispersion::default().apply(&grid, false, &s, &lh, &mut lhu, &mut lhv, &phi, &mut work);
+            (lhu, lhv, before)
+        };
+        let (a_u, a_v, before) = run(1.0);
+        let (b_u, b_v, _) = run(1000.0);
+        for (i, j) in grid.interior() {
+            let k = grid.idx(i, j);
+            if k == film {
+                assert_eq!((a_u[k], a_v[k]), before, "the film's own rate was altered");
+                assert_eq!((b_u[k], b_v[k]), before, "the film's own rate was altered");
+            } else {
+                assert_eq!(a_u[k], b_u[k], "cell ({i}, {j}) felt the film's speed");
+                assert_eq!(a_v[k], b_v[k], "cell ({i}, {j}) felt the film's speed");
             }
         }
     }
