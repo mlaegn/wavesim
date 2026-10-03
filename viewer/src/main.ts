@@ -1,6 +1,7 @@
 import { listRuns, loadRunFromFiles, loadRunFromUrl } from "./load";
+import { drawProfile } from "./profile";
 import type { Run } from "./run";
-import { RunView, type Preset } from "./view";
+import { RunView, type Overlay, type Preset } from "./view";
 
 function el<T extends HTMLElement>(id: string): T {
   const node = document.getElementById(id);
@@ -26,6 +27,14 @@ const exag = el<HTMLInputElement>("exag");
 const exagOut = el("exag-out");
 const foam = el<HTMLInputElement>("foam");
 const zones = el<HTMLInputElement>("zones");
+const mapKind = el<HTMLSelectElement>("mapkind");
+const crop = el<HTMLInputElement>("crop");
+const side = el<HTMLInputElement>("side");
+const profilePanel = el("profile-panel");
+const profileCanvas = el<HTMLCanvasElement>("profile");
+const transect = el<HTMLInputElement>("transect");
+const transectAt = el("transect-at");
+const profileReadout = el("profile-readout");
 
 let view: RunView | null = null;
 let time = 0;
@@ -77,6 +86,72 @@ function showFacts(run: Run): void {
   info.hidden = false;
 }
 
+/** What happened along one line over the whole run: where it got steepest and where it broke. */
+function wholeRun(run: Run, row: number): string {
+  const { nx, dx } = run.header;
+  const box = run.viewBox;
+  const first = Math.ceil(box.x0 / dx);
+  const last = Math.min(nx - 1, Math.floor(box.x1 / dx));
+  const steep = run.steepnessMap();
+  let best = { s: 0, i: first };
+  for (let i = first; i <= last; i++) {
+    const s = steep[row * nx + i] as number;
+    if (s > best.s) best = { s, i };
+  }
+  const out: string[] = [];
+  if (best.s > 0) {
+    const deg = (Math.atan(best.s) * 180) / Math.PI;
+    out.push(`Over the whole run it gets steepest at x = ${((best.i + 0.5) * dx).toFixed(0)} m (slope ${best.s.toFixed(2)}, ${deg.toFixed(0)}°).`);
+  }
+  const breaks = run.breakMap();
+  if (breaks) {
+    let from = -1;
+    let to = -1;
+    let top = { f: 0, i: first };
+    for (let i = first; i <= last; i++) {
+      const f = breaks[row * nx + i] as number;
+      if (f >= 0.05) {
+        if (from < 0) from = i;
+        to = i;
+      }
+      if (f > top.f) top = { f, i };
+    }
+    out.push(
+      from < 0
+        ? "It never breaks along this line."
+        : `It breaks from x = ${((from + 0.5) * dx).toFixed(0)} to ${((to + 0.5) * dx).toFixed(0)} m, most often at x = ${((top.i + 0.5) * dx).toFixed(0)} m (${(100 * top.f).toFixed(0)}% of the time).`,
+    );
+  }
+  return out.join(" ");
+}
+
+/** Redraw the side view for the current time and the chosen line along the shore. */
+function updateProfile(): void {
+  if (!view || profilePanel.hidden) return;
+  const run = view.run;
+  const row = Number(transect.value);
+  const y = (row + 0.5) * run.header.dy;
+  transectAt.textContent = `y = ${y.toFixed(0)} m`;
+  view.setTransect(y);
+  const box = run.viewBox;
+  const readout = drawProfile(profileCanvas, run, view.eta, view.breaking, row, box.x0, Math.min(run.shoreline + 40, box.x1));
+  const parts: string[] = [];
+  if (readout.steepest) {
+    const { slope, x, depth } = readout.steepest;
+    const degrees = (Math.atan(slope) * 180) / Math.PI;
+    parts.push(`Steepest face: slope ${slope.toFixed(2)} (${degrees.toFixed(0)}°) at x = ${x.toFixed(0)} m, ${depth.toFixed(1)} m deep.`);
+  }
+  if (view.breaking) {
+    parts.push(
+      readout.breakingFrom
+        ? `The model reads breaking from x = ${readout.breakingFrom.x.toFixed(0)} m (${readout.breakingFrom.depth.toFixed(1)} m deep).`
+        : "Not breaking along this line right now.",
+    );
+  }
+  parts.push(wholeRun(run, row));
+  profileReadout.textContent = parts.filter(Boolean).join(" ");
+}
+
 function setRun(run: Run, label: string): void {
   view?.dispose();
   view = new RunView(canvas, run);
@@ -84,8 +159,18 @@ function setRun(run: Run, label: string): void {
   scrub.max = String(run.duration);
   scrub.value = "0";
   view.setExaggeration(Number(exag.value));
+  view.setPreset("oblique");
   view.setFoam(foam.checked);
   view.setZones(zones.checked);
+  view.setCrop(crop.checked);
+  mapKind.value = "none";
+  view.setOverlay("none");
+  (mapKind.options[1] as HTMLOptionElement).disabled = !run.hasField("breaking");
+  const box = run.viewBox;
+  transect.min = String(Math.ceil(box.y0 / run.header.dy));
+  transect.max = String(Math.floor(box.y1 / run.header.dy) - 1);
+  transect.value = String(Math.round((Number(transect.min) + Number(transect.max)) / 2));
+  profilePanel.hidden = !side.checked;
   showFacts(run);
   meta.textContent = `${label} · ${run.header.nx} × ${run.header.ny} cells`;
   controls.hidden = false;
@@ -124,6 +209,7 @@ function seek(t: number): void {
   if (!view) return;
   time = Math.min(Math.max(t, 0), view.run.duration);
   view.setTime(time);
+  updateProfile();
   scrub.value = String(time);
   clock.textContent = `${time.toFixed(1)} / ${view.run.duration.toFixed(0)} s`;
 }
@@ -161,6 +247,13 @@ exag.addEventListener("input", () => {
 });
 foam.addEventListener("change", () => view?.setFoam(foam.checked));
 zones.addEventListener("change", () => view?.setZones(zones.checked));
+mapKind.addEventListener("change", () => view?.setOverlay(mapKind.value as Overlay));
+crop.addEventListener("change", () => view?.setCrop(crop.checked));
+side.addEventListener("change", () => {
+  profilePanel.hidden = !side.checked || !view;
+  updateProfile();
+});
+transect.addEventListener("input", updateProfile);
 for (const b of document.querySelectorAll<HTMLButtonElement>("button[data-view]")) {
   b.addEventListener("click", () => view?.setPreset(b.dataset.view as Preset));
 }
@@ -183,7 +276,10 @@ window.addEventListener("keydown", (e) => {
   }
 });
 
-window.addEventListener("resize", () => view?.resize());
+window.addEventListener("resize", () => {
+  view?.resize();
+  updateProfile();
+});
 
 // Files ------------------------------------------------------------------------------
 

@@ -60,5 +60,6 @@ function runs(dir: string): Plugin {
 export default defineConfig({
   plugins: [runs(path.resolve(process.env.WAVESIM_RUNS ?? path.join(import.meta.dirname, "../out")))],
   build: { target: "es2022", chunkSizeWarningLimit: 800 },
-  test: { include: ["tests/**/*.test.ts"] },
+  // Two test workers at most: the suite is small, and this keeps a laptop quiet.
+  test: { include: ["tests/**/*.test.ts"], maxWorkers: 2 },
 });

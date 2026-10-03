@@ -22,6 +22,16 @@
       <p id="credit"></p>
     </aside>
 
+    <section id="profile-panel" hidden>
+      <header>
+        <strong>Side view</strong>
+        <label>Along the shore <input id="transect" type="range" min="0" max="1" step="1" value="0" /></label>
+        <span id="transect-at"></span>
+      </header>
+      <canvas id="profile"></canvas>
+      <p id="profile-readout"></p>
+    </section>
+
     <div id="overlay">
       <p id="message">Choose a run above, or drop <code>run.json</code>, <code>bed.f32</code> and <code>frames.f32</code> here.</p>
       <progress id="progress" max="1" value="0" hidden></progress>
@@ -40,13 +50,22 @@
           <option value="8">8×</option>
         </select>
       </label>
-      <label>Height ×<input id="exag" type="range" min="1" max="12" step="0.5" value="2" /><output id="exag-out">2</output></label>
+      <label>Height ×<input id="exag" type="range" min="1" max="12" step="0.5" value="4" /><output id="exag-out">4</output></label>
       <label class="check"><input id="foam" type="checkbox" checked />Foam</label>
-      <label class="check"><input id="zones" type="checkbox" />Wave-maker &amp; absorbing zones</label>
+      <label>Map
+        <select id="mapkind">
+          <option value="none">off</option>
+          <option value="breaks">where it breaks</option>
+          <option value="steep">how steep</option>
+        </select>
+      </label>
+      <label class="check"><input id="crop" type="checkbox" checked />Sea only</label>
+      <label class="check"><input id="side" type="checkbox" checked />Side view</label>
+      <label class="check"><input id="zones" type="checkbox" />Model zones</label>
       <span class="group">
         <button data-view="oblique" type="button">Oblique</button>
         <button data-view="top" type="button">Top</button>
-        <button data-view="offshore" type="button">Offshore</button>
+        <button data-view="beach" type="button">Beach</button>
       </span>
     </footer>
 

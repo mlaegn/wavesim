@@ -2,13 +2,16 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { Run } from "./run";
 
-export type Preset = "oblique" | "top" | "offshore";
+export type Preset = "oblique" | "top" | "beach";
+export type Overlay = "none" | "breaks" | "steep";
 
 const WATER_VERTEX = /* glsl */ `
 attribute vec2 cell;
 
 uniform highp sampler2D uEta;
 uniform highp sampler2D uBed;
+uniform highp sampler2D uBreak;
+uniform highp sampler2D uMap;
 uniform vec2 uSize;
 uniform vec2 uSpacing;
 uniform float uExag;
@@ -17,6 +20,8 @@ uniform float uLevel;
 varying vec3 vWorld;
 varying float vDepth;
 varying float vHeight;
+varying float vBreak;
+varying float vMap;
 varying vec2 vSlope;
 varying vec2 vXY;
 
@@ -35,6 +40,8 @@ void main() {
   float bed = texelFetch(uBed, c, 0).r;
   vDepth = eta - bed;
   vHeight = eta - uLevel;
+  vBreak = texelFetch(uBreak, c, 0).r;
+  vMap = texelFetch(uMap, c, 0).r;
 
   float eL = wetEta(c + ivec2(-1, 0), eta);
   float eR = wetEta(c + ivec2( 1, 0), eta);
@@ -63,15 +70,22 @@ uniform float uMakerX;
 uniform float uLine;   // half-width of the wave-maker line (m)
 uniform float uRange;  // surface height that gets the full tint (m)
 uniform float uTint;
+uniform float uHasBreak; // 1 if the run records where it is breaking
+uniform float uMapOn;
+uniform float uCropOn;
+uniform vec4 uBox;     // the sea: x0, x1, y0, y1 in metres
 
 varying vec3 vWorld;
 varying float vDepth;
 varying float vHeight;
+varying float vBreak;
+varying float vMap;
 varying vec2 vSlope;
 varying vec2 vXY;
 
 void main() {
   if (vDepth < 0.01) discard;
+  if (uCropOn > 0.5 && (vXY.x < uBox.x || vXY.y < uBox.z || vXY.y > uBox.w)) discard;
 
   // Surface normal from the physical slope, with the vertical exaggeration applied.
   vec3 n = normalize(vec3(-uExag * vSlope.x, 1.0, uExag * vSlope.y));
@@ -93,7 +107,10 @@ void main() {
 
   // Foam where the surface is steep (bore fronts) and in the swash right at the shore.
   float steep = length(vSlope);
-  float foam = uFoamOn * max(smoothstep(0.05, 0.13, steep), 0.55 * smoothstep(0.35, 0.0, vDepth));
+  // Where the model itself says the wave is breaking, if the run recorded that; otherwise
+  // wherever the surface is steep. Plus the swash right at the shore.
+  float front = uHasBreak > 0.5 ? smoothstep(0.55, 0.95, vBreak) : smoothstep(0.05, 0.13, steep);
+  float foam = uFoamOn * max(front, 0.55 * smoothstep(0.35, 0.0, vDepth));
   col = mix(col, uFoam, foam);
 
   if (uZonesOn > 0.5) {
@@ -105,6 +122,13 @@ void main() {
   float alpha = mix(0.6, 0.93, smoothstep(0.0, 4.0, vDepth));
   alpha = max(alpha, foam * 0.95);
   alpha *= smoothstep(0.01, 0.15, vDepth);
+  if (uMapOn > 0.5) {
+    // How much of the run each place spent breaking: yellow for now and then, red for always.
+    float m = smoothstep(0.0, 0.2, vMap);
+    vec3 heat = mix(vec3(1.0, 0.85, 0.2), vec3(0.9, 0.12, 0.1), smoothstep(0.1, 0.6, vMap));
+    col = mix(col, heat, 0.9 * m);
+    alpha = max(alpha, 0.97 * m);
+  }
   gl_FragColor = vec4(col, alpha);
   #include <colorspace_fragment>
 }
@@ -193,6 +217,12 @@ export class RunView {
   private readonly etaData: Float32Array;
   private readonly etaTexture: THREE.DataTexture;
   private readonly bedTexture: THREE.DataTexture;
+  private readonly breakData: Float32Array;
+  private readonly breakTexture: THREE.DataTexture;
+  private readonly mapData: Float32Array;
+  private readonly mapTexture: THREE.DataTexture;
+  private readonly cropPlanes: THREE.Plane[];
+  private readonly transect: THREE.Line;
   private readonly uniforms: Record<string, THREE.IUniform>;
   private readonly lengthX: number;
   private readonly lengthY: number;
@@ -208,6 +238,7 @@ export class RunView {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setClearColor(0x000000, 0);
+    this.renderer.localClippingEnabled = true;
 
     // Terrain.
     const terrainGeometry = gridGeometry(run, true);
@@ -219,9 +250,22 @@ export class RunView {
     }
     terrainGeometry.setAttribute("color", new THREE.BufferAttribute(colours, 3));
     terrainGeometry.computeVertexNormals();
+    // The terrain is cut to the sea box with clipping planes, so the strips that exist only
+    // for the numerics do not show. (World X is x; world Z is minus y.)
+    const box = run.viewBox;
+    this.cropPlanes = [
+      new THREE.Plane(new THREE.Vector3(1, 0, 0), -box.x0),
+      new THREE.Plane(new THREE.Vector3(0, 0, -1), -box.y0),
+      new THREE.Plane(new THREE.Vector3(0, 0, 1), box.y1),
+    ];
     this.terrain = new THREE.Mesh(
       terrainGeometry,
-      new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 }),
+      new THREE.MeshStandardMaterial({
+        vertexColors: true,
+        roughness: 0.95,
+        metalness: 0,
+        clippingPlanes: this.cropPlanes,
+      }),
     );
     this.scene.add(this.terrain);
 
@@ -233,6 +277,10 @@ export class RunView {
     this.etaData = new Float32Array(nx * ny);
     this.etaTexture = floatTexture(this.etaData, nx, ny);
     this.bedTexture = floatTexture(run.bed, nx, ny);
+    this.breakData = new Float32Array(nx * ny);
+    this.breakTexture = floatTexture(this.breakData, nx, ny);
+    this.mapData = new Float32Array(nx * ny);
+    this.mapTexture = floatTexture(this.mapData, nx, ny);
     const waves = run.header.waves;
     const cellsToMetres = (key: string, spacing: number) => {
       const v = waves[key];
@@ -242,6 +290,12 @@ export class RunView {
     this.uniforms = {
       uEta: { value: this.etaTexture },
       uBed: { value: this.bedTexture },
+      uBreak: { value: this.breakTexture },
+      uMap: { value: this.mapTexture },
+      uHasBreak: { value: run.hasField("breaking") ? 1 : 0 },
+      uMapOn: { value: 0 },
+      uCropOn: { value: 1 },
+      uBox: { value: new THREE.Vector4(box.x0, box.x1, box.y0, box.y1) },
       uSize: { value: new THREE.Vector2(nx, ny) },
       uSpacing: { value: new THREE.Vector2(dx, dy) },
       uExag: { value: 2 },
@@ -278,6 +332,15 @@ export class RunView {
     this.water.frustumCulled = false; // the shader moves the vertices
     this.scene.add(this.water);
 
+    // A line on the water marking where the side view is taken.
+    this.transect = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(box.x0, 0, 0), new THREE.Vector3(box.x1, 0, 0)]),
+      new THREE.LineBasicMaterial({ color: 0xffd23f, depthTest: false, transparent: true, opacity: 0.9 }),
+    );
+    this.transect.renderOrder = 10;
+    this.transect.frustumCulled = false;
+    this.scene.add(this.transect);
+
     this.controls = new OrbitControls(this.camera, canvas);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
@@ -298,12 +361,58 @@ export class RunView {
   setTime(t: number): void {
     this.run.sampleInto(t, this.etaData);
     this.etaTexture.needsUpdate = true;
+    if (this.run.hasField("breaking")) {
+      this.run.sampleFieldInto("breaking", t, this.breakData);
+      this.breakTexture.needsUpdate = true;
+    }
+  }
+
+  /** The free-surface elevation being shown now. */
+  get eta(): Float32Array {
+    return this.etaData;
+  }
+
+  /** How close to breaking each cell is now, or `null` if the run did not record it. */
+  get breaking(): Float32Array | null {
+    return this.run.hasField("breaking") ? this.breakData : null;
+  }
+
+  /** Hide the strips that exist only for the numerics: the wave-maker's bump and the sides. */
+  setCrop(on: boolean): void {
+    this.uniform("uCropOn").value = on ? 1 : 0;
+    const material = this.terrain.material as THREE.MeshStandardMaterial;
+    material.clippingPlanes = on ? this.cropPlanes : [];
+    material.needsUpdate = true;
+  }
+
+  /**
+   * Colour the water by what happened there over the whole run: how much of it was spent
+   * breaking, or how steep the surface ever got (0.06 and below is clear, 0.4 and above is
+   * full red).
+   */
+  setOverlay(kind: Overlay): void {
+    const map =
+      kind === "breaks"
+        ? this.run.breakMap()
+        : kind === "steep"
+          ? this.run.steepnessMap().map((s) => Math.min(Math.max((s - 0.06) / 0.34, 0), 1))
+          : null;
+    this.mapData.set(map ?? new Float32Array(this.mapData.length));
+    this.mapTexture.needsUpdate = true;
+    this.uniform("uMapOn").value = map ? 1 : 0;
+  }
+
+  /** Mark the line the side view is taken along, at `y` metres. */
+  setTransect(y: number): void {
+    this.transect.position.z = -y;
+    this.transect.position.y = 2 * (this.uniform("uExag").value as number);
   }
 
   /** Stretch heights (bed and water together) to make small waves visible. */
   setExaggeration(factor: number): void {
     this.terrain.scale.y = factor;
     this.uniform("uExag").value = factor;
+    this.transect.position.y = 2 * factor;
   }
 
   setFoam(on: boolean): void {
@@ -316,22 +425,30 @@ export class RunView {
   }
 
   setPreset(preset: Preset): void {
-    const lx = this.lengthX;
-    const ly = this.lengthY;
-    const big = Math.max(lx, ly);
-    const target = new THREE.Vector3(0.62 * lx, 0, -0.5 * ly);
+    const { x0, x1, y0, y1 } = this.run.viewBox;
+    const shore = Math.min(this.run.shoreline, x1);
+    const sea = Math.max(shore - x0, 60); // how far the sea reaches from the wave-maker to the shore
+    const width = y1 - y0;
+    const midZ = -(y0 + y1) / 2;
+    const e = this.uniform("uExag").value as number; // heights are stretched by this
+    const target = new THREE.Vector3();
     const position = new THREE.Vector3();
     switch (preset) {
-      case "oblique":
-        position.set(0.04 * lx, 0.3 * big, 0.2 * ly);
+      case "oblique": // from the south-west corner, along the break
+        target.set(x0 + 0.75 * sea, 0, -(y0 + 0.3 * width));
+        position.set(x0 - 0.1 * sea, (0.28 * sea + 12) * Math.max(e / 3, 1), -y0 + 0.45 * sea);
         break;
-      case "top":
-        target.set(0.5 * lx, 0, -0.5 * ly);
-        position.set(0.5 * lx, 1.35 * big, -0.5 * ly + 1);
+      case "top": {
+        // The shore runs up the screen, so the alongshore width is the vertical extent.
+        const reach = Math.max(width, (sea + 80) / this.camera.aspect);
+        const height = (0.55 * reach) / Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2));
+        target.set(x0 + 0.5 * (sea + 80), 0, midZ);
+        position.set(target.x, height, midZ + 1);
         break;
-      case "offshore":
-        position.set(0.22 * lx, 0.06 * big, -0.5 * ly);
-        target.set(0.8 * lx, 0, -0.5 * ly);
+      }
+      case "beach": // standing at the waterline, looking out along the lineup
+        target.set(x0 + 0.3 * sea, 0, -(y0 + 0.62 * width));
+        position.set(shore - 0.04 * sea, 5 * e, -(y0 + 0.18 * width));
         break;
     }
     this.camera.position.copy(position);
@@ -361,6 +478,10 @@ export class RunView {
     (this.water.material as THREE.Material).dispose();
     this.etaTexture.dispose();
     this.bedTexture.dispose();
+    this.breakTexture.dispose();
+    this.mapTexture.dispose();
+    this.transect.geometry.dispose();
+    (this.transect.material as THREE.Material).dispose();
     this.renderer.dispose();
   }
 }

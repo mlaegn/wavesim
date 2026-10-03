@@ -114,3 +114,23 @@ input[type="range"] { accent-color: var(--accent); }
   .group { margin-left: 0; }
   #info { top: auto; bottom: 120px; }
 }
+
+#profile-panel {
+  position: fixed;
+  left: var(--gutter);
+  bottom: 96px;
+  width: min(620px, calc(100vw - 2 * var(--gutter)));
+  background: var(--bar);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 12.5px;
+}
+#profile-panel[hidden] { display: none; }
+#profile-panel header { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 8px 12px 0; }
+#profile-panel #transect { width: 150px; }
+#transect-at { color: var(--muted); font-variant-numeric: tabular-nums; }
+#profile { display: block; width: 100%; height: 170px; }
+#profile-readout { margin: 0; padding: 2px 12px 9px; color: var(--muted); line-height: 1.45; }
+#profile-readout b { color: var(--ink); font-weight: 600; }
+@media (max-width: 640px) { #profile-panel { bottom: 150px; } }

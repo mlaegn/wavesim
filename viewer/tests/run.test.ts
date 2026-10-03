@@ -194,14 +194,121 @@ describe("the file written by the Rust solver", () => {
     expect(run.header.frame.x_bearing_deg).toBe(130);
     expect(run.frameCount).toBe(4);
     expect(run.header.times).toEqual([0, 2, 4, 6]);
+    expect(run.header.fields).toEqual(["eta", "breaking"]);
+    expect(run.hasField("breaking")).toBe(true);
     // Cell (i = 3, j = 1): bed = -2 + 0.75 * 3 = 0.25, dry, so the surface equals the bed.
     const n = 1 * 6 + 3;
     expect(run.bed[n]).toBe(0.25);
     for (let k = 0; k < 4; k++) expect(run.frame(k)[n]).toBe(0.25);
     // Cell (i = 1, j = 0): bed = -1.25, wet: eta = 0.125 k + 0.0625 i - 0.25.
     for (let k = 0; k < 4; k++) expect(run.frame(k)[1]).toBeCloseTo(0.125 * k + 0.0625 - 0.25, 7);
+    // The second field: wet cells hold 0.25 * ((n + k) % 4), dry cells 0.
+    for (let k = 0; k < 4; k++) {
+      expect(run.field("breaking", k)[1]).toBe(0.25 * ((1 + k) % 4));
+      expect(run.field("breaking", k)[n]).toBe(0);
+    }
   });
 });
 
 // Keep the type import honest.
 export type { Run };
+
+describe("fields and what they are used for", () => {
+  /** Frames with two fields, "eta" then "breaking", as the solver writes them. */
+  function twoFields(eta: (k: number, n: number) => number, breaking: (k: number, n: number) => number, bed = -10) {
+    const h = header({ fields: ["eta", "breaking"] });
+    const frames: number[] = [];
+    for (let k = 0; k < 4; k++) {
+      for (let n = 0; n < 6; n++) frames.push(eta(k, n));
+      for (let n = 0; n < 6; n++) frames.push(breaking(k, n));
+    }
+    return runFromBuffers(h, buf(new Array(6).fill(bed)), buf(frames));
+  }
+
+  it("reads each field from its own block", () => {
+    const run = twoFields((k, n) => 100 * k + n, (k, n) => 0.1 * k + 0.01 * n);
+    expect(Array.from(run.frame(3))).toEqual([300, 301, 302, 303, 304, 305]);
+    expect(run.field("breaking", 3)[5]).toBeCloseTo(0.35, 6);
+    expect(() => run.field("velocity", 0)).toThrowError(/no "velocity" field/);
+    expect(run.hasField("velocity")).toBe(false);
+  });
+
+  it("keeps an interpolated breaking field within 0 to 1", () => {
+    // 0, 1, 0, 1 would overshoot a cubic between samples; the field is a fraction and must not.
+    const run = twoFields(() => 0, (k) => (k % 2 === 0 ? 0 : 1));
+    const o = new Float32Array(6);
+    for (let t = 0; t <= 6; t += 0.05) {
+      run.sampleFieldInto("breaking", t, o);
+      expect(o[0]).toBeGreaterThanOrEqual(0);
+      expect(o[0]).toBeLessThanOrEqual(1);
+    }
+    run.sampleFieldInto("breaking", 2, o);
+    expect(o[0]).toBe(1);
+  });
+
+  it("builds a map of how often each cell was clearly breaking", () => {
+    // Cell 2 breaks in frames 1 and 2, cell 4 only weakly (0.5), cell 0 never.
+    const run = twoFields(
+      () => 0,
+      (k, n) => (n === 2 && (k === 1 || k === 2) ? 0.95 : n === 4 ? 0.5 : 0),
+    );
+    const map = run.breakMap();
+    expect(map).not.toBeNull();
+    expect(map![2]).toBe(0.5);
+    expect(map![4]).toBe(0);
+    expect(map![0]).toBe(0);
+    expect(run.breakMap()).toBe(map); // computed once
+    expect(run.breakMap(0.4)![4]).toBe(1);
+  });
+
+  it("has no break map when the run has no breaking field", () => {
+    expect(makeRun(() => 0).breakMap()).toBeNull();
+  });
+
+  it("finds the shoreline and the viewer's start", () => {
+    // 3 x 2 cells of 3 m; bed rises through zero between the 2nd and 3rd column.
+    const h = header({ waves: { maker_x_m: 3, near_field_end_m: 5.5 } });
+    const bed = [-4, -1, 2, -4, -1, 2];
+    const run = runFromBuffers(h, buf(bed), buf(new Array(24).fill(0)));
+    expect(run.shoreline).toBe(7.5); // centre of the third column
+    expect(run.viewStart).toBe(5.5);
+    const noNearField = runFromBuffers(header({ waves: { maker_x_m: 3 } }), buf(bed), buf(new Array(24).fill(0)));
+    expect(noNearField.viewStart).toBe(3);
+    const allWater = runFromBuffers(header(), buf(new Array(6).fill(-5)), buf(new Array(24).fill(0)));
+    expect(allWater.shoreline).toBe(9); // no shore: the length of the domain
+  });
+});
+
+describe("steepness map", () => {
+  it("records the steepest the surface got in each cell over the run", () => {
+    // 3 x 2 cells of 3 m would be too small for central differences; use a 6 x 5 grid.
+    const nx = 6;
+    const ny = 5;
+    const h = header({ nx, ny, frame_count: 2, times: [0, 2] });
+    const cells = nx * ny;
+    const frames: number[] = [];
+    // Frame 0 slopes 0.1 along x, frame 1 slopes 0.3 along x (cell size 3 m).
+    for (const slope of [0.1, 0.3]) for (let n = 0; n < cells; n++) frames.push(slope * 3 * (n % nx));
+    const run = runFromBuffers(h, buf(new Array(cells).fill(-50)), buf(frames));
+    const map = run.steepnessMap();
+    expect(map[2 * nx + 2]).toBeCloseTo(0.3, 6);
+    expect(map[1 * nx + 3]).toBeCloseTo(0.3, 6);
+    // The edge rows and columns have no central difference.
+    expect(map[0]).toBe(0);
+    expect(map[2 * nx + 0]).toBe(0);
+    expect(map[(ny - 1) * nx + 2]).toBe(0);
+    expect(run.steepnessMap()).toBe(map); // computed once
+  });
+
+  it("ignores shallow water, where a shoreline is not a wave face", () => {
+    const nx = 5;
+    const ny = 5;
+    const h = header({ nx, ny, frame_count: 1, times: [0] });
+    const cells = nx * ny;
+    // A steep surface, but the bed comes up to within 10 cm of it everywhere.
+    const eta = Array.from({ length: cells }, (_, n) => 1.0 * (n % nx));
+    const bed = eta.map((e) => e - 0.1);
+    const run = runFromBuffers(h, buf(bed), buf(eta));
+    expect(Array.from(run.steepnessMap()).every((s) => s === 0)).toBe(true);
+  });
+});
