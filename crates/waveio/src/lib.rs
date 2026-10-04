@@ -10,4 +10,4 @@ mod run;
 
 pub use bed::{BED_FORMAT, Bed, BedHeader, Frame};
 pub use error::Error;
-pub use run::{RUN_FORMAT, Run, RunHeader, RunWriter};
+pub use run::{RUN_FORMAT, Run, RunHeader, RunWriter, Stats};

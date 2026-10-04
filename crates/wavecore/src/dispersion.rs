@@ -154,17 +154,30 @@ pub(crate) fn breaking_indicator(
     let mut filled = s.clone();
     filled.fill_boundaries(grid, periodic_y);
     let mut phi = vec![0.0; grid.cells()];
-    switch(grid, bed, &filled, breaking, &mut phi);
-    grid.interior()
-        .map(|(i, j)| {
-            let k = grid.idx(i, j);
-            if s.h[k] < H_DISPERSION_MIN {
-                0.0
-            } else {
-                1.0 - phi[k]
-            }
-        })
-        .collect()
+    let mut out = vec![0.0; grid.nx * grid.ny];
+    breaking_into(grid, bed, &filled, breaking, &mut phi, &mut out);
+    out
+}
+
+/// [`breaking_indicator`] into `out`, for a state whose ghost cells are filled, with `phi`
+/// (padded like the grid) as scratch.
+pub(crate) fn breaking_into(
+    grid: &Grid,
+    bed: &Bathymetry,
+    s: &State,
+    breaking: Breaking,
+    phi: &mut [f64],
+    out: &mut [f64],
+) {
+    switch(grid, bed, s, breaking, phi);
+    for (n, (i, j)) in grid.interior().enumerate() {
+        let k = grid.idx(i, j);
+        out[n] = if s.h[k] < H_DISPERSION_MIN {
+            0.0
+        } else {
+            1.0 - phi[k]
+        };
+    }
 }
 
 /// Scratch arrays, all padded like the grid. Allocated once.

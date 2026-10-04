@@ -201,3 +201,43 @@ fn a_note_is_recorded_in_the_header() {
     w.finish().unwrap();
     assert_eq!(Run::read(&dir).unwrap().header.waves["truncated"], true);
 }
+
+#[test]
+fn statistics_round_trip_and_are_found_by_name() {
+    let dir = scratch("stats");
+    let bed = sample_bed(3, 2);
+    let mut w = RunWriter::create(&dir, &bed, &["eta"], serde_json::json!({})).unwrap();
+    w.write_frame(0.0, &[&[0.0; 6]]).unwrap();
+    let fraction = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5];
+    let high = [1.0; 6];
+    w.write_stats(
+        &["break_fraction", "eta_max"],
+        &[&fraction, &high],
+        10.0,
+        20.0,
+    )
+    .unwrap();
+    w.finish().unwrap();
+    let back = Run::read(&dir).unwrap();
+    assert_eq!(back.stat("break_fraction"), Some(&fraction[..]));
+    assert_eq!(back.stat("eta_max"), Some(&high[..]));
+    assert_eq!(back.stat("eta_min"), None);
+    let st = back.header.stats.unwrap();
+    assert_eq!((st.from_s, st.to_s), (10.0, 20.0));
+}
+
+#[test]
+fn a_run_without_statistics_has_none() {
+    let dir = scratch("nostats");
+    let bed = sample_bed(3, 2);
+    let mut w = RunWriter::create(&dir, &bed, &["eta"], serde_json::json!({})).unwrap();
+    w.write_frame(0.0, &[&[0.0; 6]]).unwrap();
+    w.finish().unwrap();
+    let back = Run::read(&dir).unwrap();
+    assert!(back.header.stats.is_none() && back.stats.is_none());
+    let text = std::fs::read_to_string(dir.join("run.json")).unwrap();
+    assert!(
+        !text.contains("stats"),
+        "an absent field should not be written"
+    );
+}

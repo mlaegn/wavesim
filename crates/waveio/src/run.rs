@@ -37,6 +37,19 @@ pub struct RunHeader {
     pub waves: serde_json::Value,
     #[serde(default)]
     pub source: serde_json::Value,
+    /// Statistics recorded at every step over a window of the run, if it has any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stats: Option<Stats>,
+}
+
+/// Fields recorded at every step from `from_s` to `to_s` rather than in frames: one block of
+/// `nx * ny` values per field in `file`, in `fields` order, laid out like a frame.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Stats {
+    pub file: String,
+    pub fields: Vec<String>,
+    pub from_s: f64,
+    pub to_s: f64,
 }
 
 /// Writes a run directory: `run.json`, `bed.f32` and `frames.f32`.
@@ -87,6 +100,7 @@ impl RunWriter {
                 frame: h.frame.clone(),
                 waves,
                 source: h.source.clone(),
+                stats: None,
             },
             frames: BufWriter::new(file),
         })
@@ -131,6 +145,38 @@ impl RunWriter {
         Ok(())
     }
 
+    /// Write `stats.f32`: one slice of `nx * ny` values per field, recorded at every step from
+    /// `from` to `to` seconds.
+    pub fn write_stats(
+        &mut self,
+        fields: &[&str],
+        blocks: &[&[f32]],
+        from: f64,
+        to: f64,
+    ) -> Result<(), Error> {
+        let path = self.dir.join("stats.f32");
+        let want = self.header.nx * self.header.ny;
+        if fields.len() != blocks.len() || blocks.iter().any(|b| b.len() != want) {
+            return Err(Error::format(
+                &path,
+                format!("stats must be {} blocks of {want} values", fields.len()),
+            ));
+        }
+        let bytes: Vec<u8> = blocks
+            .iter()
+            .flat_map(|b| b.iter())
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        fs::write(&path, bytes).map_err(|e| Error::io(&path, e))?;
+        self.header.stats = Some(Stats {
+            file: "stats.f32".into(),
+            fields: fields.iter().map(|f| (*f).to_string()).collect(),
+            from_s: from,
+            to_s: to,
+        });
+        Ok(())
+    }
+
     /// Flush the frames and write `run.json`. Returns the path of the header.
     pub fn finish(mut self) -> Result<PathBuf, Error> {
         let frames_path = self.dir.join("frames.f32");
@@ -152,6 +198,8 @@ pub struct Run {
     pub header: RunHeader,
     /// All frames, concatenated: `frame_count * fields * nx * ny` values.
     pub data: Vec<f32>,
+    /// The statistics, one block per field of `header.stats`, if the run has them.
+    pub stats: Option<Vec<f32>>,
 }
 
 impl Run {
@@ -174,13 +222,43 @@ impl Run {
                 format!("{} bytes, header promises {expected}", bytes.len()),
             ));
         }
-        let data = bytes
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(|b| f32::from_le_bytes(*b))
-            .collect();
-        Ok(Self { header, data })
+        let floats = |bytes: Vec<u8>| -> Vec<f32> {
+            bytes
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|b| f32::from_le_bytes(*b))
+                .collect()
+        };
+        let data = floats(bytes);
+        let stats = match &header.stats {
+            None => None,
+            Some(st) => {
+                let p = dir.join(&st.file);
+                let bytes = fs::read(&p).map_err(|e| Error::io(&p, e))?;
+                let expected = st.fields.len() * header.nx * header.ny * 4;
+                if bytes.len() != expected {
+                    return Err(Error::format(
+                        &p,
+                        format!("{} bytes, header promises {expected}", bytes.len()),
+                    ));
+                }
+                Some(floats(bytes))
+            }
+        };
+        Ok(Self {
+            header,
+            data,
+            stats,
+        })
+    }
+
+    /// Statistics field `name`, or `None` if the run did not record it.
+    pub fn stat(&self, name: &str) -> Option<&[f32]> {
+        let st = self.header.stats.as_ref()?;
+        let f = st.fields.iter().position(|n| n == name)?;
+        let n = self.header.nx * self.header.ny;
+        Some(&self.stats.as_ref()?[f * n..(f + 1) * n])
     }
 
     /// Field `name` of frame `k`, or `None` if the run does not have that field.

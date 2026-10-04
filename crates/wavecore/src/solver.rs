@@ -14,7 +14,9 @@
 use std::cell::RefCell;
 
 use crate::bathymetry::Bathymetry;
-use crate::dispersion::{Breaking, Dispersion, DispersionStats, Work, breaking_indicator, switch};
+use crate::dispersion::{
+    Breaking, Dispersion, DispersionStats, Work, breaking_indicator, breaking_into, switch,
+};
 use crate::forcing::{Drive, H_FRICTION_MIN, Sponge, WaveMaker, manning_factor, relax_cell};
 use crate::grid::{GHOST, Grid, wrap_ghosts_y};
 use crate::par::{max_rows, rows3};
@@ -316,6 +318,14 @@ impl Solver {
             self.breaking_config(),
             self.periodic_y,
         )
+    }
+
+    /// [`Solver::breaking_indicator`] into `out` without allocating, for every step: fills the
+    /// ghost cells of `s` (a step fills them again anyway) and uses `phi` as scratch.
+    pub fn breaking_into(&self, s: &mut State, phi: &mut Vec<f64>, out: &mut [f64]) {
+        s.fill_boundaries(&self.grid, self.periodic_y);
+        phi.resize(self.grid.cells(), 0.0);
+        breaking_into(&self.grid, &self.bed, s, self.breaking_config(), phi, out);
     }
 
     /// How hard the dispersive solves have worked so far, or `None` for shallow water.
