@@ -155,9 +155,10 @@ function updateProfile(): void {
 function setRun(run: Run, label: string): void {
   view?.dispose();
   view = new RunView(canvas, run);
-  time = 0;
+  time = run.start;
+  scrub.min = String(run.start);
   scrub.max = String(run.duration);
-  scrub.value = "0";
+  scrub.value = String(run.start);
   view.setExaggeration(Number(exag.value));
   view.setPreset("oblique");
   view.setFoam(foam.checked);
@@ -207,7 +208,7 @@ function openByName(name: string): Promise<void> {
 
 function seek(t: number): void {
   if (!view) return;
-  time = Math.min(Math.max(t, 0), view.run.duration);
+  time = Math.min(Math.max(t, view.run.start), view.run.duration);
   view.setTime(time);
   updateProfile();
   scrub.value = String(time);
@@ -225,9 +226,9 @@ function frame(now: number): void {
   last = now;
   if (view) {
     if (playing) {
-      const end = view.run.duration;
+      const { start, duration: end } = view.run;
       const next = time + dt * Number(speedSelect.value);
-      seek(next >= end ? next - end : next);
+      seek(next >= end ? start + (next - end) : next);
     }
     view.render();
   }
@@ -272,7 +273,7 @@ window.addEventListener("keydown", (e) => {
     setPlaying(false);
     seek(time - step);
   } else if (e.key === "Home") {
-    seek(0);
+    seek(view.run.start);
   }
 });
 

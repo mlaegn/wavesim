@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use wavecore::linear_wave;
 use waveio::{Bed, Run};
 use wavesim::{
-    Error, MAX_SECOND_HARMONIC, RunOptions, estimate_seconds, plan, run, second_harmonic,
+    Error, MAX_SECOND_HARMONIC, RunOptions, estimate_seconds, layout, plan, run, second_harmonic,
 };
 
 fn scratch(name: &str) -> PathBuf {
@@ -50,6 +50,58 @@ fn run_bed(out: &std::path::Path) -> Vec<f32> {
         .collect()
 }
 
+/// A beach long enough for a nested run to pay: 16 m deep at x = 0, rising 1 m per 50 m to dry
+/// land at 800 m, on 2 m cells, 32 m wide.
+fn long_beach(dir: &std::path::Path) -> PathBuf {
+    let (nx, ny) = (400, 16);
+    let elevation = (0..nx * ny)
+        .map(|n| -(16.0 - ((n % nx) as f64 + 0.5) * DX / 50.0) as f32)
+        .collect();
+    let bed = Bed {
+        header: Bed::header_for("long", nx, ny, DX, DX),
+        elevation,
+    };
+    let path = dir.join("long.json");
+    bed.write(&path).unwrap();
+    path
+}
+
+/// A 0.5 m, 14 s swell on the long beach, nested: it crosses about 250 m on 4 m cells before the
+/// reef grid starts in 3.3 m of water, where it is still 20 coarse cells long.
+fn nested_options(dir: &std::path::Path) -> RunOptions {
+    RunOptions {
+        height: 0.5,
+        period: 14.0,
+        duration: None,
+        frame_interval: 0.5,
+        dispersive: true,
+        nested: true,
+        ..options(dir, long_beach(dir))
+    }
+}
+
+/// Crest-to-trough height over the last two periods, per column of the bed file, on `row`.
+fn wave_height(out: &Run, row: usize) -> Vec<(usize, f64)> {
+    let h = &out.header;
+    let dx = h.dx;
+    let x0 = (h.waves["cropped_offshore_m"].as_f64().unwrap() / dx).round() as usize;
+    let last = *h.times.last().unwrap();
+    let period = h.waves["wave_period_s"].as_f64().unwrap();
+    let frames: Vec<usize> = (0..h.frame_count)
+        .filter(|&k| h.times[k] > last - 2.0 * period)
+        .collect();
+    (0..h.nx)
+        .map(|i| {
+            let n = row * h.nx + i;
+            let (lo, hi) = frames.iter().fold((f32::MAX, f32::MIN), |(lo, hi), &k| {
+                let e = out.frame(k)[n];
+                (lo.min(e), hi.max(e))
+            });
+            (x0 + i, f64::from(hi - lo))
+        })
+        .collect()
+}
+
 fn options(dir: &std::path::Path, bed: PathBuf) -> RunOptions {
     RunOptions {
         bed,
@@ -61,6 +113,10 @@ fn options(dir: &std::path::Path, bed: PathBuf) -> RunOptions {
         frame_interval: 5.0,
         manning: 0.0,
         dispersive: false,
+        nested: false,
+        threads: 1,
+        background: false,
+        budget_seconds: None,
         max_wall_seconds: None,
     }
 }
@@ -321,10 +377,24 @@ fn the_breaking_field_marks_steep_tall_waves_near_the_shore_and_nothing_else() {
 }
 
 #[test]
-fn a_run_that_hits_its_time_budget_stops_and_keeps_a_valid_shorter_run() {
+fn a_run_over_its_budget_is_refused_before_it_starts() {
+    let dir = scratch("refused");
+    let mut opts = options(&dir, beach(&dir));
+    opts.duration = Some(6000.0);
+    opts.budget_seconds = Some(5.0);
+    let err = run(&opts, |_| {}).unwrap_err();
+    assert!(matches!(err, Error::OverBudget { .. }), "{err}");
+    assert!(err.to_string().contains("--max-minutes"), "{err}");
+    assert!(!opts.out.exists(), "a refused run wrote output");
+}
+
+#[test]
+fn a_run_that_hits_its_time_limit_stops_and_keeps_a_valid_shorter_run() {
+    // The limit that catches what the estimate gets wrong: no budget check here, so the run
+    // starts and has to stop itself.
     let dir = scratch("budget");
     let mut opts = options(&dir, beach(&dir));
-    opts.duration = Some(600.0); // far more than the budget allows
+    opts.duration = Some(600.0); // far more than the limit allows
     opts.max_wall_seconds = Some(0.3);
     let summary = run(&opts, |_| {}).unwrap();
     assert!(summary.truncated);
@@ -358,16 +428,113 @@ fn a_run_inside_its_budget_is_not_marked_truncated() {
 fn the_time_estimate_grows_with_the_work_and_shrinks_with_threads() {
     let dir = scratch("estimate");
     let mut opts = options(&dir, beach(&dir));
+    opts.threads = 4;
     let bed = Bed::read(&opts.bed).unwrap();
-    let estimate = |opts: &RunOptions, threads| {
-        estimate_seconds(&bed, opts, &plan(&bed, opts).unwrap(), threads)
-    };
-    let base = estimate(&opts, 4);
+    let estimate = |opts: &RunOptions| estimate_seconds(&bed, opts, &layout(&bed, opts).unwrap());
+    let base = estimate(&opts);
     assert!(base > 0.0 && base.is_finite());
     opts.duration = Some(120.0);
-    assert!((estimate(&opts, 4) / base - 2.0).abs() < 1e-9);
+    assert!((estimate(&opts) / base - 2.0).abs() < 1e-9);
     opts.duration = Some(60.0);
-    assert!(estimate(&opts, 1) > estimate(&opts, 4));
+    opts.threads = 1;
+    assert!(estimate(&opts) > base);
+    opts.threads = 4;
+    opts.background = true;
+    assert!(
+        (estimate(&opts) / base - 3.5).abs() < 1e-9,
+        "the efficiency cores are slower"
+    );
+    opts.background = false;
     opts.dispersive = true;
-    assert!(estimate(&opts, 4) > base, "dispersion costs more");
+    assert!(estimate(&opts) > base, "dispersion costs more");
+}
+
+#[test]
+#[ignore = "slow physics check: cargo test --release -- --include-ignored"]
+fn a_nested_run_gives_the_same_waves_as_one_fine_grid() {
+    // The reference runs everything on the 2 m cells; the nested run carries the swell to the
+    // reef on 4 m cells and runs only the last stretch on 2 m cells, driven by the coarse run
+    // through a relaxation zone. Seaward of the break they must show the same waves. Bounds set
+    // before the first run: 4% on average and 10% at any point. That run failed, and was right
+    // to: relaxation zones along the sides imposed the coarse surf zone on the fine one, and at
+    // 10 s the fine grid started next to the coarse wave-maker, so the crossing was not tested.
+    let dir = scratch("nested");
+    let mut opts = nested_options(&dir);
+    let bed = Bed::read(&opts.bed).unwrap();
+    let fine = layout(&bed, &opts).unwrap().fine.unwrap();
+    assert!(
+        fine.x0 > 100,
+        "the fine grid covers nearly everything: x0 = {}",
+        fine.x0
+    );
+    let nested = run(&opts, |_| {}).unwrap();
+    assert!(nested.warnings.is_empty(), "{:?}", nested.warnings);
+    assert!(nested.coarse_header.is_some());
+    opts.nested = false;
+    opts.out = dir.join("single");
+    run(&opts, |_| {}).unwrap();
+
+    let row = 8;
+    let reference: std::collections::HashMap<usize, f64> =
+        wave_height(&Run::read(&opts.out).unwrap(), row)
+            .into_iter()
+            .collect();
+    let depth = |i: usize| 16.0 - (i as f64 + 0.5) * DX / 50.0;
+    let mut errors = Vec::new();
+    for (i, h) in wave_height(&Run::read(&dir.join("run")).unwrap(), row) {
+        // Past the offshore zone, and seaward of where a 0.5 m swell starts to break.
+        if i >= fine.x0 + fine.zone_offshore && depth(i) > 1.5 {
+            errors.push((h / reference[&i] - 1.0).abs());
+        }
+    }
+    let mean = errors.iter().sum::<f64>() / errors.len() as f64;
+    let worst = errors.iter().fold(0.0_f64, |a, &b| a.max(b));
+    println!(
+        "nested vs one fine grid over {} columns: wave height differs by {:.1}% on average, {:.1}% at most",
+        errors.len(),
+        100.0 * mean,
+        100.0 * worst
+    );
+    assert!(errors.len() > 20);
+    assert!(
+        mean < 0.04 && worst < 0.10,
+        "mean {mean:.3}, worst {worst:.3}"
+    );
+}
+
+#[test]
+#[ignore = "slow physics check: cargo test --release -- --include-ignored"]
+fn a_nested_run_on_an_alongshore_uniform_beach_is_uniform_too() {
+    // Both grids have walls in the same places, so nothing but rounding may vary alongshore:
+    // the interpolation weights sum to one only to the last bit. The bound is a ten-thousandth of
+    // the wave height; the relaxation zones along the sides that this design replaced made the
+    // rows differ by about 2% of it.
+    let dir = scratch("nested-uniform");
+    let opts = nested_options(&dir);
+    run(&opts, |_| {}).unwrap();
+    let out = Run::read(&opts.out).unwrap();
+    let (nx, ny) = (out.header.nx, out.header.ny);
+    let mut worst: f32 = 0.0;
+    for k in 0..out.header.frame_count {
+        let eta = out.frame(k);
+        for j in 1..ny {
+            for i in 0..nx {
+                worst = worst.max((eta[i] - eta[j * nx + i]).abs());
+            }
+        }
+    }
+    println!("rows differ by at most {worst:.1e} m");
+    assert!(f64::from(worst) < 1e-4 * opts.height, "{worst}");
+}
+
+#[test]
+fn a_swell_too_short_for_the_coarse_grid_is_refused() {
+    // 8 s on 4 m cells is a dozen cells to a wavelength at the wave-maker.
+    let dir = scratch("nested-short");
+    let mut opts = nested_options(&dir);
+    opts.period = 8.0;
+    opts.height = 0.2;
+    let bed = Bed::read(&opts.bed).unwrap();
+    let err = layout(&bed, &opts).unwrap_err();
+    assert!(err.to_string().contains("--single"), "{err}");
 }

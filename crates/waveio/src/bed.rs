@@ -1,4 +1,5 @@
 use std::fs;
+use std::ops::Range;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -160,23 +161,67 @@ impl Bed {
         }
     }
 
-    /// The bed without its first `columns` columns (the offshore end), with the frame's origin
-    /// moved along +x to the new lower-left corner. Panics unless a column is left.
-    pub fn crop_x(&self, columns: usize) -> Self {
+    /// The part of the bed in columns `x` and rows `y`, with the frame's origin moved to its
+    /// lower-left corner. Panics if a range is empty or reaches past the bed.
+    pub fn crop(&self, x: Range<usize>, y: Range<usize>) -> Self {
         let h = &self.header;
-        assert!(columns < h.nx, "cannot crop {columns} of {} columns", h.nx);
-        let nx = h.nx - columns;
-        let elevation = self
-            .elevation
-            .chunks(h.nx)
-            .flat_map(|row| row[columns..].iter().copied())
+        assert!(
+            !x.is_empty() && !y.is_empty() && x.end <= h.nx && y.end <= h.ny,
+            "cannot crop columns {x:?} and rows {y:?} of a {} x {} bed",
+            h.nx,
+            h.ny
+        );
+        let elevation = y
+            .clone()
+            .flat_map(|j| {
+                self.elevation[j * h.nx + x.start..j * h.nx + x.end]
+                    .iter()
+                    .copied()
+            })
             .collect();
-        let shift = columns as f64 * h.dx;
-        let bearing = h.frame.x_bearing_deg.to_radians();
+        let (along, across) = (x.start as f64 * h.dx, y.start as f64 * h.dy);
+        // +x points along the bearing; +y is 90 degrees counter-clockwise from it.
+        let b = h.frame.x_bearing_deg.to_radians();
         let mut header = h.clone();
-        header.nx = nx;
-        header.frame.origin_easting += shift * bearing.sin();
-        header.frame.origin_northing += shift * bearing.cos();
+        header.nx = x.len();
+        header.ny = y.len();
+        header.frame.origin_easting += along * b.sin() - across * b.cos();
+        header.frame.origin_northing += along * b.cos() + across * b.sin();
+        Self { header, elevation }
+    }
+
+    /// The bed without its first `columns` columns (the offshore end).
+    pub fn crop_x(&self, columns: usize) -> Self {
+        self.crop(columns..self.header.nx, 0..self.header.ny)
+    }
+
+    /// The bed on cells `factor` times as large, each the mean of the `factor` x `factor` cells
+    /// it covers. Cells left over at the high-x and high-y edges are dropped; the origin stays.
+    pub fn coarsen(&self, factor: usize) -> Self {
+        let h = &self.header;
+        let (nx, ny) = (h.nx / factor, h.ny / factor);
+        assert!(
+            nx > 0 && ny > 0,
+            "a {} x {} bed has no {factor} x {factor} block",
+            h.nx,
+            h.ny
+        );
+        let elevation = (0..nx * ny)
+            .map(|n| {
+                let (i, j) = (n % nx, n / nx);
+                let sum: f64 = (0..factor * factor)
+                    .map(|m| {
+                        let (a, b) = (i * factor + m % factor, j * factor + m / factor);
+                        f64::from(self.elevation[b * h.nx + a])
+                    })
+                    .sum();
+                (sum / (factor * factor) as f64) as f32
+            })
+            .collect();
+        let mut header = h.clone();
+        (header.nx, header.ny) = (nx, ny);
+        header.dx *= factor as f64;
+        header.dy *= factor as f64;
         Self { header, elevation }
     }
 

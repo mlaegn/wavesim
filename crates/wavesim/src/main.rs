@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use wavesim::{Bed, Error, RunOptions, estimate_seconds, plan};
+use wavesim::{Bed, Error, RunOptions, estimate_seconds, human, layout};
 
 /// How the run is scheduled by the operating system.
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -49,13 +49,18 @@ enum Command {
         /// where tall waves steepen into shocks
         #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
         dispersive: bool,
+        /// Run everything on the bed's own cells, on one grid, instead of carrying the swell
+        /// across the shelf on cells twice as large and running only the reef on the bed's cells
+        #[arg(long)]
+        single: bool,
         /// Threads for the solver, at most half the machine's cores (0 = that limit). The
         /// default of 4 keeps a laptop cool; the results are identical for any number.
         #[arg(long, default_value_t = 4)]
         threads: usize,
-        /// Stop after this many minutes of wall-clock time and keep what has been simulated,
-        /// as a valid shorter run (0 = no limit). A guard against a run going on too long.
-        #[arg(long, default_value_t = 10.0)]
+        /// The most wall-clock minutes a run may take. A run estimated to take longer is refused
+        /// before it starts, and a run that takes longer anyway stops there and keeps what it
+        /// has, as a valid shorter run (0 = no limit)
+        #[arg(long, default_value_t = 5.0)]
         max_minutes: f64,
         /// Scheduling priority; `background` (the default) keeps the run on macOS's
         /// efficiency cores
@@ -94,6 +99,7 @@ fn real_main() -> Result<(), Error> {
             frame_interval,
             manning,
             dispersive,
+            single,
             threads,
             max_minutes,
             priority,
@@ -115,18 +121,16 @@ fn real_main() -> Result<(), Error> {
                 frame_interval,
                 manning,
                 dispersive,
+                nested: !single,
+                threads,
+                background: cfg!(target_os = "macos") && priority == Priority::Background,
+                budget_seconds: (max_minutes > 0.0).then_some(max_minutes * 60.0),
                 max_wall_seconds: (max_minutes > 0.0).then_some(max_minutes * 60.0),
             };
             if let Ok(bed) = Bed::read(&opts.bed)
-                && let Ok(plan) = plan(&bed, &opts)
+                && let Ok(layout) = layout(&bed, &opts)
             {
-                // On the efficiency cores the same work takes about three and a half times as long
-                // (measured: 15.5 s against 4.4 s for 20 simulated seconds on the Pipeline bed).
-                let slower = if cfg!(target_os = "macos") && priority == Priority::Background {
-                    3.5
-                } else {
-                    1.0
-                };
+                let plan = layout.coarse;
                 eprintln!(
                     "wave-maker at x = {:.0} m in {:.1} to {:.1} m of water (a sinusoid there lacks a \
                      second harmonic of {:.0}%); {:.0} simulated seconds",
@@ -136,17 +140,31 @@ fn real_main() -> Result<(), Error> {
                     100.0 * plan.second_harmonic,
                     plan.duration
                 );
-                let guess = estimate_seconds(&bed, &opts, &plan, threads) * slower;
+                if let Some(f) = layout.fine {
+                    let dx = bed.header.dx;
+                    eprintln!(
+                        "swell crosses the shelf on {} m cells; the reef runs on {dx} m cells from \
+                         x = {:.0} m (the reef starts in {:.1} m of water), from t = {:.0} s",
+                        2.0 * dx,
+                        f.x0 as f64 * dx,
+                        f.edge_depth,
+                        f.start
+                    );
+                }
+                let estimate = estimate_seconds(&bed, &opts, &layout);
                 eprintln!(
-                    "estimated about {} on {threads} thread(s) (a rough guess){}",
-                    human(guess),
+                    "estimated about {} on {threads} thread(s){} (a rough guess){}",
+                    human(estimate),
+                    if opts.background {
+                        " on the efficiency cores"
+                    } else {
+                        ""
+                    },
                     match opts.max_wall_seconds {
-                        Some(limit) if guess > limit => format!(
-                            "; the run will probably stop at its {} limit and keep what it has",
-                            human(limit)
-                        ),
-                        Some(limit) => format!("; it stops by itself after {}", human(limit)),
-                        None => String::new(),
+                        Some(limit) if estimate <= limit => {
+                            format!("; it stops by itself after {}", human(limit))
+                        }
+                        _ => String::new(),
                     }
                 );
             }
@@ -161,7 +179,7 @@ fn real_main() -> Result<(), Error> {
                     );
                 }
             })?;
-            let plan = summary.plan;
+            let plan = summary.layout.coarse;
             println!(
                 "wave-maker at x = {:.0} m in {:.1} m of water (wavelength about {:.0} m); \
                  sponge {} cells offshore, walls at the sides",
@@ -171,6 +189,15 @@ fn real_main() -> Result<(), Error> {
                 "{} frames, {} steps in {:.1} s; highest surface {:+.2} m above still water",
                 summary.frames, summary.steps, summary.wall_seconds, summary.max_rise
             );
+            if summary.coarse_header.is_some() {
+                println!(
+                    "coarse grid {} steps in {:.0} s, fine grid {} steps in {:.0} s",
+                    summary.coarse_steps,
+                    summary.coarse_seconds,
+                    summary.fine_steps,
+                    summary.fine_seconds
+                );
+            }
             if let Some(d) = summary.dispersion {
                 println!(
                     "dispersive solves: {} ({:.1} iterations each, {} unconverged)",
@@ -181,6 +208,12 @@ fn real_main() -> Result<(), Error> {
             }
             if summary.truncated {
                 println!("stopped at its time limit: a shorter run, but a complete one");
+            }
+            for w in &summary.warnings {
+                println!("warning: {w}");
+            }
+            if let Some(coarse) = &summary.coarse_header {
+                println!("wrote {} (the coarse run that drives it)", coarse.display());
             }
             println!("wrote {}", summary.header.display());
             Ok(())
@@ -238,15 +271,6 @@ fn lower_priority(priority: Priority) {
     }
     #[cfg(not(target_os = "macos"))]
     let _ = priority;
-}
-
-/// "45 seconds", "3.5 minutes".
-fn human(seconds: f64) -> String {
-    if seconds < 90.0 {
-        format!("{seconds:.0} seconds")
-    } else {
-        format!("{:.1} minutes", seconds / 60.0)
-    }
 }
 
 fn info(path: &std::path::Path) -> Result<(), Error> {

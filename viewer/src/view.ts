@@ -312,7 +312,7 @@ export class RunView {
       uZones: {
         value: new THREE.Vector4(
           cellsToMetres("sponge_offshore_cells", dx),
-          cellsToMetres("sponge_side_cells", dy),
+          run.sideMargin,
           this.lengthX,
           this.lengthY,
         ),
@@ -346,7 +346,7 @@ export class RunView {
     this.controls.dampingFactor = 0.08;
     this.controls.maxPolarAngle = Math.PI * 0.495;
     this.setPreset("oblique");
-    this.setTime(0);
+    this.setTime(run.start);
     this.setExaggeration(2);
     this.resize();
   }

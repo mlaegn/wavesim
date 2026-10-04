@@ -1,6 +1,6 @@
-/// Ghost layers on every side. Second-order reconstruction of a face needs two cells on
+/// Ghost layers on every side. Fifth-order reconstruction of a face needs three cells on
 /// each side of it; the dispersive terms take the divergence of the velocity, then its
-/// gradient, then a gradient again, which reaches three cells outward.
+/// gradient, then a gradient again, which also reaches three cells outward.
 pub const GHOST: usize = 3;
 
 /// Uniform Cartesian grid in metres, stored with [`GHOST`] ghost layers on every side.

@@ -53,6 +53,28 @@ fn cropping_drops_offshore_columns_and_moves_the_origin_with_them() {
 }
 
 #[test]
+fn cropping_alongshore_moves_the_origin_ninety_degrees_counter_clockwise_from_x() {
+    let mut bed = sample_bed(7, 5);
+    bed.header.frame.x_bearing_deg = 90.0; // +x east, so +y north
+    let cropped = bed.crop(1..4, 2..5);
+    assert_eq!((cropped.header.nx, cropped.header.ny), (3, 3));
+    assert_eq!(cropped.elevation[0], bed.elevation[2 * 7 + 1]);
+    assert!((cropped.header.frame.origin_easting - 3.0).abs() < 1e-9);
+    assert!((cropped.header.frame.origin_northing - 4.0).abs() < 1e-9);
+}
+
+#[test]
+fn coarsening_averages_blocks_and_drops_what_is_left_over() {
+    let bed = sample_bed(7, 5);
+    let coarse = bed.coarsen(2);
+    assert_eq!((coarse.header.nx, coarse.header.ny), (3, 2));
+    assert_eq!((coarse.header.dx, coarse.header.dy), (6.0, 4.0));
+    let e = |i: usize, j: usize| f64::from(bed.elevation[j * 7 + i]);
+    let expected = (e(2, 2) + e(3, 2) + e(2, 3) + e(3, 3)) / 4.0;
+    assert!((f64::from(coarse.elevation[3 + 1]) - expected).abs() < 1e-5);
+}
+
+#[test]
 fn bathymetry_moves_still_water_to_zero() {
     let dir = scratch("tide");
     let bed = sample_bed(4, 3);

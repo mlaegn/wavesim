@@ -115,13 +115,13 @@ fn exact_wet_bed_solution_is_self_consistent() {
 /// close to the rate 1 that is the limit for L1 error across a discontinuity.
 ///
 /// The bed here sits at still-water level, so `eta / h` is 1 everywhere and the smoothness
-/// switch is 0: `Order::Third` falls back to the MC limiter and gives the same numbers as
+/// switch is 0: `Order::Fifth` falls back to the MC limiter and gives the same numbers as
 /// `Order::Second`. That makes this a check that the fallback is safe at shocks, not of the
 /// unlimited branch, which the solitary-wave and wave tests cover.
 fn check_dam_break(label: &str, h_l: f64, h_r: f64) {
     let t = 4.0;
     let first = dam_break_error(400, Order::First, h_l, h_r, t);
-    for order in [Order::Second, Order::Third] {
+    for order in [Order::Second, Order::Fifth] {
         let coarse = dam_break_error(200, order, h_l, h_r, t);
         let fine = dam_break_error(400, order, h_l, h_r, t);
         let rate = (coarse / fine).log2();

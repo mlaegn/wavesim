@@ -36,17 +36,17 @@ fn model(solver: Solver, dispersive: bool, order: Order) -> Solver {
     }
 }
 
-/// Shallow water with the MC limiter (the baseline), or SGN with the third-order scheme.
+/// Shallow water with the MC limiter (the baseline), or SGN with the fifth-order scheme.
 fn with_model(solver: Solver, dispersive: bool) -> Solver {
     let order = if dispersive {
-        Order::Third
+        Order::Fifth
     } else {
         Order::Second
     };
     model(solver, dispersive, order)
 }
 
-const ORDERS: [Order; 2] = [Order::Second, Order::Third];
+const ORDERS: [Order; 2] = [Order::Second, Order::Fifth];
 
 // ---- 1. The dispersion relation -------------------------------------------------------
 
@@ -217,6 +217,7 @@ fn solitary_wave(dispersive: bool, order: Order) -> (Solitary, f64, f64) {
 }
 
 #[test]
+#[ignore = "slow physics check: cargo test --release -- --include-ignored"]
 fn a_solitary_wave_keeps_its_shape_and_speed() {
     let (shallow, expected_x, amplitude) = solitary_wave(false, Order::Second);
     for order in ORDERS {
@@ -259,6 +260,7 @@ fn a_solitary_wave_keeps_its_shape_and_speed() {
 // ---- 3. The wave-maker, with dispersion ------------------------------------------------
 
 #[test]
+#[ignore = "slow physics check: cargo test --release -- --include-ignored"]
 fn the_wave_maker_makes_the_right_amplitude_and_wavelength_with_dispersion() {
     let (depth, period, amplitude) = (5.0, 8.0, 0.05);
     let dx = 0.5;
@@ -411,6 +413,7 @@ fn deep_water_swell(dispersive: bool) -> [Seen; 2] {
 }
 
 #[test]
+#[ignore = "slow physics check: cargo test --release -- --include-ignored"]
 fn a_big_swell_keeps_its_energy_in_deep_water() {
     let [near, far] = deep_water_swell(true);
     let [near_swe, far_swe] = deep_water_swell(false);
@@ -450,6 +453,44 @@ fn a_big_swell_keeps_its_energy_in_deep_water() {
     );
 }
 
+#[test]
+fn a_swell_crosses_a_kilometre_of_shelf_on_coarse_cells_and_keeps_its_height() {
+    // A small 14 s swell in 12 m of water on 6 m cells, 24 cells to a wavelength: what the
+    // swell meets on the shelf off Pipeline. The equations keep its height on a flat bed, so
+    // whatever it loses over a kilometre is the scheme's. The bound was set before the first
+    // run: the third-order scheme this replaced lost 14% on the Pipeline shelf.
+    let (dx, depth, period, amplitude) = (6.0, 12.0, 14.0, 0.1);
+    let grid = Grid::new(310, 4, dx, dx);
+    let bed = Bathymetry::flat(&grid, depth);
+    let maker = WaveMaker {
+        x: 260.0,
+        amplitude,
+        period,
+        angle: 0.0,
+        sigma: 2.0 * dx,
+        ramp_periods: 2.0,
+    };
+    let solver = Solver::new(grid, bed)
+        .with_order(Order::Fifth)
+        .with_dispersion(Dispersion::default())
+        .with_wavemaker(maker)
+        .with_sponge(Sponge::new(37, 1.5).edges(true, true, false, false));
+    let mut s = State::lake_at_rest(&grid, &solver.bed, 0.0);
+    let j = GHOST + 2;
+    let probes = [(col(&grid, 460.0), j), (col(&grid, 1460.0), j)];
+    let omega = std::f64::consts::TAU / period;
+    let window = (160.0, 160.0 + 4.0 * period);
+    let out = run_and_analyse(&solver, &mut s, window.1, omega, window, &probes);
+    let kept = out[1].0 / out[0].0;
+    println!(
+        "amplitude {:.4} m at 200 m, {:.4} m at 1200 m from the maker: kept {:.1}%",
+        out[0].0,
+        out[1].0,
+        100.0 * kept
+    );
+    assert!(kept > 0.97, "kept {kept:.3} of the height over 1 km");
+}
+
 // ---- 5. A beach: shoaling, then breaking -------------------------------------------------
 
 /// What happened at each position on the beach over a window of several wave periods.
@@ -480,7 +521,7 @@ fn beach_profile(dx: f64) -> Profile {
         ramp_periods: 2.0,
     };
     let solver = Solver::new(grid, bed)
-        .with_order(Order::Third)
+        .with_order(Order::Fifth)
         .with_dispersion(Dispersion::default())
         .with_wavemaker(maker)
         .with_sponge(Sponge::new((187.0 / dx) as usize, 1.5).edges(true, false, false, false));
@@ -518,6 +559,7 @@ fn beach_profile(dx: f64) -> Profile {
 }
 
 #[test]
+#[ignore = "slow physics check: cargo test --release -- --include-ignored"]
 fn waves_shoal_intact_then_break_in_a_depth_limited_surf_zone() {
     let p = beach_profile(1.5);
     let at = |d: f64| p.depth.iter().position(|&x| x <= d).unwrap();

@@ -11,7 +11,9 @@
 # about 23 m deep and for a 4 m, 16 s swell about 34 m (see MAX_SECOND_HARMONIC in
 # crates/wavesim/src/lib.rs). A run crops off whatever is further offshore than its own
 # wave-maker and sponge need, so a long bed costs a small swell nothing. Onshore, keep a little
-# more land than the run-up reaches; `clip_above` flattens the rest.
+# more land than the run-up reaches; `clip_above` flattens the rest. The sides are walls, which
+# mirror the bed, so make the bed twice as wide as what you want to look at: on this bed the
+# middle half was right to within 4% (12% at worst) against a domain nearly twice as wide.
 
 [pipeline]
 description = "Banzai Pipeline, Oahu North Shore, Hawaii"
@@ -25,6 +27,6 @@ utm_crs = "EPSG:32604"
 bearing = 130.0      # shore-normal, estimated from the seabed gradient (median 131 deg)
 offshore_m = 2400.0  # the shelf is 10-14 m deep for a kilometre; 25-45 m beyond 1.5 km
 onshore_m = 50.0
-width_m = 600.0
+width_m = 1200.0     # the sides are walls: the middle 600 m is what to look at
 cell_m = 3.0
 clip_above = 6.0     # land higher than this is flattened; waves never reach it

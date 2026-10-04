@@ -279,6 +279,26 @@ describe("fields and what they are used for", () => {
   });
 });
 
+describe("nested and walled runs", () => {
+  it("starts at its first frame, which a nested run's fine grid puts after zero", () => {
+    const h = header({ frame_count: 2, times: [72, 74] });
+    const run = runFromBuffers(h, buf(new Array(6).fill(-5)), buf(new Array(12).fill(0)));
+    expect(run.start).toBe(72);
+    expect(run.duration).toBe(74);
+  });
+
+  it("trims the margin by the walls, or the absorbing strips of older runs", () => {
+    const bed = buf(new Array(6).fill(-5));
+    const frames = () => buf(new Array(24).fill(0));
+    const walled = runFromBuffers(header({ waves: { side_margin_cells: 1 } }), bed, frames());
+    expect(walled.sideMargin).toBe(3);
+    expect(walled.viewBox.y0).toBe(3);
+    const older = runFromBuffers(header({ waves: { sponge_side_cells: 1 } }), bed, frames());
+    expect(older.sideMargin).toBe(3);
+    expect(runFromBuffers(header(), bed, frames()).sideMargin).toBe(0);
+  });
+});
+
 describe("steepness map", () => {
   it("records the steepest the surface got in each cell over the run", () => {
     // 3 x 2 cells of 3 m would be too small for central differences; use a 6 x 5 grid.

@@ -27,14 +27,14 @@ It is a depth-averaged model. It captures shoaling and breaking as a bore, not a
 
 | Component | Description |
 |---|---|
-| **Grid** | Uniform Cartesian grid in metres, with two ghost layers on every side |
+| **Grid** | Uniform Cartesian grid in metres, with three ghost layers on every side |
 | **Bathymetry** | Bed generators: flat, plane beach, rough bed |
 | **State** | Depth `h` and momentum `hu`, `hv`; reflective walls; volume and momentum diagnostics |
 | **Forcing** | Internal wave-maker (oblique incidence supported), absorbing sponge layers, Manning bottom friction, optional periodic boundaries in `y` |
 | **Bed files** | A documented format for a real seabed; `tools/fetch_spot.py` crops one from a remote GeoTIFF, rotated so `+x` is the wave direction |
-| **Runs** | `wavesim run` sends a swell over a bed and writes frames (the surface and a breaking indicator) in a documented format a viewer can read; it runs on 4 threads by default |
+| **Runs** | `wavesim run` sends a swell over a bed and writes frames (the surface and a breaking indicator) in a documented format a viewer can read. It carries the swell across the shelf on cells twice as large and runs the reef on the bed's own cells, and it refuses to start a run it estimates would take longer than its limit |
 | **Viewer** | `viewer/`: a browser replay of a run in 3D (Three.js and TypeScript): terrain from the bed, the surface animated from the frames, foam where the model says the wave breaks, a side view of one line across the break, and maps of where waves break and how steep they get |
-| **Solver** | Well-balanced finite-volume scheme: hydrostatic reconstruction, HLL flux, and first order, second order (MUSCL with an MC limiter), or third order (unlimited where the wave is smooth, blended back to the limiter near steep fronts), with SSP-RK2 |
+| **Solver** | Well-balanced finite-volume scheme: hydrostatic reconstruction, HLL flux, and first order, second order (MUSCL with an MC limiter), or fifth order (unlimited where the wave is smooth, blended back to the limiter near steep fronts), with SSP-RK2 |
 | **Dispersion** | Serre–Green–Naghdi correction solved by preconditioned conjugate gradients, switched off where waves break; see [docs/dispersion.md](docs/dispersion.md) |
 
 Design rules:
@@ -63,7 +63,7 @@ graph TD
     I[Initial state<br/>lake at rest / dam break / solitary wave] --> S
     subgraph wavecore
         S[Solver] --> P[Smoothness switch φ<br/>surface slope, η/h]
-        P --> M[Reconstruction<br/>MC limiter / third order blended by φ]
+        P --> M[Reconstruction<br/>MC limiter / fifth order blended by φ]
         M --> F[Face flux<br/>hydrostatic reconstruction + HLL]
         F --> G[Dispersive correction<br/>SGN, conjugate gradients, scaled by φ]
         P --> G
@@ -93,6 +93,12 @@ graph TD
 git clone <this-repo>
 cd wavesim
 cargo test
+```
+
+That takes about 15 seconds and skips the physics checks that run whole simulations. Run those too, which takes about a minute, whenever the numerics change:
+
+```bash
+cargo test --release -- --include-ignored
 ```
 
 ### Test the fetch tool
@@ -144,26 +150,26 @@ cargo run --release -p wavesim -- info data/pipeline.json
 Send a swell over it:
 
 ```bash
-cargo run --release -p wavesim -- run data/pipeline.json --height 2.5 --period 14
+cargo run --release -p wavesim -- run data/pipeline.json --height 2.5 --period 14 --max-minutes 7
 ```
 
-That writes `out/pipeline/` (both `data/` and `out/` are git-ignored). Options: `--tide` (metres above mean sea level), `--duration`, `--frame-interval`, `--manning`, `--dispersive false` (plain shallow water, for comparison), `--threads`, `--out`.
+That writes `out/pipeline/` (both `data/` and `out/` are git-ignored): the reef on the bed's own cells, and in `out/pipeline/coarse/` the coarse run that carried the swell across the shelf. Options: `--tide` (metres above mean sea level), `--duration`, `--frame-interval`, `--manning`, `--dispersive false` (plain shallow water, for comparison), `--single` (everything on the bed's own cells, on one grid), `--max-minutes`, `--priority`, `--threads`, `--out`.
 
 **What the run plans for itself.**
 
 - **Where the wave-maker goes.** It makes a sinusoid, and a real swell is only close to one in deep enough water: in shallow water a second harmonic is bound to it (sharper crests, flatter troughs), and a sinusoid sheds the harmonic it lacks as a separate wave that beats with the swell and moves where it breaks. So the maker goes in the shallowest water where that harmonic is at most 10% of the wave, along its whole line: about 23 m for a 2.5 m, 14 s swell at Pipeline, which puts it beyond the 10–14 m shelf the swell crosses for a kilometre before the reef. The bigger and longer the swell, the deeper it goes; a bed that does not reach deep enough is an error that says so.
 - **How much bed it uses.** Everything further offshore than the maker and its sponge (one and a half wavelengths) need is cropped off, so one long bed serves every swell.
 - **How long it runs.** By default, long enough for the swell to ramp up, reach the shore at its group speed, and break four times (about 240 s at Pipeline).
-- **The sides are walls.** For a swell travelling along `+x` a wall is a mirror, so an alongshore-uniform bed gives an exactly uniform run. On a real bed refraction carries energy sideways, and the mirror image of the bed at a wall can focus it: over the Pipeline shelf, a 600 m wide domain gets wave heights in its middle wrong by 10% (median, up to 36%) against a 2 km wide one, and a 1.2 km wide one by 4% (up to 12%). Keep the part you look at at least 300 m from the sides.
+- **Two grids.** The swell crosses the shelf on cells twice as large as the bed's, where the fifth-order scheme keeps its height (6 m cells across the Pipeline shelf come within 1.5% of 3 m ones). The reef runs on the bed's own cells, from where the water is shallower than 2.5 wave heights or the swell shorter than 20 coarse cells, whichever is deeper (8 m at Pipeline). Along its offshore edge, a relaxation zone a wavelength wide pulls the fine run towards the coarse one: the swell comes in, and what the reef sends back goes out. The fine run starts two periods before the swell reaches it. On a test beach the two grids together give the same waves as one fine grid to within 2.3% (8.3% at worst), and the run warns if the coarse run breaks inside the zone, in the middle half of the width, where it would hand the fine grid a broken wave. A swell too short for the coarse cells is refused, and `--single` runs everything on one grid.
+- **The sides are walls.** For a swell travelling along `+x` a wall is a mirror, so an alongshore-uniform bed gives an exactly uniform run. On a real bed refraction carries energy sideways, and the mirror image of the bed at a wall can focus it: over the Pipeline shelf, a 600 m wide domain gets wave heights in its middle wrong by 10% (median, up to 36%) against a 2 km wide one, and a 1.2 km wide one by 4% (up to 12%). So the bed is twice as wide as the part worth looking at, the runs record the outer quarter on each side as a margin, and the viewer trims it. Both grids have their walls in the same places; relaxing the fine grid's sides towards the coarse run instead imposed the coarse surf zone, which it cannot resolve, on the fine one (13–22% off near the break).
 
 The swell travels along `+x` of the bed's frame, so its direction is chosen when the bed is fetched (`bearing` in `spots.toml`). Add your own spot by adding a table to `spots.toml`.
 
 **Running it on a laptop.**
 
-- A 2.5 m, 14 s swell at Pipeline runs on 616 × 200 cells of 3 m (after cropping) for 243 simulated seconds: 3.2 minutes on four threads of an M5 at normal priority. Most of that is the shelf crossing, which the swell needs: it is where refraction decides which parts of the reef get the big waves.
-- The solver uses **4 threads** by default, not every core, which keeps a laptop cool. Raise it with `--threads`; `--threads 0` uses all. The results are byte-identical for any number.
-- On macOS the run is moved to the efficiency cores automatically (see the next section), so it is quiet but slower; pass `--priority normal` for full speed.
-- For a quick look, fetch a coarser bed with `tools/fetch_spot.py pipeline --cell 6` (a quarter of the cells and half the steps; writes `data/pipeline_6m.json`). 6 m cells get the refraction over the shelf right but are too coarse for the break itself.
+- A 2.5 m, 14 s swell at Pipeline crosses the shelf on 319 × 200 cells of 6 m and runs the reef on 179 × 400 cells of 3 m, for 244 simulated seconds: **5.7 minutes on four threads on the efficiency cores**, cool and quiet, using about 3.4 of them. That is over the default limit of 5 minutes, so it is refused unless asked for: add `--max-minutes 7`. With `--priority normal` it takes about a third as long, on the performance cores.
+- The solver uses **4 threads** by default, not every core. Raise it with `--threads`; `--threads 0` uses all. The results are byte-identical for any number.
+- For a quick look, fetch a coarser bed with `tools/fetch_spot.py pipeline --cell 6` and run it with `--single`: 6 m cells get the refraction over the shelf right but are too coarse for the break itself.
 
 ## View a run
 
@@ -200,22 +206,22 @@ The solver integrates the conservative nonlinear shallow-water equations for wat
 
 | Aspect | Choice | Why |
 |---|---|---|
-| Grid | Uniform Cartesian, metres, three ghost layers | Matches raster bed data; the dispersive terms take a divergence, then a gradient of it, then a gradient again, which reaches three cells out |
+| Grid | Uniform Cartesian, metres, three ghost layers | Matches raster bed data; fifth-order reconstruction of a face reads three cells on each side, and the dispersive terms take a divergence, then a gradient of it, then a gradient again, which also reaches three cells out |
 | Discretisation | Cell-centred finite volume | Conserves mass and momentum exactly |
 | Bed source term | Hydrostatic reconstruction (Audusse et al. 2004) | Still water stays still over any bed; depth stays non-negative at a shoreline |
-| Reconstruction | The free surface `h + b` and the velocities; MC limiter (`Order::Second`) or unlimited third order blended to it by `φ` (`Order::Third`) | Reconstructing the surface, not the depth, keeps a flat surface exactly flat; the limiter clips every smooth crest, which damps waves on a coarse grid |
+| Reconstruction | The free surface `h + b` and the velocities; MC limiter (`Order::Second`) or unlimited fifth order blended to it by `φ` (`Order::Fifth`) | Reconstructing the surface, not the depth, keeps a flat surface exactly flat; the limiter clips every smooth crest, which damps waves on a coarse grid, and fifth order damps them far less than third: a 14 s swell on 6 m cells keeps its height over a kilometre, where third order lost 6% (and 14% across the Pipeline shelf) |
 | Flux | HLL Riemann solver | Robust at shocks and wet/dry fronts |
-| Breaking | Shocks captured by the Riemann solver, with the dispersive terms and the third-order reconstruction faded out by `φ` where the wave is steep or tall for its depth | The shock dissipates the wave, so there is no separate breaking closure; the thresholds are tuned to textbook breaking indices |
+| Breaking | Shocks captured by the Riemann solver, with the dispersive terms and the fifth-order reconstruction faded out by `φ` where the wave is steep or tall for its depth | The shock dissipates the wave, so there is no separate breaking closure; the thresholds are tuned to textbook breaking indices |
 | Dispersion | Serre–Green–Naghdi (flat-bed operator), `h w − ∇(c ∇·w) = r`, solved each stage by Jacobi-preconditioned conjugate gradients from the previous solution | Fully nonlinear; symmetric positive definite; 7 to 11 iterations per solve |
 | Boundaries | Reflective walls; optionally periodic in `y` | Periodic gives an alongshore-uniform wave with no edge diffraction |
 | Wave input | Internal mass source on a line (Wei et al. 1999), Gaussian-weighted, normalised over the discrete grid | Injects exactly the requested amplitude at any resolution; oblique waves via a phase shift along the line |
 | Absorption | Sponge layer: depth relaxes to that of still water (none on land) and momentum to zero at the same rate, quadratic ramp | Lets waves leave without reflecting, and never speeds water up |
 | Friction | Manning, semi-implicit | Exact for one-directional quadratic drag; never reverses the flow |
-| Time step | Adaptive, CFL 0.4; SSP-RK2 (second and third order) or forward Euler (first order) | |
+| Time step | Adaptive, CFL 0.4; SSP-RK2 (second and fifth order) or forward Euler (first order) | |
 
 Cells shallower than `1e-8` m count as dry and carry no velocity. A cell drops to first order where it or a neighbour is shallower than 1 mm, or where reconstruction would leave a face without water, so wet/dry fronts stay positive and well-balanced.
 
-Choose the order with `Solver::with_order`; the default is `Order::Second`. Add dispersion with `Solver::with_dispersion(Dispersion::default())`; `wavesim run` uses `Order::Third` with dispersion unless you pass `--dispersive false`.
+Choose the order with `Solver::with_order`; the default is `Order::Second`. Add dispersion with `Solver::with_dispersion(Dispersion::default())`; `wavesim run` uses `Order::Fifth` with dispersion unless you pass `--dispersive false`.
 
 **Wave-maker calibration.** A source of strength `Q` per unit length radiates amplitude `Q / (2 c_g cos θ)` on each side, with `c_g` the linear **group** speed at the source (`sqrt(g h)` in shallow water; the phase speed divided by `1 + (kh)²/3` with dispersion), and the strength is boosted to undo the roll-off `exp(−k_x²σ²/2)` of the source's Gaussian profile. A sponge behind the maker absorbs the half that travels away from the domain of interest. With `periodic_y`, an oblique maker's `k_y · Ly` must be a whole multiple of 2π; `Solver` panics if it is not.
 
@@ -236,11 +242,13 @@ Choose the order with `Solver::with_order`; the default is `Order::Second`. Add 
 | Friction | Attenuation over 100 m within 0.03 of the quadratic-drag prediction (measured 0.919 against 0.911) |
 | Manning factor | Equals the exact solution of quadratic drag |
 | Dispersion operator | Symmetric and positive definite to 1e-10, with walls and with periodic wrapping, so conjugate gradients is safe |
-| Dispersion relation | A standing wave oscillates at 1.4261 rad/s (third order) against the SGN theory's 1.4247; shallow water would give 1.7629 (24% off) |
+| Dispersion relation | A standing wave oscillates at 1.4261 rad/s (fifth order) against the SGN theory's 1.4247; shallow water would give 1.7629 (24% off) |
+| Fifth-order reconstruction | Exact for quartics at both faces of a cell |
+| A swell crossing a shelf on coarse cells | 14 s in 12 m on 6 m cells (24 to a wavelength): at least 97% of its height after 1 km, bound set before the first run (measured 100.7%; the third-order scheme keeps 94.2% and fails) |
 | Exact SGN solitary wave | `a/h = 0.2` for 20 s: amplitude 0.2001, crest within 0.01 m of the exact position, shape error 0.2%; shallow water steepens and ends 57% off |
 | Wave-maker with dispersion | Amplitude 0.0498 and 0.0499 against 0.05, wavelength within 0.1 rad of the SGN phase lag over 40 m (shallow water would be off by 0.25 rad) |
-| Big swell in deep water | A 2.5 m, 14 s swell in 8 m keeps at least 90% of its energy over 400 m (measured 93%); shallow water keeps 14% |
-| Shoaling and breaking on a 1:30 beach | Shoaling from 6 to 3.5 m of x1.14 matches Green's law; the tallest wave has `H/h` 0.68 at 3.0 m depth (textbook 0.55 to 1.2); the surf zone stays depth-limited (`H/h` 0.96 at most in 1 to 2.5 m) |
+| Big swell in deep water | A 2.5 m, 14 s swell in 8 m keeps at least 90% of its energy over 400 m (measured 95%); shallow water keeps 14% |
+| Shoaling and breaking on a 1:30 beach | Shoaling from 6 to 3.5 m of x1.13 matches Green's law (x1.14); the tallest wave has `H/h` 0.71 at 3.0 m depth (textbook 0.55 to 1.2); the surf zone stays depth-limited (`H/h` 0.97 at most in 1 to 2.5 m) |
 | Dispersive solves | Converge every time, in under 20 iterations on average |
 | Thin film at a run-up | A white-box test: changing a 1 mm film's speed from 1 to 1000 m/s changes nothing about its neighbours, and the test fails if the masking is removed |
 | Masked dispersive operator | Symmetric and positive definite with a patchy mask, masked cells exactly zero |
@@ -252,9 +260,13 @@ Choose the order with `Solver::with_order`; the default is `Order::Second`. Add 
 | Full run on a synthetic beach | Frame count and times are right, the first frame is still water, and the wave in the frames has the requested amplitude (between 0.6 and 1.3 times the request) |
 | Run planning | The wave-maker sits where a sinusoid lacks at most a 10% second harmonic and one cell shoreward it would lack more; the second harmonic has the Stokes deep- and shallow-water limits; a higher tide lets it sit further shoreward; the planned duration matches the analytic travel time up a plane beach within 5%; impossible setups are explained |
 | Walls at the sides | On an alongshore-uniform beach every row of every frame is the same to 1e-6 m (fails with absorbing side strips) |
-| Cropping | Dropping offshore columns keeps the values exactly and moves the frame's origin along `+x` |
+| Cropping | Keeps the values exactly and moves the frame's origin along `+x`, and along `+y` 90° counter-clockwise from it |
 | Sponge over land | A sponge relaxes depth and momentum at the same rate, so water on land inside it keeps its velocity to 1e-6 (the old rule sped it up 14% in three steps; on Pipeline it left films microns deep at tens of metres per second, which cut the time step eightfold) |
-| Viewer data layer | 24 tests: header and file validation, frame offsets, cubic interpolation (follows a wave with under 2% error where a straight line errs by 10%; never puts water below the bed), and reading the exact bytes the Rust writer produces |
+| Relaxation zones | Relaxing towards still water keeps a lake at rest over a rough bed; towards a moving target, depth and momentum follow the exact exponential and the water never speeds up |
+| Two grids against one | On a 1:50 beach a 0.5 m, 14 s swell crosses 250 m on 4 m cells and then the reef on 2 m cells: within 4% of one 2 m grid on average and 10% at any point, bounds set before the first run (measured 2.3% and 8.3%); on an alongshore-uniform beach the rows agree to a ten-thousandth of the wave height (measured 6e-6 m); a swell shorter than 20 coarse cells at the wave-maker is refused |
+| Budget | A run estimated to take longer than its budget is refused before it writes anything; one that runs over its limit anyway stops and keeps a valid shorter run |
+| Coarsening | 2 x 2 blocks are averaged, the leftover edge cells dropped |
+| Viewer data layer | 33 tests: header and file validation, frame offsets, cubic interpolation (follows a wave with under 2% error where a straight line errs by 10%; never puts water below the bed), runs that start after zero, the side margins, and reading the exact bytes the Rust writer produces |
 | Rust and viewer agree | `waveio`'s golden test writes a tiny run and compares it byte for byte with the fixture the viewer's tests read; if the format drifts, one of them fails |
 | Fetch tool | On a synthetic plane, `+x` follows the bearing and `+y` is 90° counter-clockwise from it, for four bearings; clipping is counted; a request outside the raster is an error |
 
@@ -264,11 +276,7 @@ The lake-at-rest and dam-break conservation tests run for both orders. L1 error 
 
 **Two shoaling tests run in the linear regime.** Green's law and the wave-action law are linear results. At 3 cm in about 2 m of water, nonlinear steepening of shallow-water waves already drains a few percent of the first harmonic over 160 m, so those two tests use 5 mm waves. The beaches are long enough that the measurement points sit well away from the sponge, whose small reflection otherwise ripples the amplitude by a few percent.
 
-`cargo test` takes about a minute: the wave tests are simulations, so the test profile is optimised (`[profile.test] opt-level = 3`).
-
-```bash
-cargo test
-```
+`cargo test` takes about 15 seconds and skips the tests marked slow, which run whole simulations; `cargo test --release -- --include-ignored` runs everything in about a minute. The test profile is optimised (`[profile.test] opt-level = 3`).
 
 ## Project Structure
 
@@ -304,13 +312,13 @@ wavesim/
     ├── wavecore/               # pure numerics, no dependencies
     │   ├── src/
     │   │   ├── lib.rs
-    │   │   ├── grid.rs         # padded Cartesian grid, metres, two ghost layers
+    │   │   ├── grid.rs         # padded Cartesian grid, metres, three ghost layers
     │   │   ├── bathymetry.rs   # flat, plane beach, rough bed, from raw values
     │   │   ├── dispersion.rs   # SGN correction: operator, conjugate gradients, smoothness switch
-    │   │   ├── forcing.rs      # wave-maker, sponge layers, Manning friction
+    │   │   ├── forcing.rs      # wave-maker, sponge layers, relaxation zones, Manning friction
     │   │   ├── par.rs          # row loops, threaded on big grids with the `parallel` feature
     │   │   ├── state.rs        # h, hu, hv, time, boundaries, diagnostics
-    │   │   └── solver.rs       # reconstruction (MC / third order), hydrostatic reconstruction, HLL flux, SSP-RK2
+    │   │   └── solver.rs       # reconstruction (MC / fifth order), hydrostatic reconstruction, HLL flux, SSP-RK2
     │   └── tests/
     │       ├── well_balanced.rs  # still water stays still; conservation
     │       ├── common/mod.rs     # harmonic analysis shared by the wave tests
@@ -327,21 +335,18 @@ wavesim/
 
 ## Keeping the machine cool
 
-Nothing here is meant to use a laptop flat out, and the limits are built in so they do not depend on remembering a flag.
+Nothing here is meant to run a laptop hot, and the guard is built in, so it does not depend on remembering a flag or watching a run.
 
-| What | Limit | Where it comes from | Override |
-|---|---|---|---|
-| The solver (`wavesim run`) | 4 threads by default, never more than half the machine's cores | `--threads`; the ceiling is in `crates/wavesim/src/main.rs` | `WAVESIM_ALL_CORES=1` lifts the ceiling |
-| How long a run may go on | Stops itself after **10 minutes** of wall-clock time and keeps what it has: a shorter run that is complete and viewable, marked `truncated` in its header | `--max-minutes` | `--max-minutes 0` for no limit |
-| Scheduling | **Background priority on macOS**, which keeps the run on the efficiency cores: quiet and cool, but about **3.5 times slower** (20 simulated seconds took 15.5 s instead of 4.4 s on an M5) | `--priority` | `--priority normal` for full speed |
-| Knowing what to expect | Prints a rough time estimate before it starts, and warns if the run will probably hit its limit | `estimate_seconds` in `crates/wavesim/src/lib.rs` | |
-| `cargo test` | 3 tests at a time; the solver's pool in tests is 4 threads | `.cargo/config.toml` (`RUST_TEST_THREADS`, `RAYON_NUM_THREADS`) | set the variable for one command |
-| Compiling | 4 jobs | `.cargo/config.toml` (`build.jobs`) | `CARGO_BUILD_JOBS` |
-| The viewer's tests | 2 workers | `viewer/vite.config.ts` | |
+| What | Limit | Override |
+|---|---|---|
+| Where a run goes | **Background priority on macOS**, which keeps it on the efficiency cores: cool and quiet, about 3.5 times slower than the performance cores | `--priority normal` for full speed, and heat |
+| How long a run may take | **5 minutes**, checked twice. Before it starts, the run estimates its own time for its threads and priority and **refuses** if that is over the limit, saying what to change; nothing is written. During it, the same limit is a hard stop: a run that takes longer anyway stops there and keeps what it has, a shorter run that is complete, viewable and marked `truncated` | `--max-minutes N` allows N; `0` lifts the limit |
+| Threads | 4 by default, never more than half the machine's cores | `--threads`; `WAVESIM_ALL_CORES=1` lifts the ceiling |
+| `cargo test` | The physics checks that run whole simulations are skipped unless asked for: about 15 seconds instead of a minute and a half. When they run, 3 tests at a time with 4 solver threads each | `cargo test --release -- --include-ignored` |
+| Compiling | 4 jobs (`.cargo/config.toml`) | `CARGO_BUILD_JOBS` |
+| The viewer's tests | 2 workers (`viewer/vite.config.ts`) | |
 
-The results do not depend on any of these: a run on 1 thread and on 4 give byte-identical files. The estimate is calibrated on one Apple M5, so treat it as the right order of magnitude, not a promise. There is no way to read a laptop's temperature without administrator rights, so the guarantee here is by construction (fewer cores, lower priority, a time limit), not by measurement.
-
-Because background priority is slow, a long run is better started once and left alone than watched. For a quick look, a coarser bed is a quarter of the work: `tools/fetch_spot.py pipeline --cell 6`.
+The results do not depend on threads or priority: a run on 1 thread and on 4 give byte-identical files. The estimate is calibrated on one Apple M5 and errs on the long side; the hard stop is there for when it is wrong. There is no way to read a laptop's temperature without administrator rights, so the guarantee is by construction (the efficiency cores, a few threads, a time limit), not by measurement.
 
 ## Development
 
@@ -356,7 +361,7 @@ Because background priority is slow, a long run is better started once and left 
 - Dispersion is the Serre–Green–Naghdi flat-bed operator: accurate in `kh` (wavenumber times depth) up to about 1 to 2, with the bed-slope terms of the dispersive operator omitted. Plain shallow water (`--dispersive false`) is accurate only up to `kh` of about 0.3 and steepens tall waves into shocks wherever they are.
 - Breaking is a switch tuned to textbook breaking indices, not a model fitted to measurements. On a 1:30 beach it begins somewhat early (`H/h` about 0.7 where Goda's formula suggests 0.9), and it has no spilling or plunging distinction.
 - Dispersion costs about three times as much as shallow water per step (78 ms against 25 ms on 200,000 cells, single-threaded).
-- Numerical damping remains at 3 m cells: an 8 s, 1.5 m swell arrives with an energy height of 1.45 m. Refining the grid helps; see [docs/dispersion.md](docs/dispersion.md).
+- The surf zone is where the scheme falls back to the MC limiter, so the break itself is resolved only as well as its cells allow; on a 1:30 beach, 3 m cells under-predict surf-zone heights against 1.5 m ones (see [docs/dispersion.md](docs/dispersion.md)).
 - A sinusoidal wave in the cnoidal regime (Ursell number above about 25) changes shape as it travels, so its crest-to-trough height is not the requested height; its energy is.
 - Oblique waves with dispersion are not covered by the tests.
 - Wave input is monochromatic and calibrated for long waves; there is no irregular sea state or spectrum.

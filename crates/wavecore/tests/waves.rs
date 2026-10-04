@@ -4,9 +4,12 @@
 mod common;
 
 use common::{col, run_and_analyse};
-use wavecore::{Bathymetry, G, GHOST, Grid, Solver, Sponge, State, WaveMaker, manning_factor};
+use wavecore::{
+    Bathymetry, G, GHOST, Grid, Relaxation, Solver, Sponge, State, WaveMaker, manning_factor,
+};
 
 #[test]
+#[ignore = "slow physics check: cargo test --release -- --include-ignored"]
 fn wave_maker_radiates_the_requested_amplitude() {
     let dx = 0.5;
     let grid = Grid::new(800, 4, dx, dx);
@@ -46,6 +49,7 @@ fn wave_maker_radiates_the_requested_amplitude() {
 }
 
 #[test]
+#[ignore = "slow physics check: cargo test --release -- --include-ignored"]
 fn shoaling_follows_greens_law() {
     // Long waves climbing a gentle slope: amplitude grows as depth^(-1/4). This is a
     // linear result, so the wave is kept small (a/h < 0.4%): at 3 cm, nonlinear
@@ -93,6 +97,7 @@ fn shoaling_follows_greens_law() {
 }
 
 #[test]
+#[ignore = "slow physics check: cargo test --release -- --include-ignored"]
 fn oblique_waves_obey_snells_law_and_wave_action_conservation() {
     // Long waves on a plane beach, periodic alongshore so the wave is uniform in y.
     // Snell: k_y = k sin(theta) is conserved while the wave turns towards the shore.
@@ -168,6 +173,7 @@ fn oblique_waves_obey_snells_law_and_wave_action_conservation() {
 }
 
 #[test]
+#[ignore = "slow physics check: cargo test --release -- --include-ignored"]
 fn friction_attenuates_waves_at_the_predicted_rate() {
     let dx = 0.5;
     let period = 20.0;
@@ -230,6 +236,7 @@ fn manning_factor_is_the_exact_quadratic_drag_step() {
 }
 
 #[test]
+#[ignore = "slow physics check: cargo test --release -- --include-ignored"]
 fn solitary_wave_runup_matches_synolakis_law() {
     // Synolakis (1987): a non-breaking solitary wave of height H on a 1:19.85 beach
     // in depth d runs up to R/d = 2.831 sqrt(cot(beta)) (H/d)^(5/4).
@@ -327,4 +334,41 @@ fn a_sponge_over_land_never_speeds_the_water_up() {
             );
         }
     }
+}
+
+#[test]
+fn relaxing_towards_still_water_keeps_a_lake_at_rest() {
+    let grid = Grid::new(12, 9, 3.0, 3.0);
+    let bed = Bathymetry::rough(&grid, 1.0, 1.5);
+    let mut s = State::lake_at_rest(&grid, &bed, 0.0);
+    let before = s.clone();
+    let zone = Relaxation::new(&grid, &[Sponge::new(12, 2.0).edges(true, true, true, true)]);
+    zone.apply(&grid, &bed, &mut s, 0.3, |_| (0.0, 0.0, 0.0));
+    for (i, j) in grid.interior() {
+        let k = grid.idx(i, j);
+        assert!((s.h[k] - before.h[k]).abs() < 1e-12, "({i}, {j})");
+        assert_eq!((s.hu[k], s.hv[k]), (0.0, 0.0));
+    }
+}
+
+#[test]
+fn relaxation_moves_depth_and_momentum_towards_the_target_together() {
+    // 1 m of water at 2 m/s over a bed 1 m down, pulled towards a surface 0.5 m up at rest: by
+    // the factor f = exp(-rate dt), depth goes to f + 1.5 (1 - f) and momentum to 2 f, so the
+    // water slows down and never speeds up.
+    let grid = Grid::new(4, 4, 1.0, 1.0);
+    let bed = Bathymetry::flat(&grid, 1.0);
+    let mut s = State::lake_at_rest(&grid, &bed, 0.0);
+    for k in 0..grid.cells() {
+        s.hu[k] = 2.0 * s.h[k];
+    }
+    let sponge = Sponge::new(1_000_000, 1.5).edges(true, false, false, false);
+    let zone = Relaxation::new(&grid, &[sponge]);
+    zone.apply(&grid, &bed, &mut s, 0.2, |_| (0.5, 0.0, 0.0));
+    let (i, j) = zone.cells().next().unwrap();
+    let k = grid.idx(i, j);
+    let f = (-1.5_f64 * 0.2).exp();
+    assert!((s.h[k] - (f + 1.5 * (1.0 - f))).abs() < 1e-5);
+    assert!((s.hu[k] - 2.0 * f).abs() < 1e-5);
+    assert!(s.hu[k] / s.h[k] < 2.0);
 }

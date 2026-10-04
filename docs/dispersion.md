@@ -61,10 +61,11 @@ Dispersion exposed a problem that had nothing to do with dispersion: at the reso
 | **Third order, blended with MC by `φ`** | 1.5 m | 1.52 | 1.60 | 1.09 |
 
 - **WENO3 was worse than MC** at these resolutions and was removed. Three-cell WENO drifts to its lower-order stencil too readily at 20 to 40 cells per wavelength.
-- **`Order::Third`** uses the unlimited third-order upwind-biased scheme `(2·low + 5·c − high)/6` where `φ` says the wave is smooth, and the MC limiter where it is not. A 3 m grid with it behaves roughly like a 1.5 m grid with MC.
+- **Third order** (the unlimited upwind-biased scheme `(2·low + 5·c − high)/6` where `φ` says the wave is smooth, and the MC limiter where it is not) made a 3 m grid behave roughly like a 1.5 m grid with MC. It was the default until the swell had to cross the Pipeline shelf: over that kilometre, 6 m cells lost 14% of the height they kept on 3 m cells, and 18–24% by the reef.
+- **`Order::Fifth`** replaced it: the unlimited fifth-order upwind-biased scheme `(2 v₀ − 13 v₁ + 47 v₂ + 27 v₃ − 3 v₄)/60` where the five cells around a face are smooth and wet, the MC limiter where they are not. On 6 m cells across the Pipeline shelf it comes within 1.5% of the third-order run on 3 m cells, and within 3% on the reef; over 1 km of flat 12 m water at 24 cells per wavelength it keeps 100.7% of a 14 s swell's height, where third order keeps 94.2%. It costs no more per step, and it is what lets a nested run carry the swell across the shelf on cells twice as large.
 - **SSP-RK3** in place of RK2 made no measurable difference (differences under 0.01 m at both resolutions) and costs half as much again, so it was dropped.
 
-Dissipation does not vanish at 3 m cells: the offshore energy height is 1.45 against 1.5 requested.
+The table is for the schemes before fifth order. Dissipation does not vanish at 3 m cells with third order: the offshore energy height is 1.45 against 1.5 requested.
 
 ## Wave-maker calibration, and a mistake that is worth recording
 

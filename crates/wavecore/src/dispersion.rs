@@ -96,7 +96,7 @@ fn smoothstep(lo: f64, hi: f64, x: f64) -> f64 {
 
 /// The smoothness switch `phi` for every cell: 1 where the surface is smooth, falling to 0
 /// where it is steep or tall for its depth (a front about to break, a bore, the swash).
-/// Both the dispersive terms and the third-order reconstruction are scaled by it.
+/// Both the dispersive terms and the fifth-order reconstruction are scaled by it.
 ///
 /// It is computed everywhere the stencils reach; the outermost ring copies its neighbour.
 pub(crate) fn switch(

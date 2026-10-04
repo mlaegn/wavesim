@@ -146,7 +146,12 @@ export class Run {
     return this.header.frame_count;
   }
 
-  /** Simulated seconds covered by the run. */
+  /** Simulated time of the first frame: 0, or later for the fine grid of a nested run. */
+  get start(): number {
+    return this.header.times[0] as number;
+  }
+
+  /** Simulated time of the last frame. */
   get duration(): number {
     return this.header.times[this.frameCount - 1] as number;
   }
@@ -313,10 +318,19 @@ export class Run {
    * it is there for the numerics, not the ocean.
    */
   get viewBox(): { x0: number; x1: number; y0: number; y1: number } {
-    const { nx, ny, dx, dy } = this.header;
-    const w = this.header.waves.sponge_side_cells;
-    const side = typeof w === "number" ? w * dy : 0;
-    return { x0: this.viewStart, x1: nx * dx, y0: side, y1: ny * dy - side };
+    const { nx, ny, dx } = this.header;
+    const side = this.sideMargin;
+    return { x0: this.viewStart, x1: nx * dx, y0: side, y1: ny * this.header.dy - side };
+  }
+
+  /**
+   * Metres along each side that are there for the numerics: the margin by the walls, which
+   * mirror the bed (`side_margin_cells`), or in older runs absorbing strips (`sponge_side_cells`).
+   */
+  get sideMargin(): number {
+    const w = this.header.waves;
+    const cells = w.side_margin_cells ?? w.sponge_side_cells;
+    return typeof cells === "number" ? cells * this.header.dy : 0;
   }
 
   /** Where the viewer should start: past the wave-maker's own bump, which is not sea. */

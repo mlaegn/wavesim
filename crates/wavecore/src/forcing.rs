@@ -1,8 +1,10 @@
 //! Things that push on the water or take energy out of it: an internal wave-maker,
 //! absorbing sponge layers, and Manning bottom friction.
 
+use crate::bathymetry::Bathymetry;
 use crate::grid::{GHOST, Grid};
-use crate::solver::G;
+use crate::solver::{G, H_DRY};
+use crate::state::State;
 
 /// Internal wave-maker: a Gaussian-weighted mass source along a line of constant `x`
 /// (Wei et al. 1999). Waves radiate both ways from the line, so put a [`Sponge`]
@@ -201,6 +203,82 @@ impl Sponge {
             r = r.max(ramp(grid.ny - 1 - b));
         }
         self.strength * r
+    }
+}
+
+/// Relax one cell towards `target = (eta, u, v)` by the factor `f` (1 keeps the cell as it is,
+/// 0 replaces it): the depth towards the target's, which is none where the bed is above the
+/// target's surface, and the momentum towards the target's, at the same rate. The speed then
+/// always lies between the cell's and the target's, so relaxing never speeds water up.
+pub(crate) fn relax_cell(
+    cell: (&mut f64, &mut f64, &mut f64),
+    bed: f64,
+    target: (f64, f64, f64),
+    f: f64,
+) {
+    let (h, hu, hv) = cell;
+    let (eta, u, v) = target;
+    let ht = (eta - bed).max(0.0);
+    *h = f * *h + (1.0 - f) * ht;
+    *hu = f * *hu + (1.0 - f) * ht * u;
+    *hv = f * *hv + (1.0 - f) * ht * v;
+}
+
+/// Zones where the water is pulled towards a target the caller supplies at every step, such as a
+/// coarser run of the same sea: this is how a fine grid is driven by a coarse one (one-way
+/// nesting). The waves the target carries come in, and waves it lacks, such as reflections the
+/// fine grid makes itself, are absorbed. The rates are those of [`Sponge`]s, which say where the
+/// zones are; a [`Sponge`] is the special case of a target at rest.
+pub struct Relaxation {
+    /// Padded `(i, j)` of each cell in the zones, and its rate in 1/s.
+    cells: Vec<(usize, usize, f64)>,
+}
+
+impl Relaxation {
+    /// Every cell where one of `zones` has a rate, at the largest of their rates.
+    pub fn new(grid: &Grid, zones: &[Sponge]) -> Self {
+        let cells = grid
+            .interior()
+            .filter_map(|(i, j)| {
+                let rate = zones.iter().map(|z| z.rate(grid, i, j)).fold(0.0, f64::max);
+                (rate > 0.0).then_some((i, j, rate))
+            })
+            .collect();
+        Self { cells }
+    }
+
+    /// The cells of the zones, padded `(i, j)`, in the order [`Relaxation::apply`] asks for
+    /// their targets.
+    pub fn cells(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+        self.cells.iter().map(|&(i, j, _)| (i, j))
+    }
+
+    /// Relax the water in the zones over `dt` towards `target(m)`, the surface elevation and
+    /// velocity `(eta, u, v)` for the `m`-th cell of [`Relaxation::cells`], in the solver's
+    /// frame (still water at zero).
+    pub fn apply(
+        &self,
+        grid: &Grid,
+        bed: &Bathymetry,
+        s: &mut State,
+        dt: f64,
+        target: impl Fn(usize) -> (f64, f64, f64),
+    ) {
+        for (m, &(i, j, rate)) in self.cells.iter().enumerate() {
+            let k = grid.idx(i, j);
+            let f = (-rate * dt).exp();
+            relax_cell(
+                (&mut s.h[k], &mut s.hu[k], &mut s.hv[k]),
+                bed.b[k],
+                target(m),
+                f,
+            );
+            if s.h[k] < H_DRY {
+                s.h[k] = s.h[k].max(0.0);
+                s.hu[k] = 0.0;
+                s.hv[k] = 0.0;
+            }
+        }
     }
 }
 
