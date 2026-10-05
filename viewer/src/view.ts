@@ -72,6 +72,7 @@ uniform float uRange;  // surface height that gets the full tint (m)
 uniform float uTint;
 uniform float uHasBreak; // 1 if the run records where it is breaking
 uniform float uMapOn;
+uniform vec2 uMapRamp; // map values from yellow (x) to red (y)
 uniform float uCropOn;
 uniform vec4 uBox;     // the sea: x0, x1, y0, y1 in metres
 
@@ -125,7 +126,7 @@ void main() {
   if (uMapOn > 0.5) {
     // A map over the whole run, 0 to 1: yellow for low, red for high.
     float m = smoothstep(0.0, 0.2, vMap);
-    vec3 heat = mix(vec3(1.0, 0.85, 0.2), vec3(0.9, 0.12, 0.1), smoothstep(0.1, 0.6, vMap));
+    vec3 heat = mix(vec3(1.0, 0.85, 0.2), vec3(0.9, 0.12, 0.1), smoothstep(uMapRamp.x, uMapRamp.y, vMap));
     col = mix(col, heat, 0.9 * m);
     alpha = max(alpha, 0.97 * m);
   }
@@ -298,6 +299,7 @@ export class RunView {
       uMap: { value: this.mapTexture },
       uHasBreak: { value: run.hasField("breaking") ? 1 : 0 },
       uMapOn: { value: 0 },
+      uMapRamp: { value: new THREE.Vector2(0.1, 0.6) },
       uCropOn: { value: 1 },
       uBox: { value: new THREE.Vector4(box.x0, box.x1, box.y0, box.y1) },
       uSize: { value: new THREE.Vector2(nx, ny) },
@@ -357,7 +359,8 @@ export class RunView {
     }
     this.breakLine = new THREE.LineSegments(
       new THREE.BufferGeometry().setFromPoints(points),
-      new THREE.LineBasicMaterial({ color: 0xff3b30, depthTest: false, transparent: true, opacity: 0.95 }),
+      // Transparent, so it is drawn with the water and after it, on top.
+      new THREE.LineBasicMaterial({ color: 0xffffff, depthTest: false, transparent: true }),
     );
     this.breakLine.renderOrder = 11;
     this.breakLine.frustumCulled = false;
@@ -425,6 +428,9 @@ export class RunView {
         : null;
     this.mapData.set(map ?? new Float32Array(this.mapData.length));
     this.mapTexture.needsUpdate = true;
+    // Heights spread over the whole ramp, so 3 m and 5 m waves look different; steepness keeps
+    // the ramp it had.
+    (this.uniform("uMapRamp").value as THREE.Vector2).set(...(height ? [0.25, 1.0] : [0.1, 0.6]) as [number, number]);
     this.uniform("uMapOn").value = map ? 1 : 0;
   }
 

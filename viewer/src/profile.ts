@@ -3,11 +3,7 @@ import type { Run } from "./run";
 export interface Readout {
   /** The steepest face of the surface along the line, where there is real water. */
   steepest: { slope: number; x: number; depth: number } | null;
-  /** The seaward-most place the model reads as clearly breaking. */
-  breakingFrom: { x: number; depth: number } | null;
 }
-
-const BREAKING = 0.8;
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
@@ -18,7 +14,8 @@ function mix(c0: [number, number, number], c1: [number, number, number], t: numb
 
 /**
  * Draw the wave along one line across the break, side-on: the bed, the water, and the
- * surface coloured by how close to breaking the model says it is. `row` is the cell row
+ * surface coloured by how close to breaking the switch says it is, and a white line where the
+ * waves break over the run (where they are tallest). `row` is the cell row
  * (the position along the shore). Returns the numbers worth reading off it.
  */
 export function drawProfile(
@@ -34,13 +31,13 @@ export function drawProfile(
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.clientWidth;
   const h = canvas.clientHeight;
-  if (w === 0 || h === 0) return { steepest: null, breakingFrom: null };
+  if (w === 0 || h === 0) return { steepest: null };
   if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
     canvas.width = Math.round(w * dpr);
     canvas.height = Math.round(h * dpr);
   }
   const g = canvas.getContext("2d");
-  if (!g) return { steepest: null, breakingFrom: null };
+  if (!g) return { steepest: null };
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.clearRect(0, 0, w, h);
 
@@ -101,7 +98,6 @@ export function drawProfile(
 
   // The surface, coloured by how close to breaking it is.
   let steepest: Readout["steepest"] = null;
-  let breakingFrom: Readout["breakingFrom"] = null;
   for (let i = i0; i < i1; i++) {
     const e0 = eta[base + i] as number;
     const e1 = eta[base + i + 1] as number;
@@ -115,14 +111,14 @@ export function drawProfile(
     g.lineTo(X(i + 1), Z(e1));
     g.stroke();
 
-    if (breakingFrom === null && b >= BREAKING) breakingFrom = { x: (i + 0.5) * dx, depth };
     if (i > i0 && depth > 0.3) {
       const slope = Math.abs((eta[base + i + 1] as number) - (eta[base + i - 1] as number)) / (2 * dx);
       if (!steepest || slope > steepest.slope) steepest = { slope, x: (i + 0.5) * dx, depth };
     }
   }
 
-  // Mark the steepest point and where breaking starts.
+  // Mark the steepest point, and where the waves break on this line over the run: where they
+  // are tallest, as the run records it.
   if (steepest) {
     const i = steepest.x / dx - 0.5;
     g.fillStyle = "#ffd23f";
@@ -130,16 +126,17 @@ export function drawProfile(
     g.arc(X(i), Z(eta[base + Math.round(i)] as number), 4, 0, Math.PI * 2);
     g.fill();
   }
-  if (breakingFrom) {
-    const i = breakingFrom.x / dx - 0.5;
-    g.setLineDash([3, 3]);
-    g.strokeStyle = "rgba(255, 92, 48, 0.9)";
-    g.lineWidth = 1;
+  const point = run.breakLine[row];
+  if (point) {
+    const i = point.x / dx - 0.5;
+    g.strokeStyle = "#ffffff";
+    g.lineWidth = 2;
     g.beginPath();
     g.moveTo(X(i), m.top);
     g.lineTo(X(i), h - m.bottom);
     g.stroke();
-    g.setLineDash([]);
+    g.fillStyle = "#ffffff";
+    g.fillText("breaks", X(i) + 4, m.top + 10);
   }
-  return { steepest, breakingFrom };
+  return { steepest };
 }
