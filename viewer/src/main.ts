@@ -86,7 +86,7 @@ function showFacts(run: Run): void {
   info.hidden = false;
 }
 
-/** What happened along one line over the whole run: where it got steepest and where it broke. */
+/** What happened along one line over the whole run: where it got steepest and where it breaks. */
 function wholeRun(run: Run, row: number): string {
   const { nx, dx } = run.header;
   const box = run.viewBox;
@@ -103,23 +103,12 @@ function wholeRun(run: Run, row: number): string {
     const deg = (Math.atan(best.s) * 180) / Math.PI;
     out.push(`Over the whole run it gets steepest at x = ${((best.i + 0.5) * dx).toFixed(0)} m (slope ${best.s.toFixed(2)}, ${deg.toFixed(0)}°).`);
   }
-  const breaks = run.breakMap();
-  if (breaks) {
-    let from = -1;
-    let to = -1;
-    let top = { f: 0, i: first };
-    for (let i = first; i <= last; i++) {
-      const f = breaks[row * nx + i] as number;
-      if (f >= 0.05) {
-        if (from < 0) from = i;
-        to = i;
-      }
-      if (f > top.f) top = { f, i };
-    }
+  const point = run.breakLine[row];
+  if (run.breakLine.length > 0) {
     out.push(
-      from < 0
-        ? "It never breaks along this line."
-        : `It breaks from x = ${((from + 0.5) * dx).toFixed(0)} to ${((to + 0.5) * dx).toFixed(0)} m, most often at x = ${((top.i + 0.5) * dx).toFixed(0)} m (${(100 * top.f).toFixed(0)}% of the time).`,
+      point
+        ? `It breaks at x = ${point.x.toFixed(0)} m, in ${point.depth.toFixed(1)} m of water, ${point.height.toFixed(1)} m tall (the red line: where the wave is tallest).`
+        : "It does not break along this line.",
     );
   }
   return out.join(" ");
@@ -141,13 +130,9 @@ function updateProfile(): void {
     const degrees = (Math.atan(slope) * 180) / Math.PI;
     parts.push(`Steepest face: slope ${slope.toFixed(2)} (${degrees.toFixed(0)}°) at x = ${x.toFixed(0)} m, ${depth.toFixed(1)} m deep.`);
   }
-  if (view.breaking) {
-    parts.push(
-      readout.breakingFrom
-        ? `The model reads breaking from x = ${readout.breakingFrom.x.toFixed(0)} m (${readout.breakingFrom.depth.toFixed(1)} m deep).`
-        : "Not breaking along this line right now.",
-    );
-  }
+  // Where the breaking switch reads breaking at this instant is not said: on cells of a few metres
+  // it reads late, while the wave is already losing height. Where it breaks comes from the
+  // whole run, below.
   parts.push(wholeRun(run, row));
   profileReadout.textContent = parts.filter(Boolean).join(" ");
 }
@@ -166,7 +151,7 @@ function setRun(run: Run, label: string): void {
   view.setCrop(crop.checked);
   mapKind.value = "none";
   view.setOverlay("none");
-  (mapKind.options[1] as HTMLOptionElement).disabled = !run.hasField("breaking");
+  (mapKind.options[1] as HTMLOptionElement).disabled = run.waveHeight() === null;
   const box = run.viewBox;
   transect.min = String(Math.ceil(box.y0 / run.header.dy));
   transect.max = String(Math.floor(box.y1 / run.header.dy) - 1);

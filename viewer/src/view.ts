@@ -3,7 +3,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { Run } from "./run";
 
 export type Preset = "oblique" | "top" | "beach";
-export type Overlay = "none" | "breaks" | "steep";
+export type Overlay = "none" | "height" | "steep";
 
 const WATER_VERTEX = /* glsl */ `
 attribute vec2 cell;
@@ -123,7 +123,7 @@ void main() {
   alpha = max(alpha, foam * 0.95);
   alpha *= smoothstep(0.01, 0.15, vDepth);
   if (uMapOn > 0.5) {
-    // How much of the run each place spent breaking: yellow for now and then, red for always.
+    // A map over the whole run, 0 to 1: yellow for low, red for high.
     float m = smoothstep(0.0, 0.2, vMap);
     vec3 heat = mix(vec3(1.0, 0.85, 0.2), vec3(0.9, 0.12, 0.1), smoothstep(0.1, 0.6, vMap));
     col = mix(col, heat, 0.9 * m);
@@ -223,6 +223,8 @@ export class RunView {
   private readonly mapTexture: THREE.DataTexture;
   private readonly cropPlanes: THREE.Plane[];
   private readonly transect: THREE.Line;
+  /** Where the waves break, row by row, drawn on the water. */
+  private readonly breakLine: THREE.LineSegments;
   private readonly uniforms: Record<string, THREE.IUniform>;
   private readonly lengthX: number;
   private readonly lengthY: number;
@@ -343,6 +345,24 @@ export class RunView {
     this.transect.frustumCulled = false;
     this.scene.add(this.transect);
 
+    // The break line: a segment between neighbouring rows that both break, inside the sea.
+    const points: THREE.Vector3[] = [];
+    const line = run.breakLine;
+    for (let j = 0; j + 1 < line.length; j++) {
+      const [a, b] = [line[j], line[j + 1]];
+      const [ya, yb] = [(j + 0.5) * dy, (j + 1.5) * dy];
+      if (a && b && ya >= box.y0 && yb <= box.y1 && a.x >= box.x0 && b.x >= box.x0) {
+        points.push(new THREE.Vector3(a.x, 0, -ya), new THREE.Vector3(b.x, 0, -yb));
+      }
+    }
+    this.breakLine = new THREE.LineSegments(
+      new THREE.BufferGeometry().setFromPoints(points),
+      new THREE.LineBasicMaterial({ color: 0xff3b30, depthTest: false, transparent: true, opacity: 0.95 }),
+    );
+    this.breakLine.renderOrder = 11;
+    this.breakLine.frustumCulled = false;
+    this.scene.add(this.breakLine);
+
     this.controls = new OrbitControls(this.camera, canvas);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
@@ -396,12 +416,13 @@ export class RunView {
    */
   setOverlay(kind: Overlay): void {
     this.dirty = true;
-    const map =
-      kind === "breaks"
-        ? this.run.breakMap()
-        : kind === "steep"
-          ? this.run.steepnessMap().map((s) => Math.min(Math.max((s - 0.06) / 0.34, 0), 1))
-          : null;
+    const height = kind === "height" ? this.run.waveHeight() : null;
+    const tallest = height ? height.reduce((m, v) => Math.max(m, v), 0) || 1 : 1;
+    const map = height
+      ? height.map((v) => v / tallest)
+      : kind === "steep"
+        ? this.run.steepnessMap().map((s) => Math.min(Math.max((s - 0.06) / 0.34, 0), 1))
+        : null;
     this.mapData.set(map ?? new Float32Array(this.mapData.length));
     this.mapTexture.needsUpdate = true;
     this.uniform("uMapOn").value = map ? 1 : 0;
@@ -418,6 +439,8 @@ export class RunView {
   setExaggeration(factor: number): void {
     this.dirty = true;
     this.terrain.scale.y = factor;
+    // A metre above still water, so the line shows over the troughs.
+    this.breakLine.position.y = factor;
     this.uniform("uExag").value = factor;
     this.transect.position.y = 2 * factor;
   }
@@ -500,6 +523,8 @@ export class RunView {
     this.mapTexture.dispose();
     this.transect.geometry.dispose();
     (this.transect.material as THREE.Material).dispose();
+    this.breakLine.geometry.dispose();
+    (this.breakLine.material as THREE.Material).dispose();
     this.renderer.dispose();
   }
 }

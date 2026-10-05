@@ -246,25 +246,6 @@ describe("fields and what they are used for", () => {
     expect(o[0]).toBe(1);
   });
 
-  it("builds a map of how often each cell was clearly breaking", () => {
-    // Cell 2 breaks in frames 1 and 2, cell 4 only weakly (0.5), cell 0 never.
-    const run = twoFields(
-      () => 0,
-      (k, n) => (n === 2 && (k === 1 || k === 2) ? 0.95 : n === 4 ? 0.5 : 0),
-    );
-    const map = run.breakMap();
-    expect(map).not.toBeNull();
-    expect(map![2]).toBe(0.5);
-    expect(map![4]).toBe(0);
-    expect(map![0]).toBe(0);
-    expect(run.breakMap()).toBe(map); // computed once
-    expect(run.breakMap(0.4)![4]).toBe(1);
-  });
-
-  it("has no break map when the run has no breaking field", () => {
-    expect(makeRun(() => 0).breakMap()).toBeNull();
-  });
-
   it("finds the shoreline and the viewer's start", () => {
     // 3 x 2 cells of 3 m; bed rises through zero between the 2nd and 3rd column.
     const h = header({ waves: { maker_x_m: 3, near_field_end_m: 5.5 } });
@@ -300,18 +281,20 @@ describe("nested and walled runs", () => {
 });
 
 describe("statistics recorded at every step", () => {
-  it("are what the break map shows, rather than the frames", () => {
-    const stats = { file: "stats.f32", fields: ["break_fraction", "eta_max"], from_s: 0, to_s: 6 };
-    const h = header({ fields: ["eta", "breaking"], stats });
+  it("give the height per wave and the break line", () => {
+    const stats = { file: "stats.f32", fields: ["break_fraction", "wave_height"], from_s: 0, to_s: 6 };
+    const line = [[4.5, 2.0, 1.6], null];
+    const h = header({ fields: ["eta", "breaking"], stats, waves: { break_line: line } });
     const bed = buf(new Array(6).fill(-5));
-    const frames = buf(new Array(48).fill(0)); // 4 frames x 2 fields x 6 cells, never breaking
-    const fraction = [0, 0.1, 0.2, 0.3, 0.4, 0.5];
-    const run = runFromBuffers(h, bed, frames, buf([...fraction, ...new Array(6).fill(1)]));
-    expect(Array.from(run.breakMap() ?? [])).toEqual(fraction.map((f) => Math.fround(f)));
-    expect(run.stat("eta_max")?.[0]).toBe(1);
-    expect(run.stat("eta_min")).toBeNull();
-    // Without the file, the frames are the fallback.
-    expect(Array.from(runFromBuffers(h, bed, frames).breakMap() ?? [])).toEqual(new Array(6).fill(0));
+    const frames = buf(new Array(48).fill(0)); // 4 frames x 2 fields x 6 cells
+    const height = [0, 0.5, 1.0, 1.5, 2.0, 2.5];
+    const run = runFromBuffers(h, bed, frames, buf([...new Array(6).fill(0), ...height]));
+    expect(Array.from(run.waveHeight() ?? [])).toEqual(height);
+    expect(run.breakLine).toEqual([{ x: 4.5, depth: 2.0, height: 1.6 }, null]);
+    // Without the statistics there is neither.
+    const plain = runFromBuffers(header(), bed, buf(new Array(24).fill(0)));
+    expect(plain.waveHeight()).toBeNull();
+    expect(plain.breakLine).toEqual([]);
   });
 
   it("must have the size the header promises", () => {

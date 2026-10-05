@@ -108,8 +108,9 @@ pub struct Plan {
     pub wavelength: f64,
     /// Width in cells of the offshore sponge.
     pub sponge_offshore: usize,
-    /// Simulated seconds: the options' duration, or else long enough for the swell to ramp up,
-    /// reach the shore along the middle row at its group speed, and break [`BREAKS_SHOWN`] times.
+    /// Simulated seconds: the options' duration, or else long enough for the swell to ramp up
+    /// ([`RAMP_PERIODS`]), reach the shore along the middle row at its group speed, settle
+    /// ([`SETTLE_PERIODS`]) and break [`BREAKS_SHOWN`] more times, which the statistics record.
     pub duration: f64,
 }
 
@@ -125,8 +126,22 @@ pub struct Plan {
 /// steepens the swell from there on is the model's own.
 pub const MAX_SECOND_HARMONIC: f64 = 0.10;
 
-/// How many waves a planned run shows breaking after the first full-height one reaches the shore.
+/// How many waves the statistics of a planned run record, once the surf zone has settled.
 pub const BREAKS_SHOWN: f64 = 4.0;
+
+/// The swell ramps up over this many periods. A gentle start stirs up less slow sloshing.
+pub const RAMP_PERIODS: f64 = 4.0;
+
+/// Periods a planned run waits after the first full-height wave reaches the shore before the
+/// statistics start. On the Pipeline reef the waves 130 m out were still shrinking, by 4.6, 4.0,
+/// 3.6, 3.4, 3.3 and 3.1 m, five periods after the first full one arrived, and the mean level
+/// was still sloshing by 0.3 m: the surf zone's setup and its slow motions take a while to form.
+pub const SETTLE_PERIODS: f64 = 4.0;
+
+/// A run warns if, in the middle half of its width, the per-wave height of the cells in the sea
+/// changed by more than this fraction per period over the waves its statistics recorded (the
+/// median over those cells).
+pub const MAX_UNSETTLED: f64 = 0.03;
 
 /// Amplitude of the second harmonic bound to a Stokes wave of amplitude `a` and wavenumber `k`
 /// in still-water depth `h`, relative to `a`: `(ka/4) cosh(kh) (2 + cosh 2kh) / sinh^3(kh)`.
@@ -217,7 +232,6 @@ pub struct Summary {
 
 const SPONGE_STRENGTH: f64 = 1.5;
 const SIGMA_CELLS: f64 = 2.0;
-const RAMP_PERIODS: f64 = 2.0;
 
 fn setup(msg: impl Into<String>) -> Error {
     Error::Setup(msg.into())
@@ -309,7 +323,7 @@ pub fn plan(bed: &Bed, opts: &RunOptions) -> Result<Plan, Error> {
         .sum();
     let duration = opts
         .duration
-        .unwrap_or((RAMP_PERIODS + BREAKS_SHOWN) * opts.period + travel);
+        .unwrap_or((RAMP_PERIODS + SETTLE_PERIODS + BREAKS_SHOWN) * opts.period + travel);
 
     Ok(Plan {
         crop: ((maker_x - needed) / grid.dx).floor() as usize,
@@ -430,12 +444,12 @@ fn beds(bed: &Bed, layout: &Layout) -> (Bed, Option<Bed>) {
 /// A rough guess of how long a run will take in wall-clock seconds, so that a long one can be
 /// refused before it starts. It counts each grid's cells, ghost layers included, and its steps at
 /// the time step of its deepest water, at a cost per cell and step calibrated on one Apple M5:
-/// the nested Pipeline run (319 x 200 cells of 6 m, then 179 x 400 of 3 m) took 5.7 minutes on 4
-/// threads on the efficiency cores, which are 3.5 times slower than the others; a grid too small
-/// to share out runs on one thread. It errs long, by 4% for that run and up to 80% for a thin 1D
-/// grid; the wall-clock limit catches what it gets wrong.
+/// the nested Pipeline run (319 x 200 cells of 6 m, then 179 x 400 of 3 m, 328 simulated seconds)
+/// took 11.7 minutes on 3 threads on the efficiency cores, which are 3.5 times slower than the
+/// others; a grid too small to share out runs on one thread. It errs long, by up to twice for a
+/// thin 1D grid; the wall-clock limit catches what it gets wrong.
 pub fn estimate_seconds(bed: &Bed, opts: &RunOptions, layout: &Layout) -> f64 {
-    let one_thread = if opts.dispersive { 650e-9 } else { 325e-9 };
+    let one_thread = if opts.dispersive { 715e-9 } else { 357e-9 };
     let speedup = (opts.threads.clamp(1, 6) as f64).powf(0.8);
     let cores = if opts.background { 3.5 } else { 1.0 };
     // Every cell the solver stores, ghost layers included, which on a thin grid are most of
@@ -492,6 +506,56 @@ struct Stats {
     eta_min: Vec<f64>,
     now: Vec<f64>,
     phi: Vec<f64>,
+    /// Crest to trough of each wave, period by period: a slow change of the mean level over
+    /// the window, which the overall range above takes in, does not get into these.
+    period: f64,
+    next_wave: f64,
+    wave_max: Vec<f64>,
+    wave_min: Vec<f64>,
+    waves: Vec<Vec<f64>>,
+}
+
+impl Stats {
+    /// End the wave in progress: its crest to trough, per cell, joins the record.
+    fn close_wave(&mut self) {
+        let heights = self
+            .wave_max
+            .iter()
+            .zip(&self.wave_min)
+            .map(|(hi, lo)| if hi.is_finite() { hi - lo } else { 0.0 })
+            .collect();
+        self.waves.push(heights);
+        self.wave_max.fill(f64::NEG_INFINITY);
+        self.wave_min.fill(f64::INFINITY);
+        self.next_wave += self.period;
+    }
+}
+
+/// Where the waves break along each row of a grid of `nx` by `ny` cells: the cell where the
+/// per-wave height is greatest, between column `from` and the shore, in water at least 0.3 m
+/// deep at still-water level `tide` (`bed` in metres above mean sea level). That is the break
+/// point as laboratories define it, and on Ting & Kirby's beach it is where the model's wave
+/// is tallest within 0.4 m of where the laboratory saw it break, whatever the cell size. `None`
+/// for a row with no such water.
+pub fn break_line(
+    height: &[f64],
+    bed: &[f32],
+    nx: usize,
+    ny: usize,
+    from: usize,
+    tide: f64,
+) -> Vec<Option<usize>> {
+    (0..ny)
+        .map(|j| {
+            let row = &bed[j * nx..(j + 1) * nx];
+            let shore = (from..nx)
+                .find(|&i| f64::from(row[i]) >= tide)
+                .unwrap_or(nx);
+            (from..shore)
+                .filter(|&i| tide - f64::from(row[i]) >= 0.3)
+                .max_by(|&a, &b| height[j * nx + a].total_cmp(&height[j * nx + b]))
+        })
+        .collect()
 }
 
 /// A cell reads as breaking where the breaking field is at least this.
@@ -533,6 +597,11 @@ impl Stage {
                 eta_min: vec![f64::INFINITY; cells],
                 now: vec![0.0; cells],
                 phi: Vec::new(),
+                period: opts.period,
+                next_wave: stats_from.max(start) + opts.period,
+                wave_max: vec![f64::NEG_INFINITY; cells],
+                wave_min: vec![f64::INFINITY; cells],
+                waves: Vec::new(),
             },
         })
     }
@@ -547,16 +616,55 @@ impl Stage {
         }
         self.solver
             .breaking_into(&mut self.state, &mut st.phi, &mut st.now);
+        if self.state.time > st.next_wave + 1e-9 {
+            st.close_wave();
+        }
         let grid = self.bed.grid();
         for (n, (i, j)) in grid.interior().enumerate() {
             let eta = self.state.h[grid.idx(i, j)] + f64::from(self.bed.elevation[n]);
             st.eta_max[n] = st.eta_max[n].max(eta);
             st.eta_min[n] = st.eta_min[n].min(eta);
+            st.wave_max[n] = st.wave_max[n].max(eta);
+            st.wave_min[n] = st.wave_min[n].min(eta);
             if st.now[n] >= BREAKING {
                 st.breaking_seconds[n] += inside;
             }
         }
         st.seconds += inside;
+    }
+
+    /// The mean crest-to-trough height of the waves recorded, per cell, or `None` before one
+    /// whole wave has passed.
+    fn wave_height(&self) -> Option<Vec<f64>> {
+        let waves = &self.stats.waves;
+        let first = waves.first()?;
+        Some(
+            (0..first.len())
+                .map(|n| waves.iter().map(|w| w[n]).sum::<f64>() / waves.len() as f64)
+                .collect(),
+        )
+    }
+
+    /// How much the per-wave height still changed from the first wave recorded to the last, per
+    /// period: the median over the cells of the middle half of the width with at least 0.3 m of
+    /// wave, or `None` with fewer than two waves.
+    fn unsettled(&self) -> Option<f64> {
+        let waves = &self.stats.waves;
+        if waves.len() < 2 {
+            return None;
+        }
+        let (first, last) = (&waves[0], &waves[waves.len() - 1]);
+        let g = self.bed.grid();
+        let mut change: Vec<f64> = (g.ny / 4..g.ny - g.ny / 4)
+            .flat_map(|j| (0..g.nx).map(move |i| j * g.nx + i))
+            .filter(|&n| first[n] > 0.3)
+            .map(|n| (last[n] / first[n] - 1.0).abs() / (waves.len() - 1) as f64)
+            .collect();
+        if change.is_empty() {
+            return None;
+        }
+        change.sort_by(f64::total_cmp);
+        Some(change[change.len() / 2])
     }
 
     /// The fraction of the recorded time each cell spent breaking.
@@ -628,11 +736,14 @@ impl Stage {
         Ok(())
     }
 
+    /// Write the statistics, the break line from column `break_from` on, and the header.
+    /// Returns the header's path and [`Stage::unsettled`].
     fn finish(
         mut self,
         truncated: bool,
         notes: &[(&str, serde_json::Value)],
-    ) -> Result<PathBuf, Error> {
+        break_from: usize,
+    ) -> Result<(PathBuf, Option<f64>), Error> {
         if truncated {
             self.writer.note("truncated", serde_json::json!(true));
             self.writer
@@ -641,19 +752,65 @@ impl Stage {
         for (key, value) in notes {
             self.writer.note(key, value.clone());
         }
+        if self.state.time >= self.stats.next_wave - 1e-9 {
+            self.stats.close_wave();
+        }
+        let unsettled = self.unsettled();
         if self.stats.seconds > 0.0 {
             let f32s = |v: &[f64]| v.iter().map(|&x| x as f32).collect::<Vec<f32>>();
             let fraction = f32s(&self.breaking_fraction());
             let (high, low) = (f32s(&self.stats.eta_max), f32s(&self.stats.eta_min));
             let from = self.stats.from;
-            self.writer.write_stats(
-                &["break_fraction", "eta_max", "eta_min"],
-                &[&fraction, &high, &low],
-                from,
-                self.state.time,
-            )?;
+            match self.wave_height() {
+                Some(height) => {
+                    let g = self.bed.grid();
+                    let line = break_line(
+                        &height,
+                        &self.bed.elevation,
+                        g.nx,
+                        g.ny,
+                        break_from,
+                        self.tide,
+                    );
+                    let points: Vec<serde_json::Value> = line
+                        .iter()
+                        .enumerate()
+                        .map(|(j, cell)| match cell {
+                            Some(i) => {
+                                let n = j * g.nx + i;
+                                serde_json::json!([
+                                    (*i as f64 + 0.5) * g.dx,
+                                    self.tide - f64::from(self.bed.elevation[n]),
+                                    height[n]
+                                ])
+                            }
+                            None => serde_json::Value::Null,
+                        })
+                        .collect();
+                    // Per row: [x in metres, still-water depth, per-wave height] where it breaks.
+                    self.writer.note("break_line", serde_json::json!(points));
+                    self.writer
+                        .note("waves_recorded", serde_json::json!(self.stats.waves.len()));
+                    if let Some(u) = unsettled {
+                        self.writer
+                            .note("unsettled_per_period", serde_json::json!(u));
+                    }
+                    self.writer.write_stats(
+                        &["break_fraction", "eta_max", "eta_min", "wave_height"],
+                        &[&fraction, &high, &low, &f32s(&height)],
+                        from,
+                        self.state.time,
+                    )?;
+                }
+                None => self.writer.write_stats(
+                    &["break_fraction", "eta_max", "eta_min"],
+                    &[&fraction, &high, &low],
+                    from,
+                    self.state.time,
+                )?,
+            }
         }
-        Ok(self.writer.finish()?)
+        Ok((self.writer.finish()?, unsettled))
     }
 }
 
@@ -985,28 +1142,41 @@ pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<
     }
     let coarse_steps = coarse.steps;
     let coarse_dispersion = coarse.solver.dispersion_stats();
+    // The coarse grid's break line starts past its wave-maker's own bump; the fine grid's past
+    // its relaxation zone, which is the coarse run.
+    let past_maker = ((maker_x + 6.0 * SIGMA_CELLS * grid.dx) / grid.dx).ceil() as usize;
     let (main_out, coarse_header) = match nest {
-        Some((fine, ..)) => {
-            let coarse_header = coarse.finish(truncated, &[])?;
+        Some((fine, _, _, f)) => {
+            let (coarse_header, _) = coarse.finish(truncated, &[], past_maker)?;
             let (steps, frames, max_rise) = (fine.steps, fine.frames, fine.max_rise);
             let dispersion = fine.solver.dispersion_stats();
             let notes = [(
                 "coarse_breaking_in_zone",
                 serde_json::json!(breaking_in_zone),
             )];
-            let header = fine.finish(truncated, &notes)?;
+            let (header, unsettled) = fine.finish(truncated, &notes, f.zone_offshore)?;
             (
-                (header, steps, frames, max_rise, dispersion),
+                (header, steps, frames, max_rise, dispersion, unsettled),
                 Some(coarse_header),
             )
         }
         None => {
             let (frames, max_rise) = (coarse.frames, coarse.max_rise);
-            let header = coarse.finish(truncated, &[])?;
-            ((header, 0, frames, max_rise, coarse_dispersion), None)
+            let (header, unsettled) = coarse.finish(truncated, &[], past_maker)?;
+            (
+                (header, 0, frames, max_rise, coarse_dispersion, unsettled),
+                None,
+            )
         }
     };
-    let (header, fine_steps, frames, max_rise, dispersion) = main_out;
+    let (header, fine_steps, frames, max_rise, dispersion, unsettled) = main_out;
+    if let Some(u) = unsettled.filter(|&u| u > MAX_UNSETTLED) {
+        warnings.push(format!(
+            "the waves had not settled: their height still changed by {:.0}% per period over the \
+             waves recorded (the median over the middle half); run longer with --duration",
+            100.0 * u
+        ));
+    }
     let wall_seconds = started.elapsed().as_secs_f64();
     Ok(Summary {
         steps: coarse_steps + fine_steps,

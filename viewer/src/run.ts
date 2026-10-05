@@ -135,6 +135,13 @@ function floats(buf: ArrayBuffer, expectedCount: number, what: string): Float32A
   return new Float32Array(buf);
 }
 
+/** Where a wave breaks on one row: metres along x, still-water depth, and its height there. */
+export interface BreakPoint {
+  x: number;
+  depth: number;
+  height: number;
+}
+
 export class Run {
   readonly header: RunHeader;
   /** Bed elevation in metres above mean sea level, `nx * ny`, y outer, x inner. */
@@ -142,7 +149,6 @@ export class Run {
   private readonly frames: Float32Array;
   private readonly stats: Float32Array | null;
   private readonly etaField: number;
-  private readonly breakMaps = new Map<number, Float32Array>();
   private steepness: Float32Array | undefined;
 
   constructor(header: RunHeader, bed: Float32Array, frames: Float32Array, stats: Float32Array | null = null) {
@@ -259,27 +265,26 @@ export class Run {
     return this.stats.subarray(f * this.cells, (f + 1) * this.cells);
   }
 
+  /** The height of each wave, crest to trough, averaged over the waves the run recorded at
+   * every step, or `null` for a run that did not record it. */
+  waveHeight(): Float32Array | null {
+    return this.stat("wave_height");
+  }
+
   /**
-   * For every cell, the fraction of the time it was clearly breaking (the `breaking` field at
-   * or above `threshold`), or `null` if the run has no such field. It shows where on the bed
-   * waves break, which one frame cannot. Runs that record it at every step give that; frames,
-   * which sample a breaking wave only now and then, are the fallback.
+   * Where the waves break, row by row along the shore: the point where the wave is tallest
+   * (which is where Ting & Kirby's laboratory saw it break), with the still-water depth and
+   * the wave's height there; `null` for a row with no break, and an empty list for a run that
+   * did not record it.
    */
-  breakMap(threshold = 0.8): Float32Array | null {
-    const recorded = this.stat("break_fraction");
-    if (recorded && threshold === 0.8) return recorded;
-    if (!this.hasField("breaking")) return null;
-    const cached = this.breakMaps.get(threshold);
-    if (cached) return cached;
-    const f = this.fieldIndex("breaking");
-    const map = new Float32Array(this.cells);
-    for (let k = 0; k < this.frameCount; k++) {
-      const frame = this.block(f, k);
-      for (let n = 0; n < map.length; n++) if ((frame[n] as number) >= threshold) map[n] = (map[n] as number) + 1;
-    }
-    for (let n = 0; n < map.length; n++) map[n] = (map[n] as number) / this.frameCount;
-    this.breakMaps.set(threshold, map);
-    return map;
+  get breakLine(): (BreakPoint | null)[] {
+    const raw = this.header.waves.break_line;
+    if (!Array.isArray(raw)) return [];
+    return raw.map((p) =>
+      Array.isArray(p) && p.length === 3 && p.every((v) => typeof v === "number")
+        ? { x: p[0] as number, depth: p[1] as number, height: p[2] as number }
+        : null,
+    );
   }
 
   /**

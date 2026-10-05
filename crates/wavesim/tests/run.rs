@@ -188,7 +188,9 @@ fn a_planned_run_lasts_until_the_swell_has_reached_the_shore_and_broken_a_few_ti
     let (distance, last) = (720.0 - p.maker_x, 0.5 * 45.0);
     let travel =
         2.0 * ((distance / gs).sqrt() - (last / gs).sqrt()) + last / (0.5 * wavecore::G).sqrt();
-    let expected = (2.0 + wavesim::BREAKS_SHOWN) * opts.period + travel;
+    let expected = (wavesim::RAMP_PERIODS + wavesim::SETTLE_PERIODS + wavesim::BREAKS_SHOWN)
+        * opts.period
+        + travel;
     assert!(
         (p.duration / expected - 1.0).abs() < 0.05,
         "{} vs {expected}",
@@ -600,4 +602,45 @@ fn breaking_and_the_surface_range_are_recorded_at_every_step() {
     let in_stats = fraction.iter().filter(|&&f| f > 0.0).count();
     println!("cells seen breaking: {in_frames} in frames, {in_stats} at every step");
     assert!(in_frames > 0 && in_stats > in_frames);
+
+    // The height of each wave, averaged, lies within the range of the whole window, and four
+    // waves were recorded.
+    let height = out
+        .stat("wave_height")
+        .expect("the run records the height per wave");
+    assert!((0..height.len()).all(|n| height[n] >= 0.0 && height[n] <= high[n] - low[n] + 1e-5));
+    assert_eq!(out.header.waves["waves_recorded"], 4);
+    // Every row breaks at the same place on an alongshore-uniform beach, where the wave is as
+    // tall as a breaking wave can be for its depth (the textbook breaking index, 0.55 to 1.2).
+    let line = out.header.waves["break_line"].as_array().unwrap();
+    assert_eq!(line.len(), NY);
+    assert!(line.iter().all(|p| p == &line[0]), "{line:?}");
+    let (depth, h) = (line[0][1].as_f64().unwrap(), line[0][2].as_f64().unwrap());
+    println!(
+        "breaks in {depth:.2} m of water, {h:.2} m tall (H/h = {:.2})",
+        h / depth
+    );
+    assert!((0.55..1.2).contains(&(h / depth)), "H/h = {}", h / depth);
+}
+
+#[test]
+fn the_break_line_is_where_each_row_is_tallest_before_the_shore() {
+    // Three rows of six cells; the bed rises to dry land in the fifth column of rows 0 and 1, and
+    // row 2 is dry from its second. Heights peak in column 3 of row 0 and column 1 of row 1; the
+    // spike on dry land in row 0 does not count, nor does column 0, before `from`.
+    let bed: Vec<f32> = [
+        [-5.0, -4.0, -3.0, -2.0, 1.0, 2.0],
+        [-5.0, -4.0, -3.0, -0.1, 1.0, 2.0],
+        [-5.0, 1.0, 2.0, 3.0, 4.0, 5.0],
+    ]
+    .concat();
+    let height = [
+        [9.0, 1.0, 2.0, 3.0, 0.5, 8.0],
+        [9.0, 2.5, 1.0, 7.0, 0.0, 0.0],
+        [9.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    ]
+    .concat();
+    let line = wavesim::break_line(&height, &bed, 6, 3, 1, 0.0);
+    // Row 1's column 3 is only 0.1 m deep, too shallow to count.
+    assert_eq!(line, vec![Some(3), Some(1), None]);
 }
