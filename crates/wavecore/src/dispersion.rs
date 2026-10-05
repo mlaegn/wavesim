@@ -49,10 +49,15 @@ pub struct Breaking {
 }
 
 impl Default for Breaking {
+    /// The slope criterion reads 0.8, which is where a run counts a cell as breaking, at a
+    /// surface angle of 30 degrees (slope 0.58), the onset criterion of the hybrid breaking
+    /// models this follows (Tissier et al. 2012, Kazolea et al. 2014). The fade used to start at
+    /// a slope of 0.20 (11 degrees) and was over by 24: Ting & Kirby's spilling and plunging
+    /// breakers then broke 1.0 and 1.3 m before they did in the laboratory, on a 1:35 beach.
     fn default() -> Self {
         Self {
             eta_ratio: (0.30, 0.55),
-            slope: (0.20, 0.45),
+            slope: (0.40, 0.65),
         }
     }
 }

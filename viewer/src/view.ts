@@ -226,6 +226,8 @@ export class RunView {
   private readonly uniforms: Record<string, THREE.IUniform>;
   private readonly lengthX: number;
   private readonly lengthY: number;
+  /** Something changed since the last draw. Drawing only then keeps a paused view idle. */
+  private dirty = true;
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -359,6 +361,7 @@ export class RunView {
 
   /** Show the surface at `t` seconds into the run. */
   setTime(t: number): void {
+    this.dirty = true;
     this.run.sampleInto(t, this.etaData);
     this.etaTexture.needsUpdate = true;
     if (this.run.hasField("breaking")) {
@@ -379,6 +382,7 @@ export class RunView {
 
   /** Hide the strips that exist only for the numerics: the wave-maker's bump and the sides. */
   setCrop(on: boolean): void {
+    this.dirty = true;
     this.uniform("uCropOn").value = on ? 1 : 0;
     const material = this.terrain.material as THREE.MeshStandardMaterial;
     material.clippingPlanes = on ? this.cropPlanes : [];
@@ -391,6 +395,7 @@ export class RunView {
    * full red).
    */
   setOverlay(kind: Overlay): void {
+    this.dirty = true;
     const map =
       kind === "breaks"
         ? this.run.breakMap()
@@ -404,27 +409,32 @@ export class RunView {
 
   /** Mark the line the side view is taken along, at `y` metres. */
   setTransect(y: number): void {
+    this.dirty = true;
     this.transect.position.z = -y;
     this.transect.position.y = 2 * (this.uniform("uExag").value as number);
   }
 
   /** Stretch heights (bed and water together) to make small waves visible. */
   setExaggeration(factor: number): void {
+    this.dirty = true;
     this.terrain.scale.y = factor;
     this.uniform("uExag").value = factor;
     this.transect.position.y = 2 * factor;
   }
 
   setFoam(on: boolean): void {
+    this.dirty = true;
     this.uniform("uFoamOn").value = on ? 1 : 0;
   }
 
   /** Mark the wave-maker line and the absorbing zones, which are numerical, not sea. */
   setZones(on: boolean): void {
+    this.dirty = true;
     this.uniform("uZonesOn").value = on ? 1 : 0;
   }
 
   setPreset(preset: Preset): void {
+    this.dirty = true;
     const { x0, x1, y0, y1 } = this.run.viewBox;
     const shore = Math.min(this.run.shoreline, x1);
     const sea = Math.max(shore - x0, 60); // how far the sea reaches from the wave-maker to the shore
@@ -457,6 +467,7 @@ export class RunView {
   }
 
   resize(): void {
+    this.dirty = true;
     const w = this.canvas.clientWidth;
     const h = this.canvas.clientHeight;
     if (w === 0 || h === 0) return;
@@ -465,9 +476,16 @@ export class RunView {
     this.camera.updateProjectionMatrix();
   }
 
+  /**
+   * Draw if anything changed: the time, a setting, or the camera (which keeps gliding for a
+   * moment after it is let go). A paused view with a still camera draws nothing, so it does not
+   * keep the GPU busy at 60 frames a second.
+   */
   render(): void {
-    this.controls.update();
+    const moved = this.controls.update();
+    if (!moved && !this.dirty) return;
     this.renderer.render(this.scene, this.camera);
+    this.dirty = false;
   }
 
   dispose(): void {

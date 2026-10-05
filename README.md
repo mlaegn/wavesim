@@ -95,11 +95,13 @@ cd wavesim
 cargo test
 ```
 
-That takes about 15 seconds and skips the physics checks that run whole simulations. Run those too, which takes about a minute, whenever the numerics change:
+That takes about 15 seconds and skips the physics checks that run whole simulations. Run those too whenever the numerics change:
 
 ```bash
-cargo test --release -- --include-ignored
+scripts/slow-tests.sh
 ```
+
+It runs on the efficiency cores, one test at a time, so the laptop stays cool; it takes longer.
 
 ### Test the fetch tool
 
@@ -211,7 +213,7 @@ The solver integrates the conservative nonlinear shallow-water equations for wat
 | Bed source term | Hydrostatic reconstruction (Audusse et al. 2004) | Still water stays still over any bed; depth stays non-negative at a shoreline |
 | Reconstruction | The free surface `h + b` and the velocities; MC limiter (`Order::Second`) or unlimited fifth order blended to it by `φ` (`Order::Fifth`) | Reconstructing the surface, not the depth, keeps a flat surface exactly flat; the limiter clips every smooth crest, which damps waves on a coarse grid, and fifth order damps them far less than third: a 14 s swell on 6 m cells keeps its height over a kilometre, where third order lost 6% (and 14% across the Pipeline shelf) |
 | Flux | HLL Riemann solver | Robust at shocks and wet/dry fronts |
-| Breaking | Shocks captured by the Riemann solver, with the dispersive terms and the fifth-order reconstruction faded out by `φ` where the wave is steep or tall for its depth | The shock dissipates the wave, so there is no separate breaking closure; the thresholds are tuned to textbook breaking indices |
+| Breaking | Shocks captured by the Riemann solver, with the dispersive terms and the fifth-order reconstruction faded out by `φ` where the wave is steep or tall for its depth; a cell reads as breaking at a surface angle of 30°, the onset criterion of the hybrid models this follows | The shock dissipates the wave, so there is no separate breaking closure; checked against Ting & Kirby's laboratory beach (see Verification) |
 | Dispersion | Serre–Green–Naghdi (flat-bed operator), `h w − ∇(c ∇·w) = r`, solved each stage by Jacobi-preconditioned conjugate gradients from the previous solution | Fully nonlinear; symmetric positive definite; 7 to 11 iterations per solve |
 | Boundaries | Reflective walls; optionally periodic in `y` | Periodic gives an alongshore-uniform wave with no edge diffraction |
 | Wave input | Internal mass source on a line (Wei et al. 1999), Gaussian-weighted, normalised over the discrete grid | Injects exactly the requested amplitude at any resolution; oblique waves via a phase shift along the line |
@@ -248,7 +250,9 @@ Choose the order with `Solver::with_order`; the default is `Order::Second`. Add 
 | Exact SGN solitary wave | `a/h = 0.2` for 20 s: amplitude 0.2001, crest within 0.01 m of the exact position, shape error 0.2%; shallow water steepens and ends 57% off |
 | Wave-maker with dispersion | Amplitude 0.0498 and 0.0499 against 0.05, wavelength within 0.1 rad of the SGN phase lag over 40 m (shallow water would be off by 0.25 rad) |
 | Big swell in deep water | A 2.5 m, 14 s swell in 8 m keeps at least 90% of its energy over 400 m (measured 95%); shallow water keeps 14% |
-| Shoaling and breaking on a 1:30 beach | Shoaling from 6 to 3.5 m of x1.13 matches Green's law (x1.14); the tallest wave has `H/h` 0.71 at 3.0 m depth (textbook 0.55 to 1.2); the surf zone stays depth-limited (`H/h` 0.97 at most in 1 to 2.5 m) |
+| Shoaling and breaking on a 1:30 beach | Shoaling from 6 to 3.5 m of x1.15 matches Green's law (x1.14); the tallest wave has `H/h` 0.81 at 2.8 m depth (textbook 0.55 to 1.2; Goda about 0.9); the surf zone stays depth-limited, its height falling steadily with the depth (`H/h` up to 1.01 in 1 to 2.5 m, where real saturated surf zones sit near 0.8) |
+| Breaking against a laboratory beach | Ting & Kirby's (1994) spilling (0.125 m, 2 s) and plunging (0.128 m, 5 s) breakers on a 1:35 slope, made by a relaxation zone pulling towards a cnoidal wave tuned to the measured incident height: the wave is tallest within 0.5 m of where the laboratory saw it break, a bound set before the first run (measured 0.36 m late and 0.23 m early, depth at breaking within 1 cm), on 10, 5 and 2.5 cm cells alike. Where the switch first reads breaking moves with the cell size and is reported, not tested |
+| Cnoidal waves | Height, zero mean and period exact; wavelength within 2% of the reported 3.85 m (3.785 m); the long-wave limit for a small wave |
 | Dispersive solves | Converge every time, in under 20 iterations on average |
 | Thin film at a run-up | A white-box test: changing a 1 mm film's speed from 1 to 1000 m/s changes nothing about its neighbours, and the test fails if the masking is removed |
 | Masked dispersive operator | Symmetric and positive definite with a patchy mask, masked cells exactly zero |
@@ -264,6 +268,7 @@ Choose the order with `Solver::with_order`; the default is `Order::Second`. Add 
 | Sponge over land | A sponge relaxes depth and momentum at the same rate, so water on land inside it keeps its velocity to 1e-6 (the old rule sped it up 14% in three steps; on Pipeline it left films microns deep at tens of metres per second, which cut the time step eightfold) |
 | Relaxation zones | Relaxing towards still water keeps a lake at rest over a rough bed; towards a moving target, depth and momentum follow the exact exponential and the water never speeds up |
 | Two grids against one | On a 1:50 beach a 0.5 m, 14 s swell crosses 250 m on 4 m cells and then the reef on 2 m cells: within 4% of one 2 m grid on average and 10% at any point, bounds set before the first run (measured 2.3% and 8.3%); on an alongshore-uniform beach the rows agree to a ten-thousandth of the wave height (measured 6e-6 m); a swell shorter than 20 coarse cells at the wave-maker is refused |
+| Statistics at every step | Over the last four periods each grid records how long every cell spent breaking and the highest and lowest surface; every frame in that window lies within them, and they see more of the break than frames do (264 cells against 240 on a test beach) |
 | Budget | A run estimated to take longer than its budget is refused before it writes anything; one that runs over its limit anyway stops and keeps a valid shorter run |
 | Coarsening | 2 x 2 blocks are averaged, the leftover edge cells dropped |
 | Viewer data layer | 33 tests: header and file validation, frame offsets, cubic interpolation (follows a wave with under 2% error where a straight line errs by 10%; never puts water below the bed), runs that start after zero, the side margins, and reading the exact bytes the Rust writer produces |
@@ -276,7 +281,7 @@ The lake-at-rest and dam-break conservation tests run for both orders. L1 error 
 
 **Two shoaling tests run in the linear regime.** Green's law and the wave-action law are linear results. At 3 cm in about 2 m of water, nonlinear steepening of shallow-water waves already drains a few percent of the first harmonic over 160 m, so those two tests use 5 mm waves. The beaches are long enough that the measurement points sit well away from the sponge, whose small reflection otherwise ripples the amplitude by a few percent.
 
-`cargo test` takes about 15 seconds and skips the tests marked slow, which run whole simulations; `cargo test --release -- --include-ignored` runs everything in about a minute. The test profile is optimised (`[profile.test] opt-level = 3`).
+`cargo test` takes about 15 seconds and skips the tests marked slow, which run whole simulations; `scripts/slow-tests.sh` runs everything, on the efficiency cores. The test profile is optimised (`[profile.test] opt-level = 3`).
 
 ## Project Structure
 
@@ -342,11 +347,12 @@ Nothing here is meant to run a laptop hot, and the guard is built in, so it does
 | Where a run goes | **Background priority on macOS**, which keeps it on the efficiency cores: cool and quiet, about 3.5 times slower than the performance cores | `--priority normal` for full speed, and heat |
 | How long a run may take | **7 minutes**, checked twice. Before it starts, the run estimates its own time for its threads and priority and **refuses** if that is over the limit, saying what to change; nothing is written. During it, the same limit is a hard stop: a run that takes longer anyway stops there and keeps what it has, a shorter run that is complete, viewable and marked `truncated` | `--max-minutes N` allows N; `0` lifts the limit |
 | Threads | 4 by default, never more than half the machine's cores | `--threads`; `WAVESIM_ALL_CORES=1` lifts the ceiling |
-| `cargo test` | The physics checks that run whole simulations are skipped unless asked for: about 15 seconds instead of a minute and a half. When they run, 3 tests at a time with 4 solver threads each | `cargo test --release -- --include-ignored` |
+| `cargo test` | The physics checks that run whole simulations are skipped unless asked for: about 15 seconds instead of a minute and a half | `scripts/slow-tests.sh` runs them on the efficiency cores, one at a time, with 2 solver threads |
+| The viewer | Draws only when something changes (playing, a setting, the camera moving); paused and still, it is idle | |
 | Compiling | 4 jobs (`.cargo/config.toml`) | `CARGO_BUILD_JOBS` |
 | The viewer's tests | 2 workers (`viewer/vite.config.ts`) | |
 
-The results do not depend on threads or priority: a run on 1 thread and on 4 give byte-identical files. The estimate is calibrated on one Apple M5 and errs on the long side; the hard stop is there for when it is wrong. There is no way to read a laptop's temperature without administrator rights, so the guarantee is by construction (the efficiency cores, a few threads, a time limit), not by measurement.
+The results do not depend on threads or priority: a run on 1 thread and on 4 give byte-identical files. The estimate is calibrated on one Apple M5 and errs on the long side: it counts the ghost layers every grid carries, which are most of a thin grid's cells, and runs a grid of fewer than 40,000 cells on one thread, as the solver does. It came out 4% to 80% above the measured time, longest for thin 1D grids; before it counted those it was up to four times too short. The hard stop is there for when it is wrong. There is no way to read a laptop's temperature without administrator rights, so the guarantee is by construction (the efficiency cores, a few threads, a time limit), not by measurement.
 
 ## Development
 
@@ -359,7 +365,11 @@ The results do not depend on threads or priority: a run on 1 thread and on 4 giv
 - Depth-averaged: no overturning lip, so no barrels.
 - First order at shorelines: cells at or beside a wet/dry front drop to first order to stay positive, so runup is more diffusive than the open water.
 - Dispersion is the Serre–Green–Naghdi flat-bed operator: accurate in `kh` (wavenumber times depth) up to about 1 to 2, with the bed-slope terms of the dispersive operator omitted. Plain shallow water (`--dispersive false`) is accurate only up to `kh` of about 0.3 and steepens tall waves into shocks wherever they are.
-- Breaking is a switch tuned to textbook breaking indices, not a model fitted to measurements. On a 1:30 beach it begins somewhat early (`H/h` about 0.7 where Goda's formula suggests 0.9), and it has no spilling or plunging distinction.
+- Breaking is a switch, not a model of the overturning lip: it shows where a wave breaks and how tall it gets, not its shape, and it does not tell spilling from plunging.
+- **Read the break point as where the wave is tallest.** That matches Ting & Kirby's laboratory beach within 0.4 m and hardly moves with the cell size. Where the switch first reads breaking (the seaward edge of the break map) moves seaward as cells shrink, because it measures a slope over two cells.
+- Cells much finer than the water is deep admit ripples a few cells long, which these equations carry wrongly (their dispersion is right only for waves longer than about twice the depth) and which read as breaking: in Ting & Kirby's 0.4 m flume, 2.5 cm cells do and 5 cm cells do not. Keep cells no finer than about an eighth of the depth where waves break.
+- On 3 m cells the height at breaking is about 9% low against 1.5 m cells, which are converged (on a Pipeline reef line; the break point itself moves under 4 m). See [docs/dispersion.md](docs/dispersion.md).
+- The inner surf zone loses its energy a little too slowly: `H/h` reaches about 1.0 there, where real saturated surf zones sit near 0.8.
 - Dispersion costs about three times as much as shallow water per step (78 ms against 25 ms on 200,000 cells, single-threaded).
 - The surf zone is where the scheme falls back to the MC limiter, so the break itself is resolved only as well as its cells allow; on a 1:30 beach, 3 m cells under-predict surf-zone heights against 1.5 m ones (see [docs/dispersion.md](docs/dispersion.md)).
 - A sinusoidal wave in the cnoidal regime (Ursell number above about 25) changes shape as it travels, so its crest-to-trough height is not the requested height; its energy is.

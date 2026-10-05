@@ -8,10 +8,9 @@
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
-/// Below this many cells a loop runs in place: handing rows to threads costs more than the
-/// loop saves on a small grid.
-#[cfg(feature = "parallel")]
-const MIN_CELLS: usize = 40_000;
+/// Below this many cells (counting the ghost layers) a loop runs in place: handing rows to
+/// threads costs more than the loop saves on a small grid.
+pub const MIN_CELLS: usize = 40_000;
 
 #[cfg(feature = "parallel")]
 fn threaded(cells: usize) -> bool {

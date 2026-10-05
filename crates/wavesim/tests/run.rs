@@ -436,8 +436,24 @@ fn the_time_estimate_grows_with_the_work_and_shrinks_with_threads() {
     opts.duration = Some(120.0);
     assert!((estimate(&opts) / base - 2.0).abs() < 1e-9);
     opts.duration = Some(60.0);
+    // This grid is too small to share out, so it runs on one thread whatever is asked for...
     opts.threads = 1;
-    assert!(estimate(&opts) > base);
+    assert_eq!(estimate(&opts), base);
+    // ...where one 300 rows wide does not, even after the run crops its offshore end.
+    let wide = Bed {
+        header: Bed::header_for("wide", NX, 300, DX, DX),
+        elevation: (0..NX * 300)
+            .map(|n| -beach_depth(((n % NX) as f64 + 0.5) * DX) as f32)
+            .collect(),
+    };
+    let on = |threads| {
+        let o = RunOptions {
+            threads,
+            ..opts.clone()
+        };
+        estimate_seconds(&wide, &o, &layout(&wide, &o).unwrap())
+    };
+    assert!(on(1) > on(4), "{} vs {}", on(1), on(4));
     opts.threads = 4;
     opts.background = true;
     assert!(
@@ -537,4 +553,51 @@ fn a_swell_too_short_for_the_coarse_grid_is_refused() {
     let bed = Bed::read(&opts.bed).unwrap();
     let err = layout(&bed, &opts).unwrap_err();
     assert!(err.to_string().contains("--single"), "{err}");
+}
+
+#[test]
+#[ignore = "slow physics check: cargo test --release -- --include-ignored"]
+fn breaking_and_the_surface_range_are_recorded_at_every_step() {
+    // Frames every 5 s see a breaking 8 s wave only now and then; the statistics see every
+    // step of the last four periods. Every frame in that window is one of those steps, so the
+    // statistics must contain it: the highest surface at least the frame's, the lowest at most,
+    // and a cell a frame shows breaking must have spent time breaking. And they see more.
+    let dir = scratch("stats");
+    let mut opts = options(&dir, beach(&dir));
+    opts.dispersive = true;
+    opts.height = 1.5;
+    opts.duration = None;
+    run(&opts, |_| {}).unwrap();
+    let out = Run::read(&opts.out).unwrap();
+    let st = out
+        .header
+        .stats
+        .clone()
+        .expect("the run records statistics");
+    let period = opts.period;
+    assert!((st.to_s - st.from_s - wavesim::BREAKS_SHOWN * period).abs() < 1e-6);
+    let (fraction, high, low) = (
+        out.stat("break_fraction").unwrap(),
+        out.stat("eta_max").unwrap(),
+        out.stat("eta_min").unwrap(),
+    );
+    assert!(fraction.iter().all(|f| (0.0..=1.0).contains(f)));
+    let mut seen_in_frames = vec![false; fraction.len()];
+    for k in (0..out.header.frame_count).filter(|&k| out.header.times[k] > st.from_s + 1e-9) {
+        let (eta, breaking) = (out.frame(k), out.field("breaking", k).unwrap());
+        for n in 0..eta.len() {
+            assert!(
+                high[n] >= eta[n] - 1e-6 && low[n] <= eta[n] + 1e-6,
+                "frame {k}, cell {n}"
+            );
+            if f64::from(breaking[n]) >= wavesim::BREAKING {
+                assert!(fraction[n] > 0.0, "frame {k} shows cell {n} breaking");
+                seen_in_frames[n] = true;
+            }
+        }
+    }
+    let in_frames = seen_in_frames.iter().filter(|&&b| b).count();
+    let in_stats = fraction.iter().filter(|&&f| f > 0.0).count();
+    println!("cells seen breaking: {in_frames} in frames, {in_stats} at every step");
+    assert!(in_frames > 0 && in_stats > in_frames);
 }

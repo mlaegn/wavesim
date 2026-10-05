@@ -11,8 +11,8 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use wavecore::{
-    Dispersion, DispersionStats, G, GHOST, Order, Relaxation, Solver, Sponge, State, WaveMaker,
-    linear_wave,
+    Dispersion, DispersionStats, G, GHOST, Order, Relaxation, Solver, Sponge, State,
+    THREADED_CELLS, WaveMaker, linear_wave,
 };
 pub use waveio::Bed;
 use waveio::RunWriter;
@@ -428,15 +428,18 @@ fn beds(bed: &Bed, layout: &Layout) -> (Bed, Option<Bed>) {
 }
 
 /// A rough guess of how long a run will take in wall-clock seconds, so that a long one can be
-/// refused before it starts. It counts each grid's cells and its steps at the time step of its
-/// deepest water, at a cost per cell and step calibrated on one Apple M5: the nested Pipeline run
-/// (319 x 200 cells of 6 m, then 179 x 400 of 3 m) took 5.7 minutes on 4 threads on the
-/// efficiency cores, which are 3.5 times slower than the others. Treat it as the right order of
-/// magnitude, not a promise; the wall-clock limit catches what it gets wrong.
+/// refused before it starts. It counts each grid's cells, ghost layers included, and its steps at
+/// the time step of its deepest water, at a cost per cell and step calibrated on one Apple M5:
+/// the nested Pipeline run (319 x 200 cells of 6 m, then 179 x 400 of 3 m) took 5.7 minutes on 4
+/// threads on the efficiency cores, which are 3.5 times slower than the others; a grid too small
+/// to share out runs on one thread. It errs long, by 4% for that run and up to 80% for a thin 1D
+/// grid; the wall-clock limit catches what it gets wrong.
 pub fn estimate_seconds(bed: &Bed, opts: &RunOptions, layout: &Layout) -> f64 {
     let one_thread = if opts.dispersive { 650e-9 } else { 325e-9 };
     let speedup = (opts.threads.clamp(1, 6) as f64).powf(0.8);
     let cores = if opts.background { 3.5 } else { 1.0 };
+    // Every cell the solver stores, ghost layers included, which on a thin grid are most of
+    // them; and a grid too small to share out runs on one thread.
     let stage = |bed: &Bed, seconds: f64| {
         let grid = bed.grid();
         let deepest = bed
@@ -445,15 +448,20 @@ pub fn estimate_seconds(bed: &Bed, opts: &RunOptions, layout: &Layout) -> f64 {
             .fold(f64::INFINITY, |m, &z| m.min(f64::from(z)));
         let c = (G * (opts.tide - deepest).max(1.0)).sqrt();
         let dt = 0.4 / (c / grid.dx + c / grid.dy);
-        (grid.nx * grid.ny) as f64 * seconds / dt
+        let threads = if grid.cells() >= THREADED_CELLS {
+            speedup
+        } else {
+            1.0
+        };
+        grid.cells() as f64 * seconds / dt * one_thread / threads
     };
     let (coarse, fine) = beds(bed, layout);
     let duration = layout.coarse.duration;
-    let mut cell_steps = stage(&coarse, duration);
+    let mut seconds = stage(&coarse, duration);
     if let (Some(fine), Some(f)) = (fine, layout.fine) {
-        cell_steps += stage(&fine, duration - f.start);
+        seconds += stage(&fine, duration - f.start);
     }
-    cell_steps * one_thread / speedup * cores
+    seconds * cores
 }
 
 /// One grid being run: its solver, its water, and the run directory it writes frames to.
@@ -470,7 +478,24 @@ struct Stage {
     max_rise: f64,
     eta: Vec<f32>,
     breaking: Vec<f32>,
+    stats: Stats,
 }
+
+/// What a grid records at every step from `from` on (the last [`BREAKS_SHOWN`] periods), rather
+/// than in frames, which sample a 14 s wave only seven times a period: how long each cell spent
+/// breaking, and the highest and lowest the surface got there.
+struct Stats {
+    from: f64,
+    seconds: f64,
+    breaking_seconds: Vec<f64>,
+    eta_max: Vec<f64>,
+    eta_min: Vec<f64>,
+    now: Vec<f64>,
+    phi: Vec<f64>,
+}
+
+/// A cell reads as breaking where the breaking field is at least this.
+pub const BREAKING: f64 = 0.8;
 
 impl Stage {
     fn new(
@@ -479,6 +504,7 @@ impl Stage {
         out: &std::path::Path,
         settings: serde_json::Value,
         start: f64,
+        stats_from: f64,
         opts: &RunOptions,
     ) -> Result<Self, Error> {
         let grid = bed.grid();
@@ -499,7 +525,44 @@ impl Stage {
             max_rise: 0.0,
             eta: vec![0.0; cells],
             breaking: vec![0.0; cells],
+            stats: Stats {
+                from: stats_from.max(start),
+                seconds: 0.0,
+                breaking_seconds: vec![0.0; cells],
+                eta_max: vec![f64::NEG_INFINITY; cells],
+                eta_min: vec![f64::INFINITY; cells],
+                now: vec![0.0; cells],
+                phi: Vec::new(),
+            },
         })
+    }
+
+    /// Record the statistics for a step of `dt` that has just ended (for the fine grid, after
+    /// its relaxation zone has pulled it towards the coarse run).
+    fn record(&mut self, dt: f64) {
+        let st = &mut self.stats;
+        let inside = dt.min(self.state.time - st.from);
+        if inside <= 0.0 {
+            return;
+        }
+        self.solver
+            .breaking_into(&mut self.state, &mut st.phi, &mut st.now);
+        let grid = self.bed.grid();
+        for (n, (i, j)) in grid.interior().enumerate() {
+            let eta = self.state.h[grid.idx(i, j)] + f64::from(self.bed.elevation[n]);
+            st.eta_max[n] = st.eta_max[n].max(eta);
+            st.eta_min[n] = st.eta_min[n].min(eta);
+            if st.now[n] >= BREAKING {
+                st.breaking_seconds[n] += inside;
+            }
+        }
+        st.seconds += inside;
+    }
+
+    /// The fraction of the recorded time each cell spent breaking.
+    fn breaking_fraction(&self) -> Vec<f64> {
+        let t = self.stats.seconds.max(f64::MIN_POSITIVE);
+        self.stats.breaking_seconds.iter().map(|s| s / t).collect()
     }
 
     fn time(&self) -> f64 {
@@ -557,10 +620,11 @@ impl Stage {
         self.steps += 1;
     }
 
-    /// One step of [`Stage::next_dt`].
+    /// One step of [`Stage::next_dt`], recorded.
     fn step(&mut self, until: f64) -> Result<(), Error> {
         let dt = self.next_dt(until)?;
         self.advance(dt);
+        self.record(dt);
         Ok(())
     }
 
@@ -576,6 +640,18 @@ impl Stage {
         }
         for (key, value) in notes {
             self.writer.note(key, value.clone());
+        }
+        if self.stats.seconds > 0.0 {
+            let f32s = |v: &[f64]| v.iter().map(|&x| x as f32).collect::<Vec<f32>>();
+            let fraction = f32s(&self.breaking_fraction());
+            let (high, low) = (f32s(&self.stats.eta_max), f32s(&self.stats.eta_min));
+            let from = self.stats.from;
+            self.writer.write_stats(
+                &["break_fraction", "eta_max", "eta_min"],
+                &[&fraction, &high, &low],
+                from,
+                self.state.time,
+            )?;
         }
         Ok(self.writer.finish()?)
     }
@@ -670,29 +746,6 @@ impl Sampler {
     }
 }
 
-/// Write the coarse grid's frame if one is due, and count it if the swell breaks there under the
-/// fine grid's offshore zone, in the middle half of the width (`columns`, for a nested run).
-fn coarse_frame(
-    coarse: &mut Stage,
-    columns: Option<(usize, usize)>,
-    breaking: &mut usize,
-) -> Result<bool, Error> {
-    if !coarse.frame_if_due()? {
-        return Ok(false);
-    }
-    if let Some((first, last)) = columns {
-        let g = coarse.bed.grid();
-        if (g.ny / 4..g.ny - g.ny / 4).any(|j| {
-            coarse.breaking[j * g.nx + first..j * g.nx + last]
-                .iter()
-                .any(|&v| v >= 0.8)
-        }) {
-            *breaking += 1;
-        }
-    }
-    Ok(true)
-}
-
 /// How far the run has got: the coarse grid's time, and the main run's frames.
 fn progress(coarse: &Stage, fine: Option<&Stage>, duration: f64) -> Progress {
     let main = fine.unwrap_or(coarse);
@@ -768,7 +821,16 @@ pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<
         Some(_) => opts.out.join("coarse"),
         None => opts.out.clone(),
     };
-    let mut coarse = Stage::new(coarse_bed, solver, &coarse_out, settings, 0.0, opts)?;
+    let stats_from = plan.duration - BREAKS_SHOWN * opts.period;
+    let mut coarse = Stage::new(
+        coarse_bed,
+        solver,
+        &coarse_out,
+        settings,
+        0.0,
+        stats_from,
+        opts,
+    )?;
 
     // The fine grid, its relaxation zones, and the coarse water they are pulled towards.
     let mut nest = match (layout.fine, fine_bed) {
@@ -802,14 +864,13 @@ pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<
                 "dispersive": opts.dispersive,
             });
             let solver = solver_for(&bed, opts);
-            let stage = Stage::new(bed, solver, &opts.out, settings, f.start, opts)?;
+            let stage = Stage::new(bed, solver, &opts.out, settings, f.start, stats_from, opts)?;
             Some((stage, zone, sampler, f))
         }
         _ => None,
     };
 
     let mut truncated = false;
-    let mut breaking_in_zone = 0_usize;
     let mut fine_seconds = 0.0;
     // Columns of the coarse grid under the fine grid's offshore relaxation zone.
     let zone_columns = layout.fine.map(|f| {
@@ -834,7 +895,7 @@ pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<
             .as_ref()
             .is_some_and(|(_, _, _, f)| coarse.time() >= f.start - 1e-9);
         if !fine_active {
-            if coarse_frame(&mut coarse, zone_columns, &mut breaking_in_zone)? {
+            if coarse.frame_if_due()? {
                 on_progress(&progress(
                     &coarse,
                     nest.as_ref().map(|n| &n.0),
@@ -853,14 +914,14 @@ pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<
         };
         fine.frame_if_due()?;
         if fine.time() >= plan.duration - 1e-9 {
-            coarse_frame(&mut coarse, zone_columns, &mut breaking_in_zone)?;
+            coarse.frame_if_due()?;
             break;
         }
         // The fine grid's own step, with the coarse run ahead of it to bracket its end.
         let dt = fine.next_dt(plan.duration)?;
         let end = fine.time() + dt;
         while coarse.time() < end - 1e-9 {
-            if coarse_frame(&mut coarse, zone_columns, &mut breaking_in_zone)? {
+            if coarse.frame_if_due()? {
                 on_progress(&progress(&coarse, Some(fine), plan.duration));
             }
             before = Some(coarse.state.clone());
@@ -901,15 +962,25 @@ pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<
         fine.advance(dt);
         let fg = fine.bed.grid();
         zone.apply(&fg, &fine.solver.bed, &mut fine.state, dt, lerp);
+        fine.record(dt);
         fine_seconds += fine_started.elapsed().as_secs_f64();
     }
 
+    // The coarse run must not break where it drives the fine one: under the fine grid's
+    // offshore zone, in the middle half of the width, which is the part worth looking at.
+    let breaking_in_zone = zone_columns.map_or(0.0, |(first, last)| {
+        let (g, fraction) = (coarse.bed.grid(), coarse.breaking_fraction());
+        (g.ny / 4..g.ny - g.ny / 4)
+            .flat_map(|j| fraction[j * g.nx + first..j * g.nx + last].to_vec())
+            .fold(0.0, f64::max)
+    });
     let mut warnings = Vec::new();
-    if breaking_in_zone > 0 {
+    if breaking_in_zone > 0.0 {
         warnings.push(format!(
-            "the coarse run broke inside the fine grid's offshore relaxation zone in \
-             {breaking_in_zone} frames, in the middle half of the width: the fine grid should start \
-             in deeper water"
+            "the coarse run broke inside the fine grid's offshore relaxation zone {:.0}% of the \
+             time at worst, in the middle half of the width: the fine grid should start in deeper \
+             water",
+            100.0 * breaking_in_zone
         ));
     }
     let coarse_steps = coarse.steps;
@@ -920,7 +991,7 @@ pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<
             let (steps, frames, max_rise) = (fine.steps, fine.frames, fine.max_rise);
             let dispersion = fine.solver.dispersion_stats();
             let notes = [(
-                "breaking_in_offshore_zone_frames",
+                "coarse_breaking_in_zone",
                 serde_json::json!(breaking_in_zone),
             )];
             let header = fine.finish(truncated, &notes)?;

@@ -41,11 +41,30 @@ The hyperbolic part is the existing finite-volume solver, so mass and momentum c
 | Criterion | Fades from | Fully off at |
 |---|---|---|
 | `η / h` (surface above still water over total depth) | 0.30 | 0.55 |
-| `|∇η|` (surface slope) | 0.20 | 0.45 |
+| `|∇η|` (surface slope) | 0.40 | 0.65 |
 
 `φ` sits inside the gradient, so the operator stays symmetric. Water shallower than 5 cm gets `φ = 0`.
 
-These thresholds were chosen so that a plane beach breaks at an index `H/h` within the textbook range (0.7 to 1.2), then left alone. **They are calibrated to that range, not to measurements.** On a 1:30 beach with an 8 s, 1.5 m swell the model breaks at `H/h` of about 0.7 at 3 m depth. Goda's formula for the limit breaker height gives about 0.9, so breaking starts somewhat early.
+A run counts a cell as breaking where the switch reads 0.8, which the slope criterion reaches at a surface angle of 30°, the onset criterion of the hybrid breaking models this follows (Tissier et al. 2012, Kazolea et al. 2014). It used to fade from a slope of 0.20 (11°) and be off by 24°: on Ting & Kirby's laboratory beach that broke the spilling and the plunging breaker 1.0 and 1.3 m early, and on a 1:30 beach at `H/h` 0.7 where Goda's formula suggests 0.9. With the 30° onset the 1:30 beach breaks at `H/h` 0.81.
+
+**Against the laboratory.** Ting & Kirby (1994) recorded where regular waves broke on a 1:35 beach from a flume 0.40 m deep: a spilling breaker (0.125 m, 2 s) at x = 6.40 m in 0.196 m of water, and a plunging one (0.128 m, 5 s) at x = 7.795 m in 0.156 m. The test makes the waves with a relaxation zone pulling towards a first-order cnoidal wave, tuned once so the incident height matches the measured one, as the laboratory tuned its paddle. On 5 cm cells:
+
+| | Tallest (the break point) | Switch first reads breaking | Laboratory |
+|---|---|---|---|
+| Spilling | x = 6.76 m, 0.187 m deep, 0.179 m tall | x = 6.91 m | x = 6.40 m, 0.196 m |
+| Plunging | x = 7.57 m, 0.164 m deep, 0.192 m tall | x = 7.22 m | x = 7.795 m, 0.156 m |
+
+On 10, 5 and 2.5 cm cells the tallest point is at 6.47, 6.76, 6.63 m (spilling) and 7.57, 7.57, 7.46 m (plunging): it hardly moves. The switch's first reading moves seaward as the cells shrink (7.47, 6.91, 5.48 m and 7.57, 7.22, 4.81 m), because it measures a slope over two cells; on 2.5 cm cells, an eighth of the breaking depth, ripples a few cells long that these equations carry wrongly set it off far too early. So the break point is where the wave is tallest, and the seaward edge of a break map is uncertain by about that much.
+
+**On the Pipeline reef.** One cross-shore line of the Pipeline bed (y = 361.5 m, through the part of the reef where the 2.5 m, 14 s swell breaks well out), run in 1D on 3, 1.5 and 0.75 m cells from the same profile:
+
+| Cells | Tallest (the break point) | Height there | Switch first reads breaking |
+|---|---|---|---|
+| 3 m | x = 2191.5 m, 4.05 m deep | 4.38 m | x = 2203.5 m |
+| 1.5 m | x = 2195.2 m, 3.83 m deep | 4.78 m | x = 2193.8 m |
+| 0.75 m | x = 2196.4 m, 3.77 m deep | 4.81 m | x = 980.6 m, in 23 m of water |
+
+The break point moves 3.7 m and then 1.2 m, so where it breaks is settled on 3 m cells. The height at breaking grows 9% and then 0.6%: 3 m cells under-predict it by about 9%, 1.5 m cells are converged. On 0.75 m cells, thirty times finer than the 23 m of water offshore, the ripples of the laboratory flume appear again and set the switch off a kilometre out to sea; that is why a nested run keeps 6 m cells offshore. (In 1D the line has no refraction, so its heights are not the 2D run's.)
 
 ## Reconstruction: what was tried
 

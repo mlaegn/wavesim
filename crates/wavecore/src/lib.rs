@@ -47,6 +47,10 @@ pub mod dispersion;
 pub mod forcing;
 pub mod grid;
 mod par;
+
+/// Grids with fewer cells than this, counting the ghost layers, run on one thread whatever the
+/// thread pool holds.
+pub const THREADED_CELLS: usize = par::MIN_CELLS;
 pub mod solver;
 pub mod state;
 

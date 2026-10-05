@@ -33,6 +33,8 @@ export interface RunHeader {
   };
   waves: Record<string, unknown>;
   source?: Record<string, unknown> | null;
+  /** Fields recorded at every step over a window of the run, in their own file. */
+  stats?: { file: string; fields: string[]; from_s: number; to_s: number } | null;
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>
@@ -107,7 +109,18 @@ export function parseHeader(raw: unknown): RunHeader {
     },
     waves: isRecord(raw.waves) ? raw.waves : {},
     source: isRecord(raw.source) ? raw.source : null,
+    stats: parseStats(raw.stats),
   };
+}
+
+function parseStats(raw: unknown): RunHeader["stats"] {
+  if (raw === undefined || raw === null) return null;
+  if (!isRecord(raw)) throw new RunError('run.json: "stats" must be an object');
+  const fields = raw.fields;
+  if (!Array.isArray(fields) || !fields.every((f) => typeof f === "string")) {
+    throw new RunError('run.json: "stats.fields" must be a list of names');
+  }
+  return { file: str(raw, "file"), fields: fields as string[], from_s: num(raw, "from_s"), to_s: num(raw, "to_s") };
 }
 
 /** True when this machine stores floats little-endian, as the files do. */
@@ -127,14 +140,16 @@ export class Run {
   /** Bed elevation in metres above mean sea level, `nx * ny`, y outer, x inner. */
   readonly bed: Float32Array;
   private readonly frames: Float32Array;
+  private readonly stats: Float32Array | null;
   private readonly etaField: number;
   private readonly breakMaps = new Map<number, Float32Array>();
   private steepness: Float32Array | undefined;
 
-  constructor(header: RunHeader, bed: Float32Array, frames: Float32Array) {
+  constructor(header: RunHeader, bed: Float32Array, frames: Float32Array, stats: Float32Array | null = null) {
     this.header = header;
     this.bed = bed;
     this.frames = frames;
+    this.stats = stats;
     this.etaField = header.fields.indexOf("eta");
   }
 
@@ -237,12 +252,22 @@ export class Run {
     }
   }
 
+  /** Statistics field `name`, recorded at every step, or `null` if the run has none. */
+  stat(name: string): Float32Array | null {
+    const f = this.header.stats?.fields.indexOf(name) ?? -1;
+    if (f < 0 || !this.stats) return null;
+    return this.stats.subarray(f * this.cells, (f + 1) * this.cells);
+  }
+
   /**
-   * For every cell, the fraction of the run's frames in which it was clearly breaking (the
-   * `breaking` field at or above `threshold`), or `null` if the run has no such field. It
-   * shows where on the bed waves break, which one frame cannot.
+   * For every cell, the fraction of the time it was clearly breaking (the `breaking` field at
+   * or above `threshold`), or `null` if the run has no such field. It shows where on the bed
+   * waves break, which one frame cannot. Runs that record it at every step give that; frames,
+   * which sample a breaking wave only now and then, are the fallback.
    */
   breakMap(threshold = 0.8): Float32Array | null {
+    const recorded = this.stat("break_fraction");
+    if (recorded && threshold === 0.8) return recorded;
     if (!this.hasField("breaking")) return null;
     const cached = this.breakMaps.get(threshold);
     if (cached) return cached;
@@ -341,13 +366,20 @@ export class Run {
   }
 }
 
-/** Assemble a run from the three files' contents, checking sizes against the header. */
-export function runFromBuffers(headerJson: unknown, bedBytes: ArrayBuffer, frameBytes: ArrayBuffer): Run {
+/** Assemble a run from its files' contents, checking sizes against the header. */
+export function runFromBuffers(
+  headerJson: unknown,
+  bedBytes: ArrayBuffer,
+  frameBytes: ArrayBuffer,
+  statsBytes: ArrayBuffer | null = null,
+): Run {
   if (!isLittleEndian()) throw new RunError("this device is big-endian; the run files are little-endian");
   const header = parseHeader(headerJson);
   const cells = header.nx * header.ny;
   const bed = floats(bedBytes, cells, header.bed);
   const frames = floats(frameBytes, header.frame_count * header.fields.length * cells, header.frames);
   for (const v of bed) if (!Number.isFinite(v)) throw new RunError(`${header.bed} contains a value that is not finite`);
-  return new Run(header, bed, frames);
+  const st = header.stats;
+  const stats = st && statsBytes ? floats(statsBytes, st.fields.length * cells, st.file) : null;
+  return new Run(header, bed, frames, stats);
 }

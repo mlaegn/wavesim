@@ -299,6 +299,28 @@ describe("nested and walled runs", () => {
   });
 });
 
+describe("statistics recorded at every step", () => {
+  it("are what the break map shows, rather than the frames", () => {
+    const stats = { file: "stats.f32", fields: ["break_fraction", "eta_max"], from_s: 0, to_s: 6 };
+    const h = header({ fields: ["eta", "breaking"], stats });
+    const bed = buf(new Array(6).fill(-5));
+    const frames = buf(new Array(48).fill(0)); // 4 frames x 2 fields x 6 cells, never breaking
+    const fraction = [0, 0.1, 0.2, 0.3, 0.4, 0.5];
+    const run = runFromBuffers(h, bed, frames, buf([...fraction, ...new Array(6).fill(1)]));
+    expect(Array.from(run.breakMap() ?? [])).toEqual(fraction.map((f) => Math.fround(f)));
+    expect(run.stat("eta_max")?.[0]).toBe(1);
+    expect(run.stat("eta_min")).toBeNull();
+    // Without the file, the frames are the fallback.
+    expect(Array.from(runFromBuffers(h, bed, frames).breakMap() ?? [])).toEqual(new Array(6).fill(0));
+  });
+
+  it("must have the size the header promises", () => {
+    const stats = { file: "stats.f32", fields: ["break_fraction"], from_s: 0, to_s: 6 };
+    const h = header({ stats });
+    expect(() => runFromBuffers(h, buf(new Array(6).fill(-5)), buf(new Array(24).fill(0)), buf([1, 2]))).toThrow(RunError);
+  });
+});
+
 describe("steepness map", () => {
   it("records the steepest the surface got in each cell over the run", () => {
     // 3 x 2 cells of 3 m would be too small for central differences; use a 6 x 5 grid.

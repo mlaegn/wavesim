@@ -34,7 +34,8 @@ export async function loadRunFromUrl(base: string, onProgress?: Progress): Promi
   const header = parseHeader(raw);
   const bed = await fetchBytes(`${root}/${header.bed}`, header.bed, onProgress);
   const frames = await fetchBytes(`${root}/${header.frames}`, header.frames, onProgress);
-  return runFromBuffers(raw, bed, frames);
+  const stats = header.stats ? await fetchBytes(`${root}/${header.stats.file}`, header.stats.file, onProgress) : null;
+  return runFromBuffers(raw, bed, frames, stats);
 }
 
 /** Load a run from files the user picked or dropped: run.json plus the files it names. */
@@ -51,7 +52,10 @@ export async function loadRunFromFiles(files: File[]): Promise<Run> {
   };
   const bed = await need(header.bed).arrayBuffer();
   const frames = await need(header.frames).arrayBuffer();
-  return runFromBuffers(raw, bed, frames);
+  // The statistics are optional: without them the maps fall back to the frames.
+  const statsFile = header.stats ? byName.get(header.stats.file) : undefined;
+  const stats = statsFile ? await statsFile.arrayBuffer() : null;
+  return runFromBuffers(raw, bed, frames, stats);
 }
 
 /** Names of the runs the dev server can see, or an empty list if there is no listing. */
