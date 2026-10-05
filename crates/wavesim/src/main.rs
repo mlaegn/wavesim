@@ -60,7 +60,7 @@ enum Command {
         /// The most wall-clock minutes a run may take. A run estimated to take longer is refused
         /// before it starts, and a run that takes longer anyway stops there and keeps what it
         /// has, as a valid shorter run (0 = no limit)
-        #[arg(long, default_value_t = 7.0)]
+        #[arg(long, default_value_t = 12.0)]
         max_minutes: f64,
         /// Scheduling priority; `background` (the default) keeps the run on macOS's
         /// efficiency cores

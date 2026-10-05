@@ -170,7 +170,7 @@ The swell travels along `+x` of the bed's frame, so its direction is chosen when
 
 **Running it on a laptop.**
 
-- A 2.5 m, 14 s swell at Pipeline crosses the shelf on 319 × 200 cells of 6 m and runs the reef on 179 × 400 cells of 3 m, for 328 simulated seconds (so that the surf zone settles before the four waves recorded): **11.7 minutes on three threads on the efficiency cores**, cool and quiet, about 9 on four. That is over the default limit of 7 minutes, so it needs `--max-minutes 12`. With `--priority normal` it takes about a third as long, on the performance cores, and heats the laptop.
+- A 2.5 m, 14 s swell at Pipeline crosses the shelf on 319 × 200 cells of 6 m and runs the reef on 179 × 400 cells of 3 m, for 328 simulated seconds (so that the surf zone settles before the four waves recorded): **11.7 minutes on three threads on the efficiency cores**, cool and quiet, about 9 on four, within the default limit of 12 minutes. With `--priority normal` it takes about a third as long, on the performance cores, and heats the laptop.
 - The solver uses **4 threads** by default, not every core. Raise it with `--threads`; `--threads 0` uses all. The results are byte-identical for any number.
 - For a quick look, fetch a coarser bed with `tools/fetch_spot.py pipeline --cell 6` and run it with `--single`: 6 m cells get the refraction over the shelf right but are too coarse for the break itself.
 
@@ -348,7 +348,7 @@ Nothing here is meant to run a laptop hot, and the guard is built in, so it does
 | What | Limit | Override |
 |---|---|---|
 | Where a run goes | **Background priority on macOS**, which keeps it on the efficiency cores: cool and quiet, about 3.5 times slower than the performance cores | `--priority normal` for full speed, and heat |
-| How long a run may take | **7 minutes**, checked twice. Before it starts, the run estimates its own time for its threads and priority and **refuses** if that is over the limit, saying what to change; nothing is written. During it, the same limit is a hard stop: a run that takes longer anyway stops there and keeps what it has, a shorter run that is complete, viewable and marked `truncated` | `--max-minutes N` allows N; `0` lifts the limit |
+| How long a run may take | **12 minutes**, checked twice. Before it starts, the run estimates its own time for its threads and priority and **refuses** if that is over the limit, saying what to change; nothing is written. During it, the same limit is a hard stop: a run that takes longer anyway stops there and keeps what it has, a shorter run that is complete, viewable and marked `truncated` | `--max-minutes N` allows N; `0` lifts the limit |
 | Threads | 4 by default, never more than half the machine's cores | `--threads`; `WAVESIM_ALL_CORES=1` lifts the ceiling |
 | `cargo test` | The physics checks that run whole simulations are skipped unless asked for: about 15 seconds instead of a minute and a half | `scripts/slow-tests.sh` runs them on the efficiency cores, one at a time, with 2 solver threads |
 | The viewer | Draws only when something changes (playing, a setting, the camera moving); paused and still, it is idle | |
