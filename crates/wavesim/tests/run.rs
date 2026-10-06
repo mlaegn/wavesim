@@ -615,12 +615,23 @@ fn breaking_and_the_surface_range_are_recorded_at_every_step() {
     let line = out.header.waves["break_line"].as_array().unwrap();
     assert_eq!(line.len(), NY);
     assert!(line.iter().all(|p| p == &line[0]), "{line:?}");
-    let (depth, h) = (line[0][1].as_f64().unwrap(), line[0][2].as_f64().unwrap());
+    let p = &line[0];
+    let (depth, h) = (
+        p["depth_m"].as_f64().unwrap(),
+        p["height_m"].as_f64().unwrap(),
+    );
     println!(
-        "breaks in {depth:.2} m of water, {h:.2} m tall (H/h = {:.2})",
-        h / depth
+        "breaks in {depth:.2} m of water, {h:.2} m tall (H/h = {:.2}), {}",
+        h / depth,
+        p["breaker"]
     );
     assert!((0.55..1.2).contains(&(h / depth)), "H/h = {}", h / depth);
+    // On the 1:45 beach the slope it meets is the beach's, and an 8 s wave of 2 m on it spills.
+    assert!(
+        (p["slope"].as_f64().unwrap() * 45.0 - 1.0).abs() < 1e-3,
+        "{p}"
+    );
+    assert_eq!(p["breaker"], "spilling");
 }
 
 #[test]
@@ -643,4 +654,34 @@ fn the_break_line_is_where_each_row_is_tallest_before_the_shore() {
     let line = wavesim::break_line(&height, &bed, 6, 3, 1, 0.0);
     // Row 1's column 3 is only 0.1 m deep, too shallow to count.
     assert_eq!(line, vec![Some(3), Some(1), None]);
+}
+
+#[test]
+fn the_breaker_type_follows_battjes_and_gets_ting_and_kirby_right() {
+    use wavesim::{Breaker, surf_similarity};
+    // Battjes (1974): spilling below 0.4, plunging to 2.0, surging above.
+    assert_eq!(Breaker::from_surf_similarity(0.39), Breaker::Spilling);
+    assert_eq!(Breaker::from_surf_similarity(0.41), Breaker::Plunging);
+    assert_eq!(Breaker::from_surf_similarity(2.1), Breaker::Surging);
+    // Ting & Kirby's 1:35 beach, with the heights the model breaks at (crates/wavecore/tests/
+    // lab.rs): the laboratory called one spilling and the other plunging.
+    let spilling = surf_similarity(1.0 / 35.0, 0.179, 2.0);
+    let plunging = surf_similarity(1.0 / 35.0, 0.192, 5.0);
+    println!("Ting & Kirby: {spilling:.2} (spilling) and {plunging:.2} (plunging)");
+    assert_eq!(Breaker::from_surf_similarity(spilling), Breaker::Spilling);
+    assert_eq!(Breaker::from_surf_similarity(plunging), Breaker::Plunging);
+}
+
+#[test]
+fn a_break_point_on_a_plane_beach_meets_the_beach_slope() {
+    // One row: 1:20 from 10 m deep to dry land, cells of 1 m, the tallest wave 120 m in.
+    let (nx, dx) = (220, 1.0);
+    let bed: Vec<f32> = (0..nx)
+        .map(|i| (-10.0 + (i as f64 + 0.5) / 20.0) as f32)
+        .collect();
+    let height: Vec<f64> = (0..nx).map(|i| if i == 120 { 3.0 } else { 1.0 }).collect();
+    let p = wavesim::break_points(&height, &bed, nx, 1, dx, 0, 0.0, 12.0)[0].unwrap();
+    assert_eq!(p.column, 120);
+    assert!((p.slope * 20.0 - 1.0).abs() < 1e-5, "slope {}", p.slope);
+    assert!((p.depth_m - (10.0 - 120.5 / 20.0)).abs() < 1e-4);
 }

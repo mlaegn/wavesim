@@ -75,6 +75,15 @@ enum Command {
         /// Bed file header
         bed: PathBuf,
     },
+    /// Say where and how a finished run's waves break, stretch by stretch along the shore, and
+    /// write it into the run (nothing is simulated)
+    Breaks {
+        /// Run directory, e.g. out/pipeline
+        run: PathBuf,
+        /// Length of a stretch of coast in metres
+        #[arg(long, default_value_t = 60.0)]
+        stretch: f64,
+    },
 }
 
 fn main() -> ExitCode {
@@ -90,6 +99,7 @@ fn main() -> ExitCode {
 fn real_main() -> Result<(), Error> {
     match Cli::parse().command {
         Command::Info { bed } => info(&bed),
+        Command::Breaks { run, stretch } => breaks(&run, stretch),
         Command::Run {
             bed,
             height,
@@ -271,6 +281,49 @@ fn lower_priority(priority: Priority) {
     }
     #[cfg(not(target_os = "macos"))]
     let _ = priority;
+}
+
+/// The tallest break of each stretch of coast in the middle half of the width (the sides are a
+/// margin, see `side_margin_cells`).
+fn breaks(dir: &std::path::Path, stretch: f64) -> Result<(), Error> {
+    let points = wavesim::update_breaks(dir)?;
+    let header = waveio::Run::read(dir)?.header;
+    let (ny, dy) = (header.ny, header.dy);
+    let margin = header
+        .waves
+        .get("side_margin_cells")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as usize;
+    let rows = (stretch / dy).round().max(1.0) as usize;
+    println!("along the shore    breaks at x     depth   height   slope    surf similarity");
+    for first in (margin..ny - margin).step_by(rows) {
+        let last = (first + rows).min(ny - margin);
+        let Some(p) = points[first..last]
+            .iter()
+            .flatten()
+            .max_by(|a, b| a.height_m.total_cmp(&b.height_m))
+        else {
+            println!(
+                "  y {:4.0}-{:4.0} m   no break",
+                first as f64 * dy,
+                last as f64 * dy
+            );
+            continue;
+        };
+        println!(
+            "  y {:4.0}-{:4.0} m   {:7.0} m   {:5.1} m   {:4.1} m   1:{:<4.0}   {:.2} {:?}",
+            first as f64 * dy,
+            last as f64 * dy,
+            p.x_m,
+            p.depth_m,
+            p.height_m,
+            1.0 / p.slope.max(1e-6),
+            p.surf_similarity,
+            p.breaker
+        );
+    }
+    println!("updated {}", dir.join("run.json").display());
+    Ok(())
 }
 
 fn info(path: &std::path::Path) -> Result<(), Error> {

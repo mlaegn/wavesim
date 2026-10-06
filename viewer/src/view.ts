@@ -347,20 +347,29 @@ export class RunView {
     this.transect.frustumCulled = false;
     this.scene.add(this.transect);
 
-    // The break line: a segment between neighbouring rows that both break, inside the sea.
+    // The break line: a segment between neighbouring rows that both break, inside the sea,
+    // coloured by how they break: white spilling, red plunging, cyan surging.
     const points: THREE.Vector3[] = [];
+    const lineColours: number[] = [];
+    const tint = { spilling: new THREE.Color(0xffffff), plunging: new THREE.Color(0xff3b30), surging: new THREE.Color(0x3bd1ff) };
     const line = run.breakLine;
     for (let j = 0; j + 1 < line.length; j++) {
       const [a, b] = [line[j], line[j + 1]];
       const [ya, yb] = [(j + 0.5) * dy, (j + 1.5) * dy];
       if (a && b && ya >= box.y0 && yb <= box.y1 && a.x >= box.x0 && b.x >= box.x0) {
         points.push(new THREE.Vector3(a.x, 0, -ya), new THREE.Vector3(b.x, 0, -yb));
+        for (const p of [a, b]) {
+          const c = tint[p.breaker ?? "spilling"];
+          lineColours.push(c.r, c.g, c.b);
+        }
       }
     }
+    const lineGeometry = new THREE.BufferGeometry().setFromPoints(points);
+    lineGeometry.setAttribute("color", new THREE.Float32BufferAttribute(lineColours, 3));
     this.breakLine = new THREE.LineSegments(
-      new THREE.BufferGeometry().setFromPoints(points),
+      lineGeometry,
       // Transparent, so it is drawn with the water and after it, on top.
-      new THREE.LineBasicMaterial({ color: 0xffffff, depthTest: false, transparent: true }),
+      new THREE.LineBasicMaterial({ vertexColors: true, depthTest: false, transparent: true }),
     );
     this.breakLine.renderOrder = 11;
     this.breakLine.frustumCulled = false;

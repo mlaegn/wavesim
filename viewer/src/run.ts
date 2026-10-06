@@ -135,11 +135,38 @@ function floats(buf: ArrayBuffer, expectedCount: number, what: string): Float32A
   return new Float32Array(buf);
 }
 
-/** Where a wave breaks on one row: metres along x, still-water depth, and its height there. */
+/** How a wave breaks, from Battjes' surf-similarity number: mellow, heavy, or riding up. */
+export type Breaker = "spilling" | "plunging" | "surging";
+
+/**
+ * Where a wave breaks on one row: metres along x, still-water depth and its height there, and,
+ * for runs that record them, the slope it meets and how it breaks.
+ */
 export interface BreakPoint {
   x: number;
   depth: number;
   height: number;
+  slope?: number;
+  surfSimilarity?: number;
+  breaker?: Breaker;
+}
+
+function breakPoint(p: unknown): BreakPoint | null {
+  if (Array.isArray(p) && p.length === 3 && p.every((v) => typeof v === "number")) {
+    return { x: p[0] as number, depth: p[1] as number, height: p[2] as number };
+  }
+  if (!isRecord(p) || typeof p.x_m !== "number" || typeof p.depth_m !== "number" || typeof p.height_m !== "number") {
+    return null;
+  }
+  const breaker = p.breaker === "spilling" || p.breaker === "plunging" || p.breaker === "surging" ? p.breaker : undefined;
+  return {
+    x: p.x_m,
+    depth: p.depth_m,
+    height: p.height_m,
+    ...(typeof p.slope === "number" ? { slope: p.slope } : {}),
+    ...(typeof p.surf_similarity === "number" ? { surfSimilarity: p.surf_similarity } : {}),
+    ...(breaker ? { breaker } : {}),
+  };
 }
 
 export class Run {
@@ -279,12 +306,7 @@ export class Run {
    */
   get breakLine(): (BreakPoint | null)[] {
     const raw = this.header.waves.break_line;
-    if (!Array.isArray(raw)) return [];
-    return raw.map((p) =>
-      Array.isArray(p) && p.length === 3 && p.every((v) => typeof v === "number")
-        ? { x: p[0] as number, depth: p[1] as number, height: p[2] as number }
-        : null,
-    );
+    return Array.isArray(raw) ? raw.map(breakPoint) : [];
   }
 
   /**

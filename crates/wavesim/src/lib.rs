@@ -558,6 +558,95 @@ pub fn break_line(
         .collect()
 }
 
+/// How a wave breaks, from the surf-similarity number at breaking (Battjes 1974): spilling (the
+/// crest tumbles down the face, mellow) below 0.4, plunging (the lip throws forward and makes a
+/// tube, heavy) from 0.4 to 2.0, surging (the wave rides up without breaking, then collapses)
+/// above. A rule of thumb from laboratory beaches, not a computed shape.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Breaker {
+    Spilling,
+    Plunging,
+    Surging,
+}
+
+impl Breaker {
+    pub fn from_surf_similarity(xi: f64) -> Self {
+        if xi < 0.4 {
+            Self::Spilling
+        } else if xi < 2.0 {
+            Self::Plunging
+        } else {
+            Self::Surging
+        }
+    }
+}
+
+/// Battjes' surf-similarity number at breaking: the bed slope over the square root of the
+/// wave's steepness, its height at breaking over the deep-water wavelength `g T^2 / 2 pi`.
+pub fn surf_similarity(slope: f64, height: f64, period: f64) -> f64 {
+    let deep_wavelength = G * period * period / std::f64::consts::TAU;
+    slope / (height / deep_wavelength).sqrt()
+}
+
+/// Where and how the waves break on one row.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+pub struct BreakPoint {
+    #[serde(skip)]
+    pub column: usize,
+    /// Metres along x of the run's grid.
+    pub x_m: f64,
+    /// Still-water depth there.
+    pub depth_m: f64,
+    /// Crest-to-trough height there, per wave.
+    pub height_m: f64,
+    /// The bed's mean rise per metre over the half wavelength seaward of the break point (a long
+    /// wave's, `T sqrt(g h)`, at the breaking depth): the slope the breaking wave meets.
+    pub slope: f64,
+    pub surf_similarity: f64,
+    pub breaker: Breaker,
+}
+
+/// [`break_line`], with how each row's waves break: a grid of cells `dx` metres along x and a
+/// swell of period `period`. A row whose bed falls towards the shore where it breaks gets a slope
+/// of zero, and spills.
+#[allow(clippy::too_many_arguments)]
+pub fn break_points(
+    height: &[f64],
+    bed: &[f32],
+    nx: usize,
+    ny: usize,
+    dx: f64,
+    from: usize,
+    tide: f64,
+    period: f64,
+) -> Vec<Option<BreakPoint>> {
+    break_line(height, bed, nx, ny, from, tide)
+        .into_iter()
+        .enumerate()
+        .map(|(j, cell)| {
+            let i = cell?;
+            let row = &bed[j * nx..(j + 1) * nx];
+            let depth = tide - f64::from(row[i]);
+            let back =
+                ((0.5 * period * (G * depth).sqrt() / dx).round() as usize).clamp(1, i.max(1));
+            let slope = (f64::from(row[i]) - f64::from(row[i - back.min(i)])) / (back as f64 * dx);
+            let slope = slope.max(0.0);
+            let h = height[j * nx + i];
+            let xi = surf_similarity(slope, h, period);
+            Some(BreakPoint {
+                column: i,
+                x_m: (i as f64 + 0.5) * dx,
+                depth_m: depth,
+                height_m: h,
+                slope,
+                surf_similarity: xi,
+                breaker: Breaker::from_surf_similarity(xi),
+            })
+        })
+        .collect()
+}
+
 /// A cell reads as breaking where the breaking field is at least this.
 pub const BREAKING: f64 = 0.8;
 
@@ -764,30 +853,16 @@ impl Stage {
             match self.wave_height() {
                 Some(height) => {
                     let g = self.bed.grid();
-                    let line = break_line(
+                    let points = break_points(
                         &height,
                         &self.bed.elevation,
                         g.nx,
                         g.ny,
+                        g.dx,
                         break_from,
                         self.tide,
+                        self.stats.period,
                     );
-                    let points: Vec<serde_json::Value> = line
-                        .iter()
-                        .enumerate()
-                        .map(|(j, cell)| match cell {
-                            Some(i) => {
-                                let n = j * g.nx + i;
-                                serde_json::json!([
-                                    (*i as f64 + 0.5) * g.dx,
-                                    self.tide - f64::from(self.bed.elevation[n]),
-                                    height[n]
-                                ])
-                            }
-                            None => serde_json::Value::Null,
-                        })
-                        .collect();
-                    // Per row: [x in metres, still-water depth, per-wave height] where it breaks.
                     self.writer.note("break_line", serde_json::json!(points));
                     self.writer
                         .note("waves_recorded", serde_json::json!(self.stats.waves.len()));
@@ -1194,4 +1269,49 @@ pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<
         truncated,
         warnings,
     })
+}
+
+/// Work out a finished run's break line and breaker types again from what it saved, write them
+/// into its `run.json`, and return them. Nothing is simulated: it reads the statistics, so it
+/// takes a moment, and it brings a run written before the types existed up to date.
+pub fn update_breaks(dir: &std::path::Path) -> Result<Vec<Option<BreakPoint>>, Error> {
+    let mut out = waveio::Run::read(dir)?;
+    let h = &out.header;
+    let height: Vec<f64> = out
+        .stat("wave_height")
+        .ok_or_else(|| setup("this run has no wave height per wave: run it again"))?
+        .iter()
+        .map(|&v| f64::from(v))
+        .collect();
+    let path = dir.join(&h.bed);
+    let bytes = std::fs::read(&path).map_err(|source| waveio::Error::Io {
+        path: path.clone(),
+        source,
+    })?;
+    let bed: Vec<f32> = bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|b| f32::from_le_bytes(*b))
+        .collect();
+    let number = |key: &str| h.waves.get(key).and_then(|v| v.as_f64());
+    let tide = number("tide_m").unwrap_or(0.0);
+    let period = number("wave_period_s").ok_or_else(|| setup("run.json has no wave period"))?;
+    // Past the fine grid's relaxation zone, or past the wave-maker's own bump.
+    let from = match number("zone_offshore_cells") {
+        Some(z) => z as usize,
+        None => (number("near_field_end_m").unwrap_or(0.0) / h.dx).ceil() as usize,
+    };
+    let points = break_points(&height, &bed, h.nx, h.ny, h.dx, from, tide, period);
+    out.header.waves["break_line"] = serde_json::json!(points);
+    let path = dir.join("run.json");
+    let text = serde_json::to_string_pretty(&out.header).map_err(|source| waveio::Error::Json {
+        path: path.clone(),
+        source,
+    })?;
+    std::fs::write(&path, text + "\n").map_err(|source| waveio::Error::Io {
+        path: path.clone(),
+        source,
+    })?;
+    Ok(points)
 }

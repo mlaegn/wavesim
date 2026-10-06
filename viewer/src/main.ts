@@ -107,7 +107,11 @@ function wholeRun(run: Run, row: number): string {
   if (run.breakLine.length > 0) {
     out.push(
       point
-        ? `It breaks at x = ${point.x.toFixed(0)} m, in ${point.depth.toFixed(1)} m of water, ${point.height.toFixed(1)} m tall (the white line: where the wave is tallest).`
+        ? `It breaks at x = ${point.x.toFixed(0)} m, in ${point.depth.toFixed(1)} m of water, ${point.height.toFixed(1)} m tall (the line on the water: where the wave is tallest)${
+            point.breaker && point.slope !== undefined && point.surfSimilarity !== undefined
+              ? `, ${point.breaker === "plunging" ? "plunging (heavy, hollow)" : point.breaker === "spilling" ? "spilling (mellow)" : "surging"}: the reef rises 1:${(1 / Math.max(point.slope, 1e-6)).toFixed(0)} there, surf similarity ${point.surfSimilarity.toFixed(2)} (Battjes: spilling below 0.4, plunging to 2)`
+              : ""
+          }.`
         : "It does not break along this line.",
     );
   }

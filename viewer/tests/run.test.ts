@@ -283,14 +283,18 @@ describe("nested and walled runs", () => {
 describe("statistics recorded at every step", () => {
   it("give the height per wave and the break line", () => {
     const stats = { file: "stats.f32", fields: ["break_fraction", "wave_height"], from_s: 0, to_s: 6 };
-    const line = [[4.5, 2.0, 1.6], null];
+    const line = [{ x_m: 4.5, depth_m: 2.0, height_m: 1.6, slope: 0.05, surf_similarity: 0.6, breaker: "plunging" }, null, [1, 2, 3]];
     const h = header({ fields: ["eta", "breaking"], stats, waves: { break_line: line } });
     const bed = buf(new Array(6).fill(-5));
     const frames = buf(new Array(48).fill(0)); // 4 frames x 2 fields x 6 cells
     const height = [0, 0.5, 1.0, 1.5, 2.0, 2.5];
     const run = runFromBuffers(h, bed, frames, buf([...new Array(6).fill(0), ...height]));
     expect(Array.from(run.waveHeight() ?? [])).toEqual(height);
-    expect(run.breakLine).toEqual([{ x: 4.5, depth: 2.0, height: 1.6 }, null]);
+    expect(run.breakLine).toEqual([
+      { x: 4.5, depth: 2.0, height: 1.6, slope: 0.05, surfSimilarity: 0.6, breaker: "plunging" },
+      null,
+      { x: 1, depth: 2, height: 3 }, // the older form, without a type
+    ]);
     // Without the statistics there is neither.
     const plain = runFromBuffers(header(), bed, buf(new Array(24).fill(0)));
     expect(plain.waveHeight()).toBeNull();
