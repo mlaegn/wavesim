@@ -36,6 +36,7 @@ It is a depth-averaged model. It captures shoaling and breaking as a bore, not a
 | **Viewer** | `viewer/`: a browser replay of a run in 3D (Three.js and TypeScript): terrain from the bed, the surface animated from the frames, foam where the model says the wave breaks, a side view of one line across the break, and maps of where waves break and how steep they get |
 | **Solver** | Well-balanced finite-volume scheme: hydrostatic reconstruction, HLL flux, and first order, second order (MUSCL with an MC limiter), or fifth order (unlimited where the wave is smooth, blended back to the limiter near steep fronts), with SSP-RK2 |
 | **Dispersion** | Serre–Green–Naghdi correction solved by preconditioned conjugate gradients, switched off where waves break; see [docs/dispersion.md](docs/dispersion.md) |
+| **Slice** | `waveslice`, in progress: one line across the reef seen side-on, solved as fully nonlinear potential flow by a boundary element method, for the shape of the lip that a depth-averaged model cannot show. So far the potential solve, verified on its own; runs do not use it yet |
 
 Design rules:
 
@@ -192,7 +193,7 @@ The page draws the bed as terrain and the surface as a mesh displaced by the sto
 - **Only the sea.** The strip seaward of the wave-maker exists for the numerics (the source radiates both ways, and the sponge absorbs the seaward half), so the viewer hides it. **Sea only** switches that off, and **Model zones** marks the wave-maker line and the sponge.
 - **Foam where the model says the wave breaks.** The solver writes a `breaking` field for each frame, and the foam follows it. Runs without that field fall back to a slope rule.
 - **Side view.** A chart of one line across the break: the bed, the water, and the surface coloured by how close to breaking it is, with the steepest face marked and a readout. A yellow line in the 3D view shows where it is taken; the slider moves it along the shore. Besides the instantaneous values it reports, for that line over the whole run, where it gets steepest and where it breaks.
-- **Where and how it breaks.** A line on the water marks the break point of every row along the shore, white where it spills, red where it plunges, cyan where it surges; the side view marks it on its line and says how deep the water is there, how tall the wave, how steeply the reef rises and how it breaks.
+- **Where and how it breaks.** A line on the water marks the break point of every row along the shore, coloured by its surf-similarity number, which says how hard the bed forces the break: pale near 0.1 (the gentlest spilling), orange near 0.4 (where laboratory waves turn from spilling to plunging), deep red at 1 and above (the hollowest plunging). The scale is continuous: the names are only the laboratory's landmarks on it. The side view marks the break point on its line and says how deep the water is there, how tall the wave, how steeply the reef rises and the number.
 - **Maps.** A colour overlay of what happened over the whole run: **wave height** (crest to trough, wave by wave, yellow for low to red for the tallest) or **how steep** (the steepest the surface ever got, clear below a slope of 0.06 and full red at 0.4). There is no map of the breaking switch any more: on cells of a few metres it reads late, while the wave is already losing height, and so showed only the shore break at Pipeline.
 - **Cameras.** *Oblique* along the break, *Top*, and *Beach*, a surf-cam view from the waterline looking out along the lineup.
 - **Controls.** Play and pause (space), scrub, step by a frame (arrow keys), speed, and a **Height ×** slider (default 4) that stretches heights so small waves show.
@@ -276,8 +277,9 @@ Choose the order with `Solver::with_order`; the default is `Order::Second`. Add 
 | Break line | On a made-up height field each row breaks where it is tallest before the shore, never on land or in water under 0.3 m; on an alongshore-uniform beach every row breaks in the same place, at a height 0.70 of the depth (textbook 0.55 to 1.2) |
 | Budget | A run estimated to take longer than its budget is refused before it writes anything; one that runs over its limit anyway stops and keeps a valid shorter run |
 | Coarsening | 2 x 2 blocks are averaged, the leftover edge cells dropped |
-| Viewer data layer | 33 tests: header and file validation, frame offsets, cubic interpolation (follows a wave with under 2% error where a straight line errs by 10%; never puts water below the bed), runs that start after zero, the side margins, and reading the exact bytes the Rust writer produces |
+| Viewer data layer | 34 tests: header and file validation, frame offsets, cubic interpolation (follows a wave with under 2% error where a straight line errs by 10%; never puts water below the bed), runs that start after zero, the side margins, the breaker colour scale, and reading the exact bytes the Rust writer produces |
 | Rust and viewer agree | `waveio`'s golden test writes a tiny run and compares it byte for byte with the fixture the viewer's tests read; if the format drifts, one of them fails |
+| Slice potential solve | Curved three-node elements: a uniform flow comes out exact (to 6e-13); a standing wave in a closed basin and a wavy surface over a bumpy bed converge at second order or better everywhere, including where the surface meets the walls (measured 1.0e-4 and 4.0e-4 of the largest surface flux on the finest edges). Straight elements were tried first and were only first order at those corners |
 | Fetch tool | On a synthetic plane, `+x` follows the bearing and `+y` is 90° counter-clockwise from it, for four bearings; clipping is counted; a request outside the raster is an error |
 
 The lake-at-rest and dam-break conservation tests run for both orders. L1 error at a shock converges at rate 1 at best, so a rate near 1 is the target, not 2.
@@ -338,9 +340,12 @@ wavesim/
     ├── waveio/                 # all file I/O: bed files and run directories
     │   ├── src/{lib,bed,run,error}.rs
     │   └── tests/{formats,golden}.rs
-    └── wavesim/                # the command line: `run` and `info`
-        ├── src/{lib,main}.rs
-        └── tests/run.rs
+    ├── wavesim/                # the command line: `run`, `breaks` and `info`
+    │   ├── src/{lib,main}.rs
+    │   └── tests/run.rs
+    └── waveslice/              # side-on slice, potential flow; no dependencies, not used by runs yet
+        ├── src/{lib,bem,linalg}.rs
+        └── tests/laplace.rs    # the potential solve against flows known exactly
 ```
 
 ## Keeping the machine cool
@@ -367,13 +372,13 @@ The results do not depend on threads or priority: a run on 1 thread and on 4 giv
 
 ## Limitations
 
-- Depth-averaged: no overturning lip, so no barrels.
+- Depth-averaged: no overturning lip, so no barrels. The slice solver (`waveslice`) is being built for that.
 - First order at shorelines: cells at or beside a wet/dry front drop to first order to stay positive, so runup is more diffusive than the open water.
 - Dispersion is the Serre–Green–Naghdi flat-bed operator: accurate in `kh` (wavenumber times depth) up to about 1 to 2, with the bed-slope terms of the dispersive operator omitted. Plain shallow water (`--dispersive false`) is accurate only up to `kh` of about 0.3 and steepens tall waves into shocks wherever they are.
-- Breaking is a switch, not a model of the overturning lip: it shows where a wave breaks and how tall it gets, not its shape, and it does not tell spilling from plunging.
+- Breaking is a switch, not a model of the overturning lip: it shows where a wave breaks and how tall it gets, not its shape. How it breaks, spilling or plunging, is estimated from the wave and the slope of the reef before it (Battjes' surf similarity), not computed.
 - **Read the break point as where the wave is tallest.** That matches Ting & Kirby's laboratory beach within 0.4 m and hardly moves with the cell size. Where the switch first reads breaking moves seaward as cells shrink, because it measures a slope over two cells, and on cells of a few metres it reads late: on the Pipeline reef the wave peaks at about 5 m in 7–8 m of water and loses height from there, while the switch reads breaking only in the last 60 m.
 - Cells much finer than the water is deep admit ripples a few cells long, which these equations carry wrongly (their dispersion is right only for waves longer than about twice the depth) and which read as breaking: in Ting & Kirby's 0.4 m flume, 2.5 cm cells do and 5 cm cells do not. Keep cells no finer than about an eighth of the depth where waves break.
-- **The breaker type is only as good as the reef shape.** On the Pipeline bed the reef rises at 1:30 to 1:40 where the waves break and at no more than 1:10 anywhere between 2 and 10 m of water, so most of the coast reads as spilling (surf similarity 0.2 to 0.4), against Pipeline's name for hollow plunging waves. The lidar this bed comes from loses its returns in breaking whitewater and fills them by interpolation (see [docs/bathymetry.md](docs/bathymetry.md)), which is exactly where a steep ledge would be; a sharper bed is needed before the type there can be trusted.
+- **The breaker type is only as good as the reef shape, and the rule averages it.** On the Pipeline bed the reef rises at 1:30 to 1:40 over the half wavelength where the waves break, so most of the coast reads as spilling (surf similarity 0.2 to 0.4), against Pipeline's name for hollow plunging waves. The bed is not the problem at that scale: the 2013 USACE lidar of Oahu, published as a 1 m DEM (`USACE_Oahu_HI_LMSL_DEM_2013_9365` in the same NOAA bucket), has no gaps in 1 to 10 m of water along the lines checked and agrees with the 3 m bed within 0.25 m on average. What the 3 m bed softens are short steep steps, 1:3.5 over 10 m on one line where it reads 1:8.7, which can pitch a lip forward and which a slope averaged over 50 m does not see. The cross-section solver, on the 1 m data, is what can.
 - On 3 m cells the height at breaking is about 9% low against 1.5 m cells, which are converged (on a Pipeline reef line; the break point itself moves under 4 m). See [docs/dispersion.md](docs/dispersion.md).
 - The inner surf zone loses its energy a little too slowly: `H/h` reaches about 1.0 there, where real saturated surf zones sit near 0.8.
 - Dispersion costs about three times as much as shallow water per step (78 ms against 25 ms on 200,000 cells, single-threaded).

@@ -34,6 +34,18 @@ Underwater, the surf zone is covered by three topo-bathymetric lidar campaigns. 
 - Vertical accuracy of the lidar was not checked. A metre of error matters on a shelf a few metres deep.
 - Three surveys from different years are blended. A lava reef is stable, so this matters less than it would over sand.
 
+## A sharper source: the 1 m lidar DEM
+
+The 2013 USACE NCMP topobathy lidar of Oahu (CZMIL, collected September to November 2013) is published as a 1 m DEM in the same bucket: `https://noaa-nos-coastal-lidar-pds.s3.amazonaws.com/dem/USACE_Oahu_HI_LMSL_DEM_2013_9365/`, as GeoTIFF tiles with a VRT mosaic in lon/lat (`USACE_Oahu_HI_LMSL_DEM_2013_m9365_EPSG-6322.vrt`) and a tile index. Its metadata says areas without data are masked, not interpolated, so a gap means nothing was measured there.
+
+Along three cross-shore lines of the Pipeline bed (y = 361.5, 511.5 and 601.5 m), sampled every metre from 600 m offshore to the shore:
+
+- it has data on every point in 1 to 10 m of water: the survey was flown in calm conditions, and the surf zone is measured, not filled in;
+- it agrees with the 3 m CUDEM bed within 0.22 to 0.25 m on average there;
+- its steepest rise over 10 m is 1:3.5, 1:5.2 and 1:5.7, where the 3 m bed reads 1:8.7, 1:6.2 and 1:6.0: short steep steps, a few metres long, that 3 m cells soften.
+
+So at the scale of a wavelength the reef really is as gentle as the 3 m bed says (1:20 to 1:40 where the waves break), and what the 1 m data adds are those steps. They matter for the shape of a break more than for where it is, and they are what a cross-section on 1 m cells should use.
+
 ## Other regions
 
 For Portugal, the merged [EMODnet DTM 2024](https://emodnet.ec.europa.eu/en/bathymetry) is about 115 m and too coarse for reef or sandbar geometry. Sentinel-2 satellite-derived bathymetry has errors of roughly 1–5 m to about 10 m depth, which is as large as the signal in a surf zone. Instituto Hidrográfico is mapping Portuguese waters at high resolution under SEAMAP 2030, but no open data for the Lisbon–Peniche coast was found. This search was not exhaustive.
