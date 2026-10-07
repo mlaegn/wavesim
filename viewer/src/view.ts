@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import type { Run } from "./run";
+import { breakingStrength, type Run } from "./run";
 
 export type Preset = "oblique" | "top" | "beach";
 export type Overlay = "none" | "height" | "steep";
@@ -134,6 +134,21 @@ void main() {
   #include <colorspace_fragment>
 }
 `;
+
+/**
+ * The colour of a break point: pale for a gentle break, through orange near Battjes' boundary
+ * between spilling and plunging, to deep red for a hard one (see `breakingStrength`); white for
+ * a run that did not record it.
+ */
+export function breakColour(surfSimilarity: number | undefined): string {
+  if (surfSimilarity === undefined) return "#ffffff";
+  const t = breakingStrength(surfSimilarity);
+  const pale = new THREE.Color("#fff6d8");
+  const orange = new THREE.Color("#ff9a1f");
+  const red = new THREE.Color("#c4100a");
+  const c = t < 0.6 ? pale.lerp(orange, t / 0.6) : orange.lerp(red, (t - 0.6) / 0.4);
+  return `#${c.getHexString()}`;
+}
 
 /** Terrain colour for a bed elevation in metres above mean sea level. */
 const PALETTE: [number, string][] = [
@@ -348,10 +363,9 @@ export class RunView {
     this.scene.add(this.transect);
 
     // The break line: a segment between neighbouring rows that both break, inside the sea,
-    // coloured by how they break: white spilling, red plunging, cyan surging.
+    // coloured by how strongly the bed forces the break (see `breakColour`).
     const points: THREE.Vector3[] = [];
     const lineColours: number[] = [];
-    const tint = { spilling: new THREE.Color(0xffffff), plunging: new THREE.Color(0xff3b30), surging: new THREE.Color(0x3bd1ff) };
     const line = run.breakLine;
     for (let j = 0; j + 1 < line.length; j++) {
       const [a, b] = [line[j], line[j + 1]];
@@ -359,7 +373,7 @@ export class RunView {
       if (a && b && ya >= box.y0 && yb <= box.y1 && a.x >= box.x0 && b.x >= box.x0) {
         points.push(new THREE.Vector3(a.x, 0, -ya), new THREE.Vector3(b.x, 0, -yb));
         for (const p of [a, b]) {
-          const c = tint[p.breaker ?? "spilling"];
+          const c = new THREE.Color(breakColour(p.surfSimilarity));
           lineColours.push(c.r, c.g, c.b);
         }
       }

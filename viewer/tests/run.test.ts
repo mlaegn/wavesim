@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseHeader, Run, RunError, runFromBuffers, type RunHeader } from "../src/run";
+import { breakingStrength, parseHeader, Run, RunError, runFromBuffers, type RunHeader } from "../src/run";
 
 const header = (over: Record<string, unknown> = {}) => ({
   format: "wavesim-run",
@@ -305,6 +305,16 @@ describe("statistics recorded at every step", () => {
     const stats = { file: "stats.f32", fields: ["break_fraction"], from_s: 0, to_s: 6 };
     const h = header({ stats });
     expect(() => runFromBuffers(h, buf(new Array(6).fill(-5)), buf(new Array(24).fill(0)), buf([1, 2]))).toThrow(RunError);
+  });
+});
+
+describe("how strongly the bed forces a break", () => {
+  it("runs from 0 at a surf similarity of 0.1 to 1 at 1, logarithmically, with Battjes' 0.4 near 0.6", () => {
+    expect(breakingStrength(0.1)).toBe(0);
+    expect(breakingStrength(1)).toBe(1);
+    expect(breakingStrength(0.4)).toBeCloseTo(Math.log10(4), 12);
+    expect(breakingStrength(0.02)).toBe(0);
+    expect(breakingStrength(3)).toBe(1);
   });
 });
 

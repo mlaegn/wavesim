@@ -1,4 +1,5 @@
 import type { Run } from "./run";
+import { breakColour } from "./view";
 
 export interface Readout {
   /** The steepest face of the surface along the line, where there is real water. */
@@ -129,13 +130,13 @@ export function drawProfile(
   const point = run.breakLine[row];
   if (point) {
     const i = point.x / dx - 0.5;
-    g.strokeStyle = "#ffffff";
+    g.strokeStyle = breakColour(point.surfSimilarity);
     g.lineWidth = 2;
     g.beginPath();
     g.moveTo(X(i), m.top);
     g.lineTo(X(i), h - m.bottom);
     g.stroke();
-    g.fillStyle = "#ffffff";
+    g.fillStyle = breakColour(point.surfSimilarity);
     g.fillText("breaks", X(i) + 4, m.top + 10);
   }
   return { steepest };

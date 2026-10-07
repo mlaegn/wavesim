@@ -108,8 +108,8 @@ function wholeRun(run: Run, row: number): string {
     out.push(
       point
         ? `It breaks at x = ${point.x.toFixed(0)} m, in ${point.depth.toFixed(1)} m of water, ${point.height.toFixed(1)} m tall (the line on the water: where the wave is tallest)${
-            point.breaker && point.slope !== undefined && point.surfSimilarity !== undefined
-              ? `, ${point.breaker === "plunging" ? "plunging (heavy, hollow)" : point.breaker === "spilling" ? "spilling (mellow)" : "surging"}: the reef rises 1:${(1 / Math.max(point.slope, 1e-6)).toFixed(0)} there, surf similarity ${point.surfSimilarity.toFixed(2)} (Battjes: spilling below 0.4, plunging to 2)`
+            point.slope !== undefined && point.surfSimilarity !== undefined
+              ? `. The reef rises 1:${(1 / Math.max(point.slope, 1e-6)).toFixed(0)} there and the surf similarity is ${point.surfSimilarity.toFixed(2)}: the higher, the harder the bed forces the break and the further the lip throws (pale about 0.1, orange about 0.4, deep red 1 and above). On laboratory beaches waves spill below about 0.4 and plunge above it`
               : ""
           }.`
         : "It does not break along this line.",

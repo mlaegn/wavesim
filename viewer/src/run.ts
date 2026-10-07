@@ -151,6 +151,17 @@ export interface BreakPoint {
   breaker?: Breaker;
 }
 
+/**
+ * How strongly the bed forces a wave to break, from its surf-similarity number, on a scale from
+ * 0 (0.1 and below: barely, the gentlest spilling) to 1 (1 and above: hard, the hollowest
+ * plunging), logarithmic in between because the number spans a factor of ten. Battjes' lab
+ * boundary between spilling and plunging, 0.4, sits at 0.6.
+ */
+export function breakingStrength(surfSimilarity: number): number {
+  const t = Math.log10(Math.max(surfSimilarity, 1e-6) / 0.1);
+  return Math.min(Math.max(t, 0), 1);
+}
+
 function breakPoint(p: unknown): BreakPoint | null {
   if (Array.isArray(p) && p.length === 3 && p.every((v) => typeof v === "number")) {
     return { x: p[0] as number, depth: p[1] as number, height: p[2] as number };
