@@ -9,12 +9,15 @@
 //!
 //! The flow is found by a boundary element method: only the edge of the water is discretised,
 //! the free surface on top, the bed below and walls at the ends, and the potential inside follows
-//! from the potential and its normal derivative on that edge. See [`bem`].
+//! from the potential and its normal derivative on that edge. See [`bem`]; [`tank`] moves the
+//! surface in time.
 //!
 //! Like `wavecore` it is pure numerics with no dependencies, and it is a separate step that a
 //! normal run never uses.
 
 pub mod bem;
 mod linalg;
+pub mod tank;
 
 pub use bem::{Kind, Side, Solution, solve};
+pub use tank::{Energy, Tank};

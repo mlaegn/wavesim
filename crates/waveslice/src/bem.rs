@@ -61,7 +61,7 @@ pub struct Solution {
 }
 
 /// Gauss-Legendre points and weights on `[0, 1]`, eight of them.
-const GAUSS: [(f64, f64); 8] = {
+pub(crate) const GAUSS: [(f64, f64); 8] = {
     const X: [f64; 4] = [
         0.183_434_642_495_649_8,
         0.525_532_409_916_329,
@@ -86,7 +86,7 @@ const GAUSS: [(f64, f64); 8] = {
 
 /// The three quadratic shape functions at `t` in `[0, 1]`, 1 at the element's first, middle and
 /// last node respectively.
-fn shape(t: f64) -> [f64; 3] {
+pub(crate) fn shape(t: f64) -> [f64; 3] {
     [
         (1.0 - t) * (1.0 - 2.0 * t),
         4.0 * t * (1.0 - t),
@@ -176,14 +176,19 @@ fn element(p: (f64, f64), e: &Element) -> ([f64; 3], [f64; 3]) {
         return (g, h);
     }
     // Subdivide while the point is close compared with the piece being integrated.
-    let mut pieces = vec![(0.0_f64, 1.0_f64, 0)];
-    while let Some((s0, s1, depth)) = pieces.pop() {
+    // A stack on the stack: depth 12 leaves at most 13 pieces waiting.
+    let mut pieces = [(0.0_f64, 1.0_f64, 0_u32); 16];
+    let mut waiting = 1;
+    while waiting > 0 {
+        waiting -= 1;
+        let (s0, s1, depth) = pieces[waiting];
         let mid = 0.5 * (s0 + s1);
         let (m, along) = (e.at(mid), e.tangent(mid));
         let distance = (m.0 - p.0).hypot(m.1 - p.1);
         if distance < 1.5 * (s1 - s0) * along.0.hypot(along.1) && depth < 12 {
-            pieces.push((s0, mid, depth + 1));
-            pieces.push((mid, s1, depth + 1));
+            pieces[waiting] = (s0, mid, depth + 1);
+            pieces[waiting + 1] = (mid, s1, depth + 1);
+            waiting += 2;
             continue;
         }
         for &(u, w) in &GAUSS {

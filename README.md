@@ -36,7 +36,7 @@ It is a depth-averaged model. It captures shoaling and breaking as a bore, not a
 | **Viewer** | `viewer/`: a browser replay of a run in 3D (Three.js and TypeScript): terrain from the bed, the surface animated from the frames, foam where the model says the wave breaks, a side view of one line across the break, and maps of where waves break and how steep they get |
 | **Solver** | Well-balanced finite-volume scheme: hydrostatic reconstruction, HLL flux, and first order, second order (MUSCL with an MC limiter), or fifth order (unlimited where the wave is smooth, blended back to the limiter near steep fronts), with SSP-RK2 |
 | **Dispersion** | Serre–Green–Naghdi correction solved by preconditioned conjugate gradients, switched off where waves break; see [docs/dispersion.md](docs/dispersion.md) |
-| **Slice** | `waveslice`, in progress: one line across the reef seen side-on, solved as fully nonlinear potential flow by a boundary element method, for the shape of the lip that a depth-averaged model cannot show. So far the potential solve, verified on its own; runs do not use it yet |
+| **Slice** | `waveslice`, in progress: one line across the reef seen side-on, solved as fully nonlinear potential flow by a boundary element method, for the shape of the lip that a depth-averaged model cannot show. So far the potential solve and the surface moving in time in a tank with walls, each verified on its own; runs do not use it yet |
 
 Design rules:
 
@@ -279,7 +279,8 @@ Choose the order with `Solver::with_order`; the default is `Order::Second`. Add 
 | Coarsening | 2 x 2 blocks are averaged, the leftover edge cells dropped |
 | Viewer data layer | 34 tests: header and file validation, frame offsets, cubic interpolation (follows a wave with under 2% error where a straight line errs by 10%; never puts water below the bed), runs that start after zero, the side margins, the breaker colour scale, and reading the exact bytes the Rust writer produces |
 | Rust and viewer agree | `waveio`'s golden test writes a tiny run and compares it byte for byte with the fixture the viewer's tests read; if the format drifts, one of them fails |
-| Slice potential solve | Curved three-node elements: a uniform flow comes out exact (to 6e-13); a standing wave in a closed basin and a wavy surface over a bumpy bed converge at second order or better everywhere, including where the surface meets the walls (measured 1.0e-4 and 4.0e-4 of the largest surface flux on the finest edges). Straight elements were tried first and were only first order at those corners |
+| Slice potential solve | Curved three-node elements: a uniform flow comes out exact (to 6e-13); a standing wave in a closed basin and a wavy surface over a bumpy bed converge at second order or better everywhere, including where the surface meets the walls (measured 1.0e-4 and 4.4e-4 of the largest surface flux on the finest edges). Straight elements were tried first and were only first order at those corners |
+| Slice in time | The surface's nodes follow the water, four solves a step. A 1 mm standing wave has the period of linear theory within 0.05% (measured 0.0008%); a steep one (`ka` 0.25) keeps its energy and volume within 0.1% over four periods (measured 0.004% and 0.001%); a solitary wave 0.2 of the depth travels within 0.05% of Grimshaw's fully nonlinear speed (measured 0.037% fast, where the depth-averaged theory's speed is 0.064% further), its crest steady within 1% (0.93%). Bounds set before the first run. The solitary wave's margins are thin, and the first run failed both: started with the depth-averaged velocity on the surface it was still swinging; it now starts from the velocity profile of the depth-averaged theory |
 | Fetch tool | On a synthetic plane, `+x` follows the bearing and `+y` is 90° counter-clockwise from it, for four bearings; clipping is counted; a request outside the raster is an error |
 
 The lake-at-rest and dam-break conservation tests run for both orders. L1 error at a shock converges at rate 1 at best, so a rate near 1 is the target, not 2.
@@ -345,7 +346,8 @@ wavesim/
     │   └── tests/run.rs
     └── waveslice/              # side-on slice, potential flow; no dependencies, not used by runs yet
         ├── src/{lib,bem,linalg}.rs
-        └── tests/laplace.rs    # the potential solve against flows known exactly
+        ├── src/tank.rs         # the surface moving in time between two walls
+        └── tests/{laplace,tank}.rs  # against flows and waves known exactly
 ```
 
 ## Keeping the machine cool

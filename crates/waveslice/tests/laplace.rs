@@ -148,7 +148,7 @@ fn the_standing_wave_converges_at_second_order() {
 fn a_curved_surface_over_a_bumpy_bed_converges_too() {
     // A wavy surface over a bumpy bed, as a wave over a reef, with a flow known exactly:
     // phi = exp(0.7 z) cos(0.7 x) + 0.3 x, harmonic. The surface's slope between elements is
-    // only as good as the elements' fit to the curve, which keeps this at second order (4.0e-4
+    // only as good as the elements' fit to the curve, which keeps this at second order (4.4e-4
     // with 97 surface nodes).
     let length = 6.0;
     let bed = |x: f64| -2.0 + 0.4 * x.sin();
