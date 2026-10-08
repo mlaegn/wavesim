@@ -17,7 +17,9 @@
 
 pub mod bem;
 mod linalg;
+pub mod solitary;
 pub mod tank;
 
 pub use bem::{Kind, Side, Solution, solve};
+pub use solitary::Solitary;
 pub use tank::{Energy, Tank};
