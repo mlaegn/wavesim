@@ -16,6 +16,7 @@ It is a depth-averaged model. It captures shoaling and breaking as a bore, not a
 - [Quick Start](#quick-start)
 - [Run a swell over a real bed](#run-a-swell-over-a-real-bed)
 - [View a run](#view-a-run)
+- [Break one wave side-on](#break-one-wave-side-on)
 - [Numerics](#numerics)
 - [Verification](#verification)
 - [Project Structure](#project-structure)
@@ -36,7 +37,7 @@ It is a depth-averaged model. It captures shoaling and breaking as a bore, not a
 | **Viewer** | `viewer/`: a browser replay of a run in 3D (Three.js and TypeScript): terrain from the bed, the surface animated from the frames, foam where the model says the wave breaks, a side view of one line across the break, and maps of where waves break and how steep they get |
 | **Solver** | Well-balanced finite-volume scheme: hydrostatic reconstruction, HLL flux, and first order, second order (MUSCL with an MC limiter), or fifth order (unlimited where the wave is smooth, blended back to the limiter near steep fronts), with SSP-RK2 |
 | **Dispersion** | Serre–Green–Naghdi correction solved by preconditioned conjugate gradients, switched off where waves break; see [docs/dispersion.md](docs/dispersion.md) |
-| **Slice** | `waveslice`, in progress: one line across the reef seen side-on, solved as fully nonlinear potential flow by a boundary element method, for the shape of the lip that a depth-averaged model cannot show. So far: the potential solve, the surface moving in time in a tank with walls, and solitary waves shoaling on a slope until they overturn and their lip lands, each verified on its own; runs do not use it yet. `cargo run --release -p waveslice --example plunge` breaks one and writes the surface as it goes |
+| **Slice** | `waveslice`: one line across a reef seen side-on, solved as fully nonlinear potential flow by a boundary element method, for the shape of the lip that a depth-averaged model cannot show. `wavesim slice` breaks one wave over a made-up seabed and the viewer's side view plays it in slow motion; runs do not feed it yet |
 
 Design rules:
 
@@ -200,6 +201,26 @@ The page draws the bed as terrain and the surface as a mesh displaced by the sto
 
 `npm run build` makes a static site in `viewer/dist`; it contains no runs, which are large and git-ignored.
 
+## Break one wave side-on
+
+```bash
+cargo run --release -p wavesim -- slice reef      # or gentle, steep
+```
+
+This sends one wave, a solitary wave 2.4 m high in 8 m of water (a stand-in for one big wave of a set), onto a made-up seabed and follows its surface with the slice solver until the lip lands, writing frames to `out/slice-<seabed>/` (format in [docs/data-format.md](docs/data-format.md#slice-wavesim-slice-version-1)). The same wave goes onto each seabed, so the differences come from the bed alone:
+
+| Seabed | Slope parameter | Face vertical in | Crest then | Height / depth | Lip thrown | Tube, tall x wide | Computing |
+|---|---|---|---|---|---|---|---|
+| `gentle`: plane slope 1 in 22 | 0.13 | 2.00 m | 3.69 m | 1.85 | 12.3 m | 2.24 x 2.75 m | 27 min |
+| `steep`: plane slope 1 in 15, then a shelf 0.4 m deep | 0.19 | 1.18 m | 3.27 m | 2.77 | 10.7 m | 1.61 x 3.14 m | 17 min |
+| `reef`: 1 in 10 ramp onto a shelf 0.96 m deep | 0.28 | 0.96 m | 2.66 m | 2.77 | 9.1 m | 1.45 x 2.58 m | 8 min |
+
+All three plunge, as Grilli et al.'s slope parameter says they should (plunging between 0.025 and 0.30). On the long gentle slope the wave grows for longer and breaks in deeper water, so its lip and tube are the biggest; on the steep beach and the reef it breaks sooner, onto water a third as deep as it is tall. A solitary wave would spill only on slopes gentler than about 1 in 150, far longer than this solver can afford. The height-to-depth ratios at breaking come within 2% of the empirical fit `0.841 exp(6.421 S0)` that later papers attribute to Grilli et al. (1997) for plane slopes (1.88 and 2.76); the original was not available to check it against, so it is reported, not tested.
+
+The run is guarded like `wavesim run`: on the efficiency cores, it times its first five steps and refuses a run that would take longer than `--max-minutes` (30 by default: a slice uses one efficiency core, so it is slow but cool), and stops one that does, keeping what it has. `--finest` sets the closest node spacing (0.4 m by default): halving it makes a run about ten times longer.
+
+To watch it, start the viewer (see above) and open **Side view of a break**, or http://localhost:5173/slice.html. The page holds a still camera on the break at true proportions while the wave runs in (or shows the whole tank, height stretched), colours the surface by how fast the water moves against the wave's own speed (pale when still, white at 0.6, red where it outruns the wave, which is where the lip is thrown), and plays at down to a thirtieth of real time: the plunge itself lasts about a second. **Watch the break slowly** jumps there. Beside it are when and where the face stood vertical, where the lip landed and the size of the tube.
+
 ## Numerics
 
 The solver integrates the conservative nonlinear shallow-water equations for water depth `h` and depth-integrated momentum `(hu, hv)` over a bed elevation `b`:
@@ -277,11 +298,12 @@ Choose the order with `Solver::with_order`; the default is `Order::Second`. Add 
 | Break line | On a made-up height field each row breaks where it is tallest before the shore, never on land or in water under 0.3 m; on an alongshore-uniform beach every row breaks in the same place, at a height 0.70 of the depth (textbook 0.55 to 1.2) |
 | Budget | A run estimated to take longer than its budget is refused before it writes anything; one that runs over its limit anyway stops and keeps a valid shorter run |
 | Coarsening | 2 x 2 blocks are averaged, the leftover edge cells dropped |
-| Viewer data layer | 34 tests: header and file validation, frame offsets, cubic interpolation (follows a wave with under 2% error where a straight line errs by 10%; never puts water below the bed), runs that start after zero, the side margins, the breaker colour scale, and reading the exact bytes the Rust writer produces |
+| Viewer data layer | 38 tests: header and file validation, frame offsets, cubic interpolation (follows a wave with under 2% error where a straight line errs by 10%; never puts water below the bed), runs that start after zero, the side margins, the breaker colour scale, slice files and their speed colours, and reading the exact bytes the Rust writer produces |
 | Rust and viewer agree | `waveio`'s golden test writes a tiny run and compares it byte for byte with the fixture the viewer's tests read; if the format drifts, one of them fails |
 | Slice potential solve | Curved three-node elements: a uniform flow comes out exact (to 6e-13); a standing wave in a closed basin and a wavy surface over a bumpy bed converge at second order or better everywhere, including where the surface meets the walls (measured 1.0e-4 and 4.4e-4 of the largest surface flux on the finest edges). Straight elements were tried first and were only first order at those corners |
 | Slice in time | The surface's nodes follow the water, four solves a step. A 1 mm standing wave has the period of linear theory within 0.05% (measured 0.0008%); a steep one (`ka` 0.25) keeps its energy and volume within 0.1% over four periods (measured 0.004% and 0.001%); a solitary wave 0.2 of the depth travels within 0.05% of Grimshaw's fully nonlinear speed (measured 0.037% fast, where the depth-averaged theory's speed is 0.064% further), its crest steady within 1% (0.93%). Bounds set before the first run. The solitary wave's margins are thin, and the first run failed both: started with the depth-averaged velocity on the surface it was still swinging; it now starts from the velocity profile of the depth-averaged theory |
 | Slice breaking | Solitary waves on a 1:15 slope against Grilli, Svendsen & Subramanya's (1997) slope parameter, which sorts plunging from surging from not breaking. Their plunging case (0.3 of the depth, parameter 0.19) overturns, throws a lip over an open tube and lands, with energy within 0.5% until then (measured 0.37%); a wave 0.07 of the depth (0.38, beyond their 0.37 limit) does not overturn before 0.1 m of water (its face never passes 3°). The landing time agrees between node spacings of 0.04 and 0.05 m (5.985 and 5.986 s). Bounds set before the first run |
+| Slices | The steep slice at 8 m depth repeats the tested 1 m case scaled up eightfold: the same 1083 steps, the face vertical at 15.97 s (the test's 5.646 s times the square root of 8) under a crest 3.27 m up (0.409 times 8). In that case the lip lands a metre from the wall that ends the beach; ending the beach in a shelf 24 m long instead moved the landing by 2 cm and changed nothing else, so the wall had not shaped it. A lip that lands within two wave heights of the wall is reported as shaped by it, not as a break. The tube a landed lip closes off is measured within 5% on a drawn circle. Slice files round-trip exactly, and the viewer's reader rejects one whose parts do not fit together |
 | Fetch tool | On a synthetic plane, `+x` follows the bearing and `+y` is 90° counter-clockwise from it, for four bearings; clipping is counted; a request outside the raster is an error |
 
 The lake-at-rest and dam-break conservation tests run for both orders. L1 error at a shock converges at rate 1 at best, so a rate near 1 is the target, not 2.
@@ -308,6 +330,7 @@ wavesim/
 │   └── header-banner.png
 ├── viewer/                     # browser replay: Vite, TypeScript, Three.js
 │   ├── index.html
+│   ├── slice.html              # the side view of one breaking wave
 │   ├── vite.config.ts          # also serves out/ as /runs/
 │   ├── src/
 │   │   ├── run.ts              # header checks, frames, interpolation (no DOM)
@@ -315,9 +338,12 @@ wavesim/
 │   │   ├── view.ts             # terrain, water shader, camera, overlays
 │   │   ├── profile.ts          # the side view of one line across the break
 │   │   ├── main.ts             # controls and playback
-│   │   └── style.css
+│   │   ├── slice.ts            # slice header checks, frames, interpolation (no DOM)
+│   │   ├── sidewave.ts         # the side view page: drawing, slow motion
+│   │   └── style.css, sidewave.css
 │   └── tests/
 │       ├── run.test.ts
+│       ├── slice.test.ts
 │       └── fixtures/tiny/      # written by waveio's golden test
 ├── tools/
 │   ├── fetch_spot.py           # crop, rotate and resample a remote GeoTIFF
@@ -339,16 +365,15 @@ wavesim/
     │       ├── stoker.rs         # dam breaks against exact solutions
     │       ├── waves.rs          # wave-maker, shoaling, refraction, friction, runup
     │       └── dispersion.rs     # dispersion relation, solitary wave, deep swell, beach breaking
-    ├── waveio/                 # all file I/O: bed files and run directories
-    │   ├── src/{lib,bed,run,error}.rs
+    ├── waveio/                 # all file I/O: bed files, run and slice directories
+    │   ├── src/{lib,bed,run,slice,error}.rs
     │   └── tests/{formats,golden}.rs
-    ├── wavesim/                # the command line: `run`, `breaks` and `info`
-    │   ├── src/{lib,main}.rs
+    ├── wavesim/                # the command line: `run`, `breaks`, `slice` and `info`
+    │   ├── src/{lib,main,slice}.rs
     │   └── tests/run.rs
-    └── waveslice/              # side-on slice, potential flow; no dependencies, not used by runs yet
+    └── waveslice/              # side-on slice, potential flow; no dependencies
         ├── src/{lib,bem,linalg}.rs
         ├── src/{tank,solitary}.rs  # the surface moving in time between walls; a starting wave
-        ├── examples/plunge.rs  # a solitary wave breaking on a slope, written out to look at
         └── tests/{laplace,tank,breaking}.rs  # against exact flows, exact waves, Grilli et al.
 ```
 
@@ -377,7 +402,7 @@ The results do not depend on threads or priority: a run on 1 thread and on 4 giv
 ## Limitations
 
 - Depth-averaged: no overturning lip, so no barrels. The slice solver (`waveslice`) is being built for that.
-- The slice solver needs two numerical aids where the surface folds, both standard since Longuet-Higgins & Cokelet (1976): a light five-point smoothing every five steps, without which steep crests grow a zig-zag from node to node and the run blows up, and re-spacing nodes where they crowd at a lip's tip. It stops when the lip lands, and one break of a solitary wave takes about 11 minutes on one efficiency core at 5 cm node spacing. It has walls at both ends and no wave input from a run yet.
+- The slice solver needs two numerical aids where the surface folds, both standard since Longuet-Higgins & Cokelet (1976): a light five-point smoothing every five steps, without which steep crests grow a zig-zag from node to node and the run blows up, and re-spacing nodes where they crowd at a lip's tip. It stops when the lip lands. It breaks one solitary wave, not a swell, between two walls, on made-up seabeds; it is two-dimensional, one line across the reef; and its dense solve grows with the cube of the node count, so one break takes 8 to 27 minutes on one efficiency core and long gentle slopes are out of reach.
 - First order at shorelines: cells at or beside a wet/dry front drop to first order to stay positive, so runup is more diffusive than the open water.
 - Dispersion is the Serre–Green–Naghdi flat-bed operator: accurate in `kh` (wavenumber times depth) up to about 1 to 2, with the bed-slope terms of the dispersive operator omitted. Plain shallow water (`--dispersive false`) is accurate only up to `kh` of about 0.3 and steepens tall waves into shocks wherever they are.
 - Breaking is a switch, not a model of the overturning lip: it shows where a wave breaks and how tall it gets, not its shape. How it breaks, spilling or plunging, is estimated from the wave and the slope of the reef before it (Battjes' surf similarity), not computed.

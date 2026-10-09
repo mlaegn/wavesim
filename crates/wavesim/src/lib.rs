@@ -7,6 +7,8 @@
 //! sponge needs is cropped off. The sides are walls: for a swell travelling along +x a wall is
 //! a mirror, so it leaves the incoming swell untouched.
 
+pub mod slice;
+
 use std::path::PathBuf;
 use std::time::Instant;
 

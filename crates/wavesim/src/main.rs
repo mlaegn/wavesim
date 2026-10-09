@@ -2,7 +2,19 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
+use wavesim::slice::{Case, SliceOptions, run_slice};
 use wavesim::{Bed, Error, RunOptions, estimate_seconds, human, layout};
+
+/// The made-up seabeds a slice can break on.
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum SliceCase {
+    /// A plane slope rising 1 in 22
+    Gentle,
+    /// A plane slope rising 1 in 15, then a shallow shelf
+    Steep,
+    /// A 1 in 10 ramp onto a reef shelf 0.12 of the offshore depth deep
+    Reef,
+}
 
 /// How the run is scheduled by the operating system.
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -70,6 +82,40 @@ enum Command {
         #[arg(long)]
         out: Option<PathBuf>,
     },
+    /// Break one wave over a made-up seabed, seen side-on, with the full shape of its lip, and
+    /// write it for the viewer's side view.
+    Slice {
+        /// The seabed
+        #[arg(value_enum, default_value_t = SliceCase::Reef)]
+        case: SliceCase,
+        /// Offshore water depth in metres
+        #[arg(long, default_value_t = 8.0)]
+        depth: f64,
+        /// The wave's height above still water in metres (default: 0.3 of the depth)
+        #[arg(long)]
+        height: Option<f64>,
+        /// Surface nodes no closer than this where the water is shallow, in metres (default:
+        /// 0.05 of the depth). Halving it makes a run about ten times longer
+        #[arg(long)]
+        finest: Option<f64>,
+        /// A frame every this many steps; steps shorten as the lip forms, so frames crowd
+        /// where the wave breaks
+        #[arg(long, default_value_t = 4)]
+        frame_every: usize,
+        /// The most wall-clock minutes the run may take. A run its first steps say would take
+        /// longer is refused, and one that takes longer anyway stops there and keeps what it has
+        /// (0 = no limit). Slices use one efficiency core, so they are slow but stay cool; the
+        /// three seabeds take 8 to 27 minutes
+        #[arg(long, default_value_t = 30.0)]
+        max_minutes: f64,
+        /// Scheduling priority; `background` (the default) keeps the run on macOS's
+        /// efficiency cores
+        #[arg(long, value_enum, default_value_t = Priority::Background)]
+        priority: Priority,
+        /// Output directory (default: out/slice-<case>)
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
     /// Print what a bed file contains.
     Info {
         /// Bed file header
@@ -100,6 +146,34 @@ fn real_main() -> Result<(), Error> {
     match Cli::parse().command {
         Command::Info { bed } => info(&bed),
         Command::Breaks { run, stretch } => breaks(&run, stretch),
+        Command::Slice {
+            case,
+            depth,
+            height,
+            finest,
+            frame_every,
+            max_minutes,
+            priority,
+            out,
+        } => {
+            lower_priority(priority);
+            let case = match case {
+                SliceCase::Gentle => Case::Gentle,
+                SliceCase::Steep => Case::Steep,
+                SliceCase::Reef => Case::Reef,
+            };
+            let opts = SliceOptions {
+                case,
+                depth,
+                height: height.unwrap_or(0.3 * depth),
+                finest: finest.unwrap_or(0.05 * depth),
+                frame_every: frame_every.max(1),
+                out: out
+                    .unwrap_or_else(|| PathBuf::from("out").join(format!("slice-{}", case.name()))),
+                max_wall_seconds: (max_minutes > 0.0).then_some(max_minutes * 60.0),
+            };
+            slice(&opts)
+        }
         Command::Run {
             bed,
             height,
@@ -281,6 +355,41 @@ fn lower_priority(priority: Priority) {
     }
     #[cfg(not(target_os = "macos"))]
     let _ = priority;
+}
+
+fn slice(opts: &SliceOptions) -> Result<(), Error> {
+    println!(
+        "a wave {} m high in {} m of water, onto the {} seabed",
+        opts.height,
+        opts.depth,
+        opts.case.name()
+    );
+    let s = run_slice(opts)?;
+    println!(
+        "ended: {} after {} steps and {} (estimated {}); {} frames in {}",
+        s.ended,
+        s.steps,
+        human(s.seconds),
+        human(s.estimate),
+        s.frames,
+        s.dir.display()
+    );
+    match s.curl {
+        Some(c) => println!(
+            "the face stood vertical at {:.2} s, {:.1} m along, in {:.2} m of water, with the crest \
+             {:.2} m above still water",
+            c.time, c.x, c.depth, c.crest
+        ),
+        None => println!("the face never passed vertical"),
+    }
+    if let Some(l) = s.landing {
+        println!(
+            "the lip landed at {:.2} s, {:.2} m further on; the tube it closed is {:.2} m tall \
+             and {:.2} m wide, {:.2} m^2 of air",
+            l.time, l.throw, l.tube_height, l.tube_width, l.tube_area
+        );
+    }
+    Ok(())
 }
 
 /// The tallest break of each stretch of coast in the middle half of the width (the sides are a

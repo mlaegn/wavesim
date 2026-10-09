@@ -22,6 +22,14 @@
 use crate::Solitary;
 use crate::bem::{GAUSS, Kind, Side, shape, solve};
 
+/// The fraction of the closest node spacing that the fastest short wave, plus the water, may
+/// cross in one step of [`Tank::march`].
+pub const COURANT: f64 = 0.5;
+/// [`Tank::march`] smooths the surface every this many steps.
+pub const SMOOTH_EVERY: usize = 5;
+/// [`Tank::march`] re-spaces nodes where neighbouring gaps differ by more than this factor.
+pub const REGRID_ABOVE: f64 = 1.3;
+
 /// How many segments apart along the surface two crossing segments must be for the crossing to
 /// be a lip landing rather than a tangle of neighbouring nodes.
 pub const LANDING_GAP: usize = 6;
@@ -42,6 +50,8 @@ pub struct Tank {
     pub phi: Vec<f64>,
     /// Seconds since the start.
     pub time: f64,
+    /// Steps taken by [`Tank::march`].
+    pub steps: usize,
 }
 
 /// What a moving surface is worth.
@@ -51,6 +61,17 @@ pub struct Energy {
     pub kinetic: f64,
     /// Potential energy against still water, `g/2 integral of z^2 dx` along the surface.
     pub potential: f64,
+}
+
+/// The tube a landed lip closes off, seen side-on.
+#[derive(Clone, Copy, Debug)]
+pub struct Tube {
+    /// The air enclosed, m^2 per metre of crest.
+    pub area: f64,
+    /// Its reach from back to front, m.
+    pub width: f64,
+    /// Its reach from bottom to top, m.
+    pub height: f64,
 }
 
 impl Energy {
@@ -97,55 +118,71 @@ impl Tank {
             surface,
             phi,
             time: 0.0,
+            steps: 0,
         }
     }
 
-    /// A plane beach: still water `wave.depth` deep over a flat bed from the left wall at `x = 0`
-    /// to `toe`, then a slope rising 1 in `run` to the right wall, where the water is `shallow`
-    /// deep, with the solitary `wave` on the surface. Surface nodes are an eighth of the local
-    /// depth apart, kept between `finest` and a tenth of the offshore depth, so they close up as
-    /// the wave shoals. The bed has 25 curved elements on the flat and elements two finest
-    /// spacings long on the slope, with the toe where two meet, so the bed's corner is kept.
-    pub fn beach(wave: &Solitary, toe: f64, run: f64, shallow: f64, finest: f64) -> Self {
-        let depth = wave.depth;
-        let end = toe + run * (depth - shallow);
+    /// Still water over a bed of straight pieces between `profile` points, `(x, depth)` from the
+    /// left wall at the first point to the right wall at the last, with the solitary `wave` on
+    /// the surface, its depth the first point's. Surface nodes are an eighth of the local depth
+    /// apart, kept between `finest` and a tenth of the offshore depth, so they close up as the
+    /// wave shoals. Each piece of bed is cut into curved elements about 0.6 of its least depth
+    /// long, but no shorter than four finest spacings, and the profile's points are where two
+    /// elements meet, so its corners are kept.
+    pub fn over(wave: &Solitary, profile: &[(f64, f64)], finest: f64) -> Self {
+        assert!(profile.len() >= 2, "a profile needs at least two points");
+        assert!(
+            profile.windows(2).all(|w| w[1].0 > w[0].0) && profile.iter().all(|p| p.1 > 0.0),
+            "the profile's x must increase and its depths be positive"
+        );
+        let (start, end) = (profile[0].0, profile[profile.len() - 1].0);
         let bed_depth = |x: f64| {
-            if x <= toe {
-                depth
-            } else {
-                depth - (x - toe) / run
-            }
+            let k = profile
+                .partition_point(|p| p.0 <= x)
+                .clamp(1, profile.len() - 1);
+            let (a, b) = (profile[k - 1], profile[k]);
+            a.1 + (b.1 - a.1) * ((x - a.0) / (b.0 - a.0)).clamp(0.0, 1.0)
         };
-        let mut xs = vec![0.0];
+        let offshore = profile[0].1;
+        let mut xs = vec![start];
         while xs[xs.len() - 1] < end {
             let x = xs[xs.len() - 1];
-            xs.push(x + (0.125 * bed_depth(x)).clamp(finest, 0.1 * depth));
+            xs.push(x + (0.125 * bed_depth(x)).clamp(finest, 0.1 * offshore));
         }
         // Stretch to end exactly on the wall, and split the last gap for an odd number of nodes.
-        let scale = end / xs[xs.len() - 1];
-        xs.iter_mut().for_each(|x| *x *= scale);
+        let scale = (end - start) / (xs[xs.len() - 1] - start);
+        xs.iter_mut()
+            .for_each(|x| *x = start + (*x - start) * scale);
         if xs.len() % 2 == 0 {
             let k = xs.len() - 1;
             xs.insert(k, 0.5 * (xs[k - 1] + xs[k]));
         }
-        let part = |a: f64, b: f64, elements: usize| -> Vec<(f64, f64)> {
-            (0..=2 * elements)
-                .map(|k| {
-                    let x = a + (b - a) * k as f64 / (2 * elements) as f64;
-                    (x, -bed_depth(x))
-                })
-                .collect()
-        };
-        let mut bed = part(0.0, toe, 25);
-        bed.pop();
-        bed.extend(part(
-            toe,
-            end,
-            ((end - toe) / (4.0 * finest)).ceil() as usize,
-        ));
+        let mut bed = vec![(start, -profile[0].1)];
+        for w in profile.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            let length = (0.6 * a.1.min(b.1)).max(4.0 * finest);
+            // A hair under, so a piece that is a whole number of elements long is not given one
+            // more by rounding.
+            let elements = ((b.0 - a.0) / length - 1e-9).ceil().max(1.0) as usize;
+            for k in 1..=2 * elements {
+                let x = a.0 + (b.0 - a.0) * k as f64 / (2 * elements) as f64;
+                bed.push((x, -bed_depth(x)));
+            }
+        }
         let phi = wave.potential(&xs);
         let surface = xs.iter().map(|&x| (x, wave.eta(x))).collect();
         Tank::new(wave.g, bed, 5, surface, phi)
+    }
+
+    /// A plane beach: [`Tank::over`] a flat bed `wave.depth` deep from `x = 0` to `toe`, then a
+    /// slope rising 1 in `run` to the right wall, where the water is `shallow` deep.
+    pub fn beach(wave: &Solitary, toe: f64, run: f64, shallow: f64, finest: f64) -> Self {
+        let end = toe + run * (wave.depth - shallow);
+        Tank::over(
+            wave,
+            &[(0.0, wave.depth), (toe, wave.depth), (end, shallow)],
+            finest,
+        )
     }
 
     /// The edge of the water counter-clockwise, as the solver takes it: bed, right wall, surface
@@ -229,6 +266,25 @@ impl Tank {
         dt
     }
 
+    /// One step the way the breaking tests take them, for a wave that may fold over: a step at
+    /// [`COURANT`], the surface smoothed every [`SMOOTH_EVERY`] steps, and nodes re-spaced, up to
+    /// five times, while neighbouring gaps differ by more than [`REGRID_ABOVE`]. Returns the
+    /// step's length.
+    pub fn march(&mut self) -> f64 {
+        let dt = self.advance(COURANT);
+        self.steps += 1;
+        if self.steps.is_multiple_of(SMOOTH_EVERY) {
+            self.smooth();
+        }
+        for _ in 0..5 {
+            if self.unevenness() <= REGRID_ABOVE {
+                break;
+            }
+            self.regrid();
+        }
+        dt
+    }
+
     /// The step [`Tank::advance`] would take. One solve.
     pub fn time_step(&self, courant: f64) -> f64 {
         self.stable(&self.velocity(), courant)
@@ -290,37 +346,78 @@ impl Tank {
     /// thinner than one spacing is not resolved anyway. Closer neighbours along the chain do not
     /// count: their crossing is a tangle, see [`Tank::tangled`].
     pub fn landed(&self) -> bool {
+        self.landing().is_some()
+    }
+
+    /// Where a lip has landed, if it has: the node that came close, and the first node of the
+    /// segment it came close to (see [`Tank::landed`]).
+    pub fn landing(&self) -> Option<(usize, usize)> {
         let s = &self.surface;
         let gaps = gaps(s);
         let spacing = |i: usize| {
             let before = if i > 0 { gaps[i - 1] } else { f64::INFINITY };
             before.min(*gaps.get(i).unwrap_or(&f64::INFINITY))
         };
-        let near = (0..s.len()).any(|i| {
-            (0..s.len() - 1)
-                .filter(|&j| j + LANDING_GAP <= i || i + LANDING_GAP <= j)
-                .any(|j| distance_to_segment(s[i], s[j], s[j + 1]) < spacing(i).min(gaps[j]))
-        });
-        near || self.crossing(LANDING_GAP, usize::MAX)
+        let mut closest: Option<(f64, usize, usize)> = None;
+        for i in 0..s.len() {
+            for j in (0..s.len() - 1).filter(|&j| j + LANDING_GAP <= i || i + LANDING_GAP <= j) {
+                let ratio = distance_to_segment(s[i], s[j], s[j + 1]) / spacing(i).min(gaps[j]);
+                if ratio < 1.0 && closest.is_none_or(|c| ratio < c.0) {
+                    closest = Some((ratio, i, j));
+                }
+            }
+        }
+        closest
+            .map(|c| (c.1, c.2))
+            .or_else(|| self.crossing(LANDING_GAP, usize::MAX))
+    }
+
+    /// The air a landed lip has closed off: the loop of surface from where the lip landed round
+    /// to its tip. `None` before it lands.
+    pub fn tube(&self) -> Option<Tube> {
+        let (i, j) = self.landing()?;
+        let (lo, hi) = (i.min(j + 1), i.max(j));
+        let ring = &self.surface[lo..=hi];
+        let area = 0.5
+            * ring
+                .iter()
+                .zip(ring.iter().cycle().skip(1))
+                .map(|(a, b)| a.0 * b.1 - b.0 * a.1)
+                .sum::<f64>()
+                .abs();
+        let span = |f: fn(&(f64, f64)) -> f64| {
+            let (lo, hi) = ring
+                .iter()
+                .map(f)
+                .fold((f64::MAX, f64::MIN), |(l, h), v| (l.min(v), h.max(v)));
+            hi - lo
+        };
+        Some(Tube {
+            area,
+            width: span(|p| p.0),
+            height: span(|p| p.1),
+        })
     }
 
     /// Whether neighbouring segments of the surface cross: the nodes have folded over each other,
     /// a numerical failure, not water.
     pub fn tangled(&self) -> bool {
-        self.crossing(2, LANDING_GAP)
+        self.crossing(2, LANDING_GAP).is_some()
     }
 
-    /// Whether two segments `from..until` apart along the chain cross.
-    fn crossing(&self, from: usize, until: usize) -> bool {
+    /// Two segments `from..until` apart along the chain that cross: the first node of each.
+    fn crossing(&self, from: usize, until: usize) -> Option<(usize, usize)> {
         let s = &self.surface;
         let cross = |a: (f64, f64), b: (f64, f64), c: (f64, f64)| {
             (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0)
         };
-        (0..s.len() - 1).any(|i| {
-            (i + from..(i.saturating_add(until)).min(s.len() - 1)).any(|j| {
-                let (a, b, c, d) = (s[i], s[i + 1], s[j], s[j + 1]);
-                cross(a, b, c) * cross(a, b, d) < 0.0 && cross(c, d, a) * cross(c, d, b) < 0.0
-            })
+        (0..s.len() - 1).find_map(|i| {
+            (i + from..(i.saturating_add(until)).min(s.len() - 1))
+                .find(|&j| {
+                    let (a, b, c, d) = (s[i], s[i + 1], s[j], s[j + 1]);
+                    cross(a, b, c) * cross(a, b, d) < 0.0 && cross(c, d, a) * cross(c, d, b) < 0.0
+                })
+                .map(|j| (i, j))
         })
     }
 
@@ -507,6 +604,72 @@ fn derivative(s: &[f64], x: f64) -> [f64; 5] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_beach_keeps_the_toe_and_the_spacing_it_was_tested_with() {
+        let wave = Solitary {
+            g: 9.81,
+            depth: 1.0,
+            height: 0.3,
+            crest: 7.5,
+        };
+        let t = Tank::beach(&wave, 15.0, 15.0, 0.05, 0.05);
+        // 25 elements on the flat, 72 on the slope, 0.2 long; the toe is where two meet.
+        assert_eq!(t.bed.len(), 2 * (25 + 72) + 1);
+        assert_eq!(t.bed[50], (15.0, -1.0));
+        assert!((t.bed[t.bed.len() - 1].1 + 0.05).abs() < 1e-12);
+        let last = t.surface[t.surface.len() - 1].0;
+        assert!((last - 29.25).abs() < 1e-9, "the surface ends at {last}");
+    }
+
+    #[test]
+    fn a_closed_loop_is_a_landed_lip_and_its_tube_is_measured() {
+        // Flat water with a circle of radius 0.5 drawn into it, from its bottom round to a tip
+        // that comes back down within a hair of the flat water ahead.
+        let mut surface: Vec<(f64, f64)> = (0..=20).map(|k| (0.1 * k as f64, 0.0)).collect();
+        let points = 80;
+        for k in 1..points {
+            let a = std::f64::consts::TAU * k as f64 / points as f64;
+            surface.push((
+                2.0 + 0.5 * a.sin(),
+                0.5 - 0.5 * a.cos() + 0.03 * k as f64 / points as f64,
+            ));
+        }
+        let tip = surface.len() - 1;
+        surface.extend((0..=19).map(|k| (2.05 + 0.1 * k as f64, -0.01)));
+        surface.push((4.1, -0.01));
+        if surface.len().is_multiple_of(2) {
+            surface.push((4.2, -0.01));
+        }
+        let end = surface[surface.len() - 1].0;
+        let phi = vec![0.0; surface.len()];
+        let t = Tank::new(
+            9.81,
+            vec![(0.0, -1.0), (end / 2.0, -1.0), (end, -1.0)],
+            3,
+            surface,
+            phi,
+        );
+        // The landing joins the two ends of the loop, the tip and where the loop began (node 20),
+        // in either order.
+        let (node, segment) = t.landing().expect("the loop has closed");
+        let ends = (node.min(segment), node.max(segment));
+        assert!(
+            ends.0.abs_diff(20) <= 3 && ends.1.abs_diff(tip) <= 3,
+            "landed between {ends:?}; the loop runs from 20 to {tip}"
+        );
+        let tube = t.tube().unwrap();
+        let circle = std::f64::consts::PI * 0.25;
+        assert!(
+            (tube.area / circle - 1.0).abs() < 0.05,
+            "area {} against {circle}",
+            tube.area
+        );
+        assert!(
+            (tube.width - 1.0).abs() < 0.05 && (tube.height - 1.0).abs() < 0.08,
+            "{tube:?}"
+        );
+    }
 
     #[test]
     fn five_point_interpolation_is_exact_for_quartics_on_uneven_spacing() {

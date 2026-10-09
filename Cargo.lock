@@ -317,6 +317,7 @@ dependencies = [
  "thiserror",
  "wavecore",
  "waveio",
+ "waveslice",
 ]
 
 [[package]]

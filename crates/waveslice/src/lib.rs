@@ -22,4 +22,4 @@ pub mod tank;
 
 pub use bem::{Kind, Side, Solution, solve};
 pub use solitary::Solitary;
-pub use tank::{Energy, Tank};
+pub use tank::{Energy, Tank, Tube};

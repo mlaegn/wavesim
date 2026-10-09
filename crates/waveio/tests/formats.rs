@@ -1,9 +1,9 @@
-//! Bed and run files must round-trip exactly and reject malformed input loudly.
+//! Bed, run and slice files must round-trip exactly and reject malformed input loudly.
 
 use std::fs;
 use std::path::PathBuf;
 
-use waveio::{Bed, Error, Run, RunWriter};
+use waveio::{Bed, Error, Landing, Run, RunWriter, SLICE_FORMAT, Slice, SliceWriter};
 
 fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("waveio-test-{name}-{}", std::process::id()));
@@ -240,4 +240,56 @@ fn a_run_without_statistics_has_none() {
         !text.contains("stats"),
         "an absent field should not be written"
     );
+}
+
+#[test]
+fn a_slice_round_trips_and_says_how_it_ended() {
+    let dir = scratch("slice");
+    let bed = [(0.0, -1.0), (5.0, -1.0), (10.0, -0.2)];
+    let mut w = SliceWriter::create(&dir, &bed, 3, serde_json::json!({ "height": 0.3 })).unwrap();
+    w.write_frame(
+        0.0,
+        &[(0.0, 0.0), (5.0, 0.3), (10.0, 0.0)],
+        &[0.0, 1.5, 0.0],
+    )
+    .unwrap();
+    w.write_frame(
+        0.25,
+        &[(0.0, 0.0), (5.5, 0.32), (10.0, 0.01)],
+        &[0.0, 1.75, 0.1],
+    )
+    .unwrap();
+    assert!(
+        w.write_frame(0.5, &[(0.0, 0.0)], &[0.0]).is_err(),
+        "a frame of the wrong size"
+    );
+    let landing = Landing {
+        time: 0.25,
+        x: 6.0,
+        z: 0.0,
+        throw: 0.5,
+        tube_area: 0.1,
+        tube_width: 0.4,
+        tube_height: 0.3,
+    };
+    w.finish("landed", None, Some(landing)).unwrap();
+
+    let s = Slice::read(&dir).unwrap();
+    assert_eq!(s.header.format, SLICE_FORMAT);
+    assert_eq!((s.header.frame_count, s.header.nodes), (2, 3));
+    assert_eq!(s.header.times, vec![0.0, 0.25]);
+    assert_eq!(s.header.ended, "landed");
+    assert_eq!(s.header.landing, Some(landing));
+    assert_eq!(s.header.curl, None);
+    assert_eq!(s.header.bed[2], [10.0, -0.2]);
+    assert_eq!(s.field(1, 0), &[0.0, 5.5, 10.0]);
+    assert_eq!(s.field(1, 1), &[0.0, 0.32, 0.01]);
+    assert_eq!(s.field(1, 2), &[0.0, 1.75, 0.1]);
+
+    // A frames file cut short is caught.
+    let frames = dir.join("frames.f32");
+    let bytes = std::fs::read(&frames).unwrap();
+    std::fs::write(&frames, &bytes[..bytes.len() - 4]).unwrap();
+    assert!(Slice::read(&dir).is_err());
+    std::fs::remove_dir_all(&dir).unwrap();
 }

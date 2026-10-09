@@ -16,6 +16,7 @@ parallel = ["wavecore/parallel", "dep:rayon"]
 [dependencies]
 wavecore = { path = "../wavecore" }
 waveio = { path = "../waveio" }
+waveslice = { path = "../waveslice" }
 clap = { version = "4", features = ["derive"] }
 rayon = { version = "1", optional = true }
 serde = { version = "1", features = ["derive"] }

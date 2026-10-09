@@ -23,14 +23,18 @@ pub(crate) fn solve(mut a: Vec<f64>, mut b: Vec<f64>) -> Option<Vec<f64>> {
             b.swap(k, p);
         }
         let pivot = a[k * n + k];
-        for i in k + 1..n {
-            let f = a[i * n + k] / pivot;
+        // Rows below the pivot row, each as a slice, so the inner loop has no index checks and
+        // vectorises.
+        let (above, below) = a.split_at_mut((k + 1) * n);
+        let row_k = &above[k * n + k + 1..(k + 1) * n];
+        for (r, row) in below.chunks_exact_mut(n).enumerate() {
+            let f = row[k] / pivot;
             if f != 0.0 {
-                a[i * n + k] = 0.0;
-                for c in k + 1..n {
-                    a[i * n + c] -= f * a[k * n + c];
+                row[k] = 0.0;
+                for (x, &y) in row[k + 1..].iter_mut().zip(row_k) {
+                    *x -= f * y;
                 }
-                b[i] -= f * b[k];
+                b[k + 1 + r] -= f * b[k];
             }
         }
     }

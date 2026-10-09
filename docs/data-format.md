@@ -1,8 +1,8 @@
 # Data formats
 
-Two formats connect the pieces: a **bed file**, written by the fetch tool and read by the solver, and a **run**, written by the solver and meant for a viewer. Both are a small JSON header next to raw little-endian `float32` data, so anything that can read JSON and bytes can read them (Rust, Python, JavaScript).
+Three formats connect the pieces: a **bed file**, written by the fetch tool and read by the solver; a **run**, written by the solver and meant for a viewer; and a **slice**, one wave breaking side-on, written by `wavesim slice` for the viewer's side view. Each is a small JSON header next to raw little-endian `float32` data, so anything that can read JSON and bytes can read them (Rust, Python, JavaScript).
 
-Both have `format` and `version` fields. Readers must reject a `format` they do not know and a `version` they do not support.
+All have `format` and `version` fields. Readers must reject a `format` they do not know and a `version` they do not support.
 
 ## Coordinate frame
 
@@ -100,6 +100,22 @@ const field = (name, k) => {
 ```
 
 `Float32Array` uses the machine's byte order, which is little-endian on every current browser and desktop CPU.
+
+## Slice (`wavesim-slice`, version 1)
+
+A directory written by `wavesim slice`: one wave breaking in a vertical slice, seen side-on, over a made-up seabed between two walls.
+
+```text
+out/slice-reef/
+├── slice.json   # header
+└── frames.f32   # frame_count frames, back to back
+```
+
+`slice.json` carries `bed`, the seabed from the left wall to the right one as `[x, z]` points in metres (`z` up from still water, so the bed is negative); `nodes`, the number of surface nodes in every frame, from the left wall to the right one; `fields`, always `["x", "z", "speed"]`; `frame_count` and `times` (seconds, one per frame); and `wave`, the settings: `case`, `depth` (offshore), `height` (the solitary wave's crest above still water), `crest` (where it started), `g`, `finest` (the closest node spacing) and `profile` (the seabed as `[x, depth]` points).
+
+A frame is the node's `x` for every node, then every `z`, then every `speed` (the water's speed there, m/s): field `f` of frame `k` starts at value `(3k + f) · nodes`. The surface is a chain, not a function of `x`: where a lip folds over, `x` runs backwards. Frames come every few steps of the solver, and its steps shorten as a lip forms, so frames crowd where the wave breaks; `times` is not evenly spaced.
+
+`ended` says why the run stopped: `landed` (the lip reached the water, where this way of computing ends), `wall` (the wave reached the shallow wall without landing), `time limit`, or `failed: ...`. `curl`, if present, is the moment the front face first passed vertical: `time`, `x`, `crest` (the crest's height then) and `depth` (the still-water depth under the vertical face). `landing`, if present, is the moment the lip landed: `time`, `x` and `z` of the landing, `throw` (how far forward of `curl.x` it landed), and the tube it closed off: `tube_area` (m² per metre of crest), `tube_width` and `tube_height`.
 
 ## Spot registry (`spots.toml`)
 

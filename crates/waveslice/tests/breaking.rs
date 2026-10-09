@@ -43,25 +43,13 @@ fn crest(t: &Tank) -> (f64, f64) {
         .fold((0.0, f64::MIN), |a, p| if p.1 > a.1 { p } else { a })
 }
 
-/// Step the tank as the plunge example does: a step from the node spacing and speeds,
-/// smoothing every five steps, re-spacing where neighbouring gaps differ by more than 1.3.
-fn step(t: &mut Tank, count: usize) {
-    t.advance(0.5);
-    if count.is_multiple_of(5) {
-        t.smooth();
-    }
-    for _ in 0..5 {
-        if t.unevenness() <= 1.3 {
-            break;
-        }
-        t.regrid();
-    }
-}
-
 #[test]
 #[ignore = "slow physics check: cargo test --release -- --include-ignored"]
 fn a_solitary_wave_plunges_on_a_one_in_fifteen_slope() {
     // Grilli et al.'s own plunging case, which Derakhti et al. (2020) computed again: S0 = 0.19.
+    // Its lip lands a metre from the wall that ends this beach; `wavesim slice steep`, the same
+    // case eight times larger with the beach ending in a shelf 24 m long instead, lands it 2 cm
+    // further on and otherwise the same, so the wall does not shape it.
     let mut t = beach(0.3);
     let e0 = t.energy().total();
     let clock = Instant::now();
@@ -81,7 +69,7 @@ fn a_solitary_wave_plunges_on_a_one_in_fifteen_slope() {
             "the wave reached the shallow wall without landing"
         );
         count += 1;
-        step(&mut t, count);
+        t.march();
         if overturned_at.is_none() && t.overturned() {
             let (x, z) = crest(&t);
             overturned_at = Some((t.time, x, z, depth_at(x)));
@@ -132,7 +120,7 @@ fn a_low_solitary_wave_does_not_break_on_the_same_slope() {
             "over {LIMIT} s of computing"
         );
         count += 1;
-        step(&mut t, count);
+        t.march();
         let face = t
             .surface
             .windows(2)

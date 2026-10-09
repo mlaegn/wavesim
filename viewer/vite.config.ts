@@ -5,8 +5,8 @@ import type { Plugin } from "vite";
 import { defineConfig } from "vitest/config";
 
 /**
- * Serves finished runs from `../out` (or $WAVESIM_RUNS) under `/runs/<name>/...`, and a
- * listing at `/runs/index.json`. Runs are large and git-ignored, so they are never
+ * Serves finished runs and slices from `../out` (or $WAVESIM_RUNS) under `/runs/<name>/...`, and
+ * a listing of both at `/runs/index.json`. Runs are large and git-ignored, so they are never
  * copied into the build.
  */
 function runs(dir: string): Plugin {
@@ -21,15 +21,16 @@ function runs(dir: string): Plugin {
     const rel = decodeURIComponent(url.pathname.slice("/runs/".length));
 
     if (rel === "index.json") {
-      const names = fs.existsSync(dir)
-        ? fs
-            .readdirSync(dir, { withFileTypes: true })
-            .filter((e) => e.isDirectory() && fs.existsSync(path.join(dir, e.name, "run.json")))
-            .map((e) => e.name)
-            .sort()
-        : [];
+      const holding = (file: string): string[] =>
+        fs.existsSync(dir)
+          ? fs
+              .readdirSync(dir, { withFileTypes: true })
+              .filter((e) => e.isDirectory() && fs.existsSync(path.join(dir, e.name, file)))
+              .map((e) => e.name)
+              .sort()
+          : [];
       res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ runs: names }));
+      res.end(JSON.stringify({ runs: holding("run.json"), slices: holding("slice.json") }));
       return;
     }
 
@@ -59,7 +60,16 @@ function runs(dir: string): Plugin {
 
 export default defineConfig({
   plugins: [runs(path.resolve(process.env.WAVESIM_RUNS ?? path.join(import.meta.dirname, "../out")))],
-  build: { target: "es2022", chunkSizeWarningLimit: 800 },
+  build: {
+    target: "es2022",
+    chunkSizeWarningLimit: 800,
+    rollupOptions: {
+      input: {
+        main: path.join(import.meta.dirname, "index.html"),
+        slice: path.join(import.meta.dirname, "slice.html"),
+      },
+    },
+  },
   // Two test workers at most: the suite is small, and this keeps a laptop quiet.
   test: { include: ["tests/**/*.test.ts"], maxWorkers: 2 },
 });
