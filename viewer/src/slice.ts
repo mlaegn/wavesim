@@ -117,6 +117,11 @@ export class Slice {
     private readonly data: Float32Array,
   ) {}
 
+  /** The first frame's time: 0, or the hand-off's when the main model carried the wave first. */
+  get start(): number {
+    return this.header.times[0] ?? 0;
+  }
+
   get duration(): number {
     const t = this.header.times;
     return t[t.length - 1] ?? 0;

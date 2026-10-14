@@ -229,6 +229,13 @@ function showFacts(s: Slice): void {
     ["Seabed", String(w.case ?? s.header.name)],
     ["Wave", `${height.toFixed(1)} m on ${depth.toFixed(1)} m of water`],
   ];
+  const handoff = w.handoff;
+  if (typeof handoff === "object" && handoff !== null) {
+    const h = handoff as Record<string, unknown>;
+    if (typeof h.time === "number" && typeof h.depth === "number") {
+      rows.push(["Main model", `carried it until ${h.time.toFixed(2)} s, its crest over ${h.depth} m of water`]);
+    }
+  }
   const { curl, landing } = s.header;
   if (curl) {
     rows.push(["Face vertical", `${curl.time.toFixed(2)} s, in ${curl.depth.toFixed(2)} m of water, crest ${curl.crest.toFixed(2)} m up`]);
@@ -304,8 +311,9 @@ async function open(name: string): Promise<void> {
   }
   message.hidden = true;
   controls.hidden = false;
+  scrub.min = String(slice.start);
   scrub.max = String(slice.duration);
-  time = 0;
+  time = slice.start;
   showFacts(slice);
   play(true);
   const url = new URL(window.location.href);
@@ -315,7 +323,7 @@ async function open(name: string): Promise<void> {
 
 playButton.addEventListener("click", () => {
   if (!slice) return;
-  if (time >= slice.duration) time = 0;
+  if (time >= slice.duration) time = slice.start;
   play(!playing);
 });
 scrub.addEventListener("input", () => {
@@ -325,7 +333,7 @@ scrub.addEventListener("input", () => {
 breakButton.addEventListener("click", () => {
   if (!slice) return;
   const at = slice.header.curl?.time ?? slice.duration;
-  time = Math.max(0, at - 1.5);
+  time = Math.max(slice.start, at - 1.5);
   speedSelect.value = "0.1";
   viewSelect.value = "break";
   play(true);

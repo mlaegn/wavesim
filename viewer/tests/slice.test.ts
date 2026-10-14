@@ -34,6 +34,7 @@ describe("slice files", () => {
     expect(Array.from(s.field(1, 0))).toEqual([0, 6, 10]);
     expect(Array.from(s.field(0, 2))).toEqual([0, 2, 0]);
     expect(s.duration).toBe(0.5);
+    expect(s.start).toBe(0);
     expect(s.header.landing?.throw).toBe(0.5);
     expect(s.waveSpeed).toBeCloseTo(Math.sqrt(9.81 * 1.3), 12);
   });

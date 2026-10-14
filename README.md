@@ -219,6 +219,18 @@ All three plunge, as Grilli et al.'s slope parameter says they should (plunging 
 
 The run is guarded like `wavesim run`: on the efficiency cores, it times its first five steps and refuses a run that would take longer than `--max-minutes` (30 by default: a slice uses one efficiency core, so it is slow but cool), and stops one that does, keeping what it has. `--finest` sets the closest node spacing (0.4 m by default): halving it makes a run about ten times longer.
 
+**Handing over from the main model.** `--handoff-depth 4.8` lets the main model (Serre-Green-Naghdi, in a strip one line wide) carry the wave until its crest is over water 4.8 m deep, then hands its surface and velocity to the slice solver, which covers only the water from 60 m behind the crest to the shore. The surface's velocity comes from the main model's own profile in depth, and its breaking switch is off for the approach: it would turn dispersion off for a wave this tall while it is still only shoaling. On the steep beach, handing over at 4.8 m and at 3.2 m gives the same break as the slice solver all the way, within bounds set before the runs (face vertical within 2 m and 0.2 s, crest within 5%, lip throw within 15%, tube within 20%), in less than half the time:
+
+| | Slice solver all the way | Hand-off at 4.8 m | Hand-off at 3.2 m |
+|---|---|---|---|
+| Face vertical | 15.97 s, 222.3 m along | 16.03 s, 222.7 m | 16.08 s, 223.0 m |
+| Crest then | 3.27 m | 3.20 m | 3.16 m |
+| Lip thrown | 10.72 m | 10.58 m | 10.37 m |
+| Tube | 1.61 x 3.14 m | 1.56 x 3.03 m | 1.55 x 2.96 m |
+| Computing | 17 min | 7.2 min | 5.6 min |
+
+The earlier hand-off is the closer, as it should be: the main model is the more accurate the deeper the water. This is the way to real reefs: the main model brings a swell across the shelf, the slice solver breaks it. macOS reported no thermal warning, slowdown or power limit at any of 26 readings, 30 s apart, through both hand-off runs.
+
 To watch it, start the viewer (see above) and open **Side view of a break**, or http://localhost:5173/slice.html. The page holds a still camera on the break at true proportions while the wave runs in (or shows the whole tank, height stretched), colours the surface by how fast the water moves against the wave's own speed (pale when still, white at 0.6, red where it outruns the wave, which is where the lip is thrown), and plays at down to a thirtieth of real time: the plunge itself lasts about a second. **Watch the break slowly** jumps there. Beside it are when and where the face stood vertical, where the lip landed and the size of the tube.
 
 ## Numerics

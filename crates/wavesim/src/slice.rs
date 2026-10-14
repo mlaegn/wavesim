@@ -90,6 +90,9 @@ pub struct SliceOptions {
     pub out: PathBuf,
     /// Refuse a run estimated to take longer, and stop one that does, keeping what it has.
     pub max_wall_seconds: Option<f64>,
+    /// Carry the wave with the main model until its crest is over water this deep, then hand
+    /// it to the slice solver (see [`crate::handoff`]); `None` runs the slice solver all the way.
+    pub handoff_depth: Option<f64>,
 }
 
 /// What a finished slice run found.
@@ -128,6 +131,62 @@ fn travel_time(profile: &[(f64, f64)], from: f64, height: f64) -> f64 {
         .sum()
 }
 
+/// The slice solver's tank after the main model has carried `wave` over `profile` until its
+/// crest is over water `depth` deep: the water from seven and a half offshore depths behind the
+/// crest to the shore, the profile cut there, and what the hand-off was, for the header.
+fn handed(
+    opts: &SliceOptions,
+    wave: &Solitary,
+    profile: Vec<(f64, f64)>,
+    depth: f64,
+) -> Result<Handed, Error> {
+    let end = profile[profile.len() - 1].0;
+    let still = |x: f64| depth_at(&profile, x);
+    let c = wave.speed();
+    // The main model's cells half the slice's finest node spacing.
+    let cell = 0.5 * opts.finest;
+    let approach = crate::handoff::approach(
+        end,
+        cell,
+        &still,
+        &|x| wave.eta(x),
+        &|x| c * wave.eta(x) / (still(x) + wave.eta(x)),
+        depth,
+    )?;
+    let start = (approach.crest - 7.5 * opts.depth).max(0.0);
+    let mut cut = vec![(start, still(start))];
+    cut.extend(profile.iter().copied().filter(|p| p.0 > start + 1e-9));
+    let mut tank = Tank::shaped(
+        G,
+        &cut,
+        opts.finest,
+        0.1 * opts.depth,
+        &|x| approach.eta_at(x),
+        &|xs| approach.potential(xs, &still),
+    );
+    tank.time = approach.time;
+    let record = serde_json::json!({
+        "depth": depth,
+        "time": approach.time,
+        "crest": approach.crest,
+        "start": start,
+        "cell": cell,
+        "approach_steps": approach.steps,
+    });
+    Ok(Handed {
+        tank,
+        profile: cut,
+        record,
+    })
+}
+
+/// A tank after the hand-off, its cut profile, and the hand-off's record for the header.
+struct Handed {
+    tank: Tank,
+    profile: Vec<(f64, f64)>,
+    record: serde_json::Value,
+}
+
 /// Run one wave until its lip lands, it reaches the shallow wall, the time limit passes, or the
 /// computation fails, writing frames as it goes. A run its first steps say would take longer
 /// than the limit is refused before anything is written.
@@ -147,9 +206,20 @@ pub fn run_slice(opts: &SliceOptions) -> Result<SliceSummary, Error> {
         height: opts.height,
         crest,
     };
-    let mut tank = Tank::over(&wave, &profile, opts.finest);
+    let (mut tank, profile, handoff) = match opts.handoff_depth {
+        None => (
+            Tank::over(&wave, &profile, opts.finest),
+            profile,
+            serde_json::Value::Null,
+        ),
+        Some(depth) => {
+            let h = handed(opts, &wave, profile, depth)?;
+            (h.tank, h.profile, h.record)
+        }
+    };
     let speeds = |t: &Tank| -> Vec<f64> { t.velocity().iter().map(|v| v.0.hypot(v.1)).collect() };
     let start = (tank.surface.clone(), speeds(&tank));
+    let start_time = tank.time;
 
     // Time the first steps and refuse a run that would go over its limit.
     let clock = Instant::now();
@@ -157,8 +227,13 @@ pub fn run_slice(opts: &SliceOptions) -> Result<SliceSummary, Error> {
         tank.march();
     }
     let per_step = clock.elapsed().as_secs_f64() / CALIBRATION_STEPS as f64;
-    let mean_dt = tank.time / CALIBRATION_STEPS as f64;
-    let steps = travel_time(&profile, crest, opts.height) / mean_dt * SLOWDOWN;
+    let mean_dt = (tank.time - start_time) / CALIBRATION_STEPS as f64;
+    let from = start
+        .0
+        .iter()
+        .copied()
+        .fold((0.0, f64::MIN), |a, p| if p.1 > a.1 { p } else { a });
+    let steps = travel_time(&profile, from.0, opts.height) / mean_dt * SLOWDOWN;
     let estimate = steps * per_step;
     if let Some(limit) = opts.max_wall_seconds
         && estimate > limit
@@ -180,9 +255,10 @@ pub fn run_slice(opts: &SliceOptions) -> Result<SliceSummary, Error> {
         "finest": opts.finest,
         "profile": profile,
         "wave": "solitary",
+        "handoff": handoff,
     });
     let mut out = SliceWriter::create(&opts.out, &tank.bed, tank.surface.len(), settings)?;
-    out.write_frame(0.0, &start.0, &start.1)?;
+    out.write_frame(start_time, &start.0, &start.1)?;
     let (mut curl, mut landing) = (None, None);
     let ended = loop {
         if let Some((i, j)) = tank.landing() {

@@ -130,6 +130,27 @@ impl Tank {
     /// long, but no shorter than four finest spacings, and the profile's points are where two
     /// elements meet, so its corners are kept.
     pub fn over(wave: &Solitary, profile: &[(f64, f64)], finest: f64) -> Self {
+        Tank::shaped(
+            wave.g,
+            profile,
+            finest,
+            0.1 * profile[0].1,
+            &|x| wave.eta(x),
+            &|xs| wave.potential(xs),
+        )
+    }
+
+    /// Water over the bed of [`Tank::over`] in any state: the surface at `eta(x)` and the
+    /// potential on it from `potential(xs)`, for nodes at `xs` (increasing). Surface nodes are an
+    /// eighth of the local depth apart, kept between `finest` and `coarsest`.
+    pub fn shaped(
+        g: f64,
+        profile: &[(f64, f64)],
+        finest: f64,
+        coarsest: f64,
+        eta: &dyn Fn(f64) -> f64,
+        potential: &dyn Fn(&[f64]) -> Vec<f64>,
+    ) -> Self {
         assert!(profile.len() >= 2, "a profile needs at least two points");
         assert!(
             profile.windows(2).all(|w| w[1].0 > w[0].0) && profile.iter().all(|p| p.1 > 0.0),
@@ -143,11 +164,10 @@ impl Tank {
             let (a, b) = (profile[k - 1], profile[k]);
             a.1 + (b.1 - a.1) * ((x - a.0) / (b.0 - a.0)).clamp(0.0, 1.0)
         };
-        let offshore = profile[0].1;
         let mut xs = vec![start];
         while xs[xs.len() - 1] < end {
             let x = xs[xs.len() - 1];
-            xs.push(x + (0.125 * bed_depth(x)).clamp(finest, 0.1 * offshore));
+            xs.push(x + (0.125 * bed_depth(x)).clamp(finest, coarsest));
         }
         // Stretch to end exactly on the wall, and split the last gap for an odd number of nodes.
         let scale = (end - start) / (xs[xs.len() - 1] - start);
@@ -169,9 +189,9 @@ impl Tank {
                 bed.push((x, -bed_depth(x)));
             }
         }
-        let phi = wave.potential(&xs);
-        let surface = xs.iter().map(|&x| (x, wave.eta(x))).collect();
-        Tank::new(wave.g, bed, 5, surface, phi)
+        let phi = potential(&xs);
+        let surface = xs.iter().map(|&x| (x, eta(x))).collect();
+        Tank::new(g, bed, 5, surface, phi)
     }
 
     /// A plane beach: [`Tank::over`] a flat bed `wave.depth` deep from `x = 0` to `toe`, then a

@@ -112,7 +112,12 @@ enum Command {
         /// efficiency cores
         #[arg(long, value_enum, default_value_t = Priority::Background)]
         priority: Priority,
-        /// Output directory (default: out/slice-<case>)
+        /// Carry the wave with the main model until its crest is over water this deep, in
+        /// metres, then hand it to the slice solver for the break: the slice then covers only
+        /// the last stretch, which is cheaper
+        #[arg(long)]
+        handoff_depth: Option<f64>,
+        /// Output directory (default: out/slice-<case>, with -handoff-<depth> for a hand-off)
         #[arg(long)]
         out: Option<PathBuf>,
     },
@@ -154,6 +159,7 @@ fn real_main() -> Result<(), Error> {
             frame_every,
             max_minutes,
             priority,
+            handoff_depth,
             out,
         } => {
             lower_priority(priority);
@@ -168,9 +174,15 @@ fn real_main() -> Result<(), Error> {
                 height: height.unwrap_or(0.3 * depth),
                 finest: finest.unwrap_or(0.05 * depth),
                 frame_every: frame_every.max(1),
-                out: out
-                    .unwrap_or_else(|| PathBuf::from("out").join(format!("slice-{}", case.name()))),
+                out: out.unwrap_or_else(|| {
+                    let name = match handoff_depth {
+                        Some(d) => format!("slice-{}-handoff-{d}", case.name()),
+                        None => format!("slice-{}", case.name()),
+                    };
+                    PathBuf::from("out").join(name)
+                }),
                 max_wall_seconds: (max_minutes > 0.0).then_some(max_minutes * 60.0),
+                handoff_depth,
             };
             slice(&opts)
         }
