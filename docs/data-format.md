@@ -1,6 +1,6 @@
 # Data formats
 
-Three formats connect the pieces: a **bed file**, written by the fetch tool and read by the solver; a **run**, written by the solver and meant for a viewer; and a **slice**, one wave breaking side-on, written by `wavesim slice` for the viewer's side view. Each is a small JSON header next to raw little-endian `float32` data, so anything that can read JSON and bytes can read them (Rust, Python, JavaScript).
+Three main formats connect the pieces: a **bed file**, written by the fetch tool and read by the solver; a **run**, written by the solver and meant for a viewer; and a **slice**, one wave breaking side-on, written by `wavesim slice` for the viewer's side view. Each is a small JSON header next to raw little-endian `float32` data, so anything that can read JSON and bytes can read them (Rust, Python, JavaScript).
 
 All have `format` and `version` fields. Readers must reject a `format` they do not know and a `version` they do not support.
 
@@ -116,6 +116,14 @@ out/slice-reef/
 A frame is the node's `x` for every node, then every `z`, then every `speed` (the water's speed there, m/s): field `f` of frame `k` starts at value `(3k + f) · nodes`. The surface is a chain, not a function of `x`: where a lip folds over, `x` runs backwards. Frames come every few steps of the solver, and its steps shorten as a lip forms, so frames crowd where the wave breaks; `times` is not evenly spaced.
 
 `ended` says why the run stopped: `landed` (the lip reached the water, where this way of computing ends), `wall` (the wave reached the shallow wall without landing), `time limit`, or `failed: ...`. `curl`, if present, is the moment the front face first passed vertical: `time`, `x`, `crest` (the crest's height then) and `depth` (the still-water depth under the vertical face). `landing`, if present, is the moment the lip landed: `time`, `x` and `z` of the landing, `throw` (how far forward of `curl.x` it landed), and the tube it closed off: `tube_area` (m² per metre of crest), `tube_width` and `tube_height`.
+
+## Line (`wavesim-line`, version 1)
+
+One cross-shore line of a bed file's frame, sampled from a finer DEM by `tools/fetch_line.py`: `bed` (the bed file it belongs to), `y` (metres along the shore in that frame), `step`, and three lists of equal length: `x` (metres along `+x`), `z` (the finer DEM's elevation above local mean sea level, `null` where it has no data) and `z_bed` (the bed file's own, along the same line, for comparison). `source` records the DEM's `url`, when it was read and how many points it was `missing`.
+
+## Hand-off (`wavesim-handoff`, version 1)
+
+One line of a run's sea at one moment, written by `wavesim run --handoff-y` as `handoff_y<y>.json` in the run: the first time, once the sea has settled (the run's last four periods), that a crest passes the hand-off point, the last point of the line after which the water stays shallower than `depth`. It has `y` (asked for), `row_y` (the centre of the grid row used), `depth`, `time`, `crest` (where the hand-off point is, the crest having just passed it), and lists `x` (the bed file's frame), `eta` (the surface above still water; 0 where dry), `ubar` (the depth-averaged velocity along `+x`, `hu / h`) and `bed` (the run's bed, relative to still water; behind the wave-maker it is flattened under the sponge). `wavesim slice --line ... --handoff-file ...` starts from it.
 
 ## Spot registry (`spots.toml`)
 

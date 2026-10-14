@@ -225,16 +225,21 @@ function draw(): void {
 function showFacts(s: Slice): void {
   const { depth, height } = wave(s);
   const w = s.header.wave;
-  const rows: [string, string][] = [
-    ["Seabed", String(w.case ?? s.header.name)],
-    ["Wave", `${height.toFixed(1)} m on ${depth.toFixed(1)} m of water`],
-  ];
-  const handoff = w.handoff;
-  if (typeof handoff === "object" && handoff !== null) {
-    const h = handoff as Record<string, unknown>;
-    if (typeof h.time === "number" && typeof h.depth === "number") {
-      rows.push(["Main model", `carried it until ${h.time.toFixed(2)} s, its crest over ${h.depth} m of water`]);
+  const handoff = typeof w.handoff === "object" && w.handoff !== null ? (w.handoff as Record<string, unknown>) : null;
+  const rows: [string, string][] = [];
+  if (w.case === "line" && handoff) {
+    // One wave of a run's swell on a real line.
+    rows.push(["Seabed", String(handoff.line ?? s.header.name)]);
+    if (typeof handoff.swell_height === "number" && typeof handoff.swell_period === "number") {
+      rows.push(["Swell", `${handoff.swell_height} m, ${handoff.swell_period} s at the wave-maker`]);
     }
+  } else {
+    rows.push(["Seabed", String(w.case ?? s.header.name)]);
+    rows.push(["Wave", `${height.toFixed(1)} m on ${depth.toFixed(1)} m of water`]);
+  }
+  if (handoff && typeof handoff.time === "number" && typeof handoff.depth === "number") {
+    const who = typeof handoff.from === "string" && handoff.from !== "the line alone" ? "The 2D run" : "Main model";
+    rows.push([who, `carried it until ${handoff.time.toFixed(2)} s, its crest over ${handoff.depth} m of water`]);
   }
   const { curl, landing } = s.header;
   if (curl) {

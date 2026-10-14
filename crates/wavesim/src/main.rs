@@ -3,7 +3,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use wavesim::slice::{Case, SliceOptions, run_slice};
-use wavesim::{Bed, Error, RunOptions, estimate_seconds, human, layout};
+use wavesim::{Bed, Error, HandoffLine, RunOptions, estimate_seconds, human, layout};
 
 /// The made-up seabeds a slice can break on.
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -78,6 +78,13 @@ enum Command {
         /// efficiency cores
         #[arg(long, value_enum, default_value_t = Priority::Background)]
         priority: Priority,
+        /// Save one line of the sea, y metres along the shore, when the first crest of the
+        /// settled sea passes --handoff-depth on it, for `wavesim slice --handoff-file`
+        #[arg(long)]
+        handoff_y: Option<f64>,
+        /// The depth of the hand-off point on the --handoff-y line, in metres
+        #[arg(long, default_value_t = 9.0)]
+        handoff_depth: f64,
         /// Output directory (default: out/<bed name>)
         #[arg(long)]
         out: Option<PathBuf>,
@@ -117,6 +124,18 @@ enum Command {
         /// the last stretch, which is cheaper
         #[arg(long)]
         handoff_depth: Option<f64>,
+        /// A real line of seabed, from tools/fetch_line.py, to break a swell on instead of a
+        /// made-up seabed; give --height (crest to trough at the wave-maker), --period and
+        /// --handoff-depth
+        #[arg(long)]
+        line: Option<PathBuf>,
+        /// The swell's period in seconds, for --line
+        #[arg(long, default_value_t = 14.0)]
+        period: f64,
+        /// For --line: start from the wave a 2D run saved (`wavesim run --handoff-y`), e.g.
+        /// out/pipeline/handoff_y511.5.json, rather than a swell along the line alone
+        #[arg(long)]
+        handoff_file: Option<PathBuf>,
         /// Output directory (default: out/slice-<case>, with -handoff-<depth> for a hand-off)
         #[arg(long)]
         out: Option<PathBuf>,
@@ -160,6 +179,9 @@ fn real_main() -> Result<(), Error> {
             max_minutes,
             priority,
             handoff_depth,
+            line,
+            period,
+            handoff_file,
             out,
         } => {
             lower_priority(priority);
@@ -175,14 +197,23 @@ fn real_main() -> Result<(), Error> {
                 finest: finest.unwrap_or(0.05 * depth),
                 frame_every: frame_every.max(1),
                 out: out.unwrap_or_else(|| {
-                    let name = match handoff_depth {
-                        Some(d) => format!("slice-{}-handoff-{d}", case.name()),
-                        None => format!("slice-{}", case.name()),
+                    let name = match (&line, handoff_depth) {
+                        (Some(l), _) => format!(
+                            "slice-{}",
+                            l.file_stem()
+                                .map(|s| s.to_string_lossy())
+                                .unwrap_or_default()
+                        ),
+                        (None, Some(d)) => format!("slice-{}-handoff-{d}", case.name()),
+                        (None, None) => format!("slice-{}", case.name()),
                     };
                     PathBuf::from("out").join(name)
                 }),
                 max_wall_seconds: (max_minutes > 0.0).then_some(max_minutes * 60.0),
                 handoff_depth,
+                line,
+                period,
+                handoff_file,
             };
             slice(&opts)
         }
@@ -199,6 +230,8 @@ fn real_main() -> Result<(), Error> {
             threads,
             max_minutes,
             priority,
+            handoff_y,
+            handoff_depth,
             out,
         } => {
             lower_priority(priority);
@@ -222,6 +255,10 @@ fn real_main() -> Result<(), Error> {
                 background: cfg!(target_os = "macos") && priority == Priority::Background,
                 budget_seconds: (max_minutes > 0.0).then_some(max_minutes * 60.0),
                 max_wall_seconds: (max_minutes > 0.0).then_some(max_minutes * 60.0),
+                handoff: handoff_y.map(|y| HandoffLine {
+                    y,
+                    depth: handoff_depth,
+                }),
             };
             if let Ok(bed) = Bed::read(&opts.bed)
                 && let Ok(layout) = layout(&bed, &opts)
@@ -370,12 +407,20 @@ fn lower_priority(priority: Priority) {
 }
 
 fn slice(opts: &SliceOptions) -> Result<(), Error> {
-    println!(
-        "a wave {} m high in {} m of water, onto the {} seabed",
-        opts.height,
-        opts.depth,
-        opts.case.name()
-    );
+    match &opts.line {
+        Some(line) => println!(
+            "a swell {} m high and {} s long, onto the line in {}",
+            opts.height,
+            opts.period,
+            line.display()
+        ),
+        None => println!(
+            "a wave {} m high in {} m of water, onto the {} seabed",
+            opts.height,
+            opts.depth,
+            opts.case.name()
+        ),
+    }
     let s = run_slice(opts)?;
     println!(
         "ended: {} after {} steps and {} (estimated {}); {} frames in {}",

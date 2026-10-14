@@ -37,7 +37,7 @@ It is a depth-averaged model. It captures shoaling and breaking as a bore, not a
 | **Viewer** | `viewer/`: a browser replay of a run in 3D (Three.js and TypeScript): terrain from the bed, the surface animated from the frames, foam where the model says the wave breaks, a side view of one line across the break, and maps of where waves break and how steep they get |
 | **Solver** | Well-balanced finite-volume scheme: hydrostatic reconstruction, HLL flux, and first order, second order (MUSCL with an MC limiter), or fifth order (unlimited where the wave is smooth, blended back to the limiter near steep fronts), with SSP-RK2 |
 | **Dispersion** | Serre–Green–Naghdi correction solved by preconditioned conjugate gradients, switched off where waves break; see [docs/dispersion.md](docs/dispersion.md) |
-| **Slice** | `waveslice`: one line across a reef seen side-on, solved as fully nonlinear potential flow by a boundary element method, for the shape of the lip that a depth-averaged model cannot show. `wavesim slice` breaks one wave over a made-up seabed and the viewer's side view plays it in slow motion; runs do not feed it yet |
+| **Slice** | `waveslice`: one line across a reef seen side-on, solved as fully nonlinear potential flow by a boundary element method, for the shape of the lip that a depth-averaged model cannot show. `wavesim slice` breaks one wave over a made-up seabed, or one wave of a 2D run's swell over a real line of reef from the 1 m lidar, and the viewer's side view plays it in slow motion |
 
 Design rules:
 
@@ -231,6 +231,33 @@ The run is guarded like `wavesim run`: on the efficiency cores, it times its fir
 
 The earlier hand-off is the closer, as it should be: the main model is the more accurate the deeper the water. This is the way to real reefs: the main model brings a swell across the shelf, the slice solver breaks it. macOS reported no thermal warning, slowdown or power limit at any of 26 readings, 30 s apart, through both hand-off runs.
 
+**On a real reef: one line across Pipeline.** The 2D run brings the real swell in over the real reef, and saves one line of the sea when a settled crest passes a chosen depth on it; the slice solver breaks that wave over the same line from the 1 m lidar:
+
+```bash
+uv run --python 3.12 --with rasterio --with numpy --with scipy --with pyproj \
+    tools/fetch_line.py data/pipeline.json --y 511.5          # the 1 m lidar along y = 511.5 m
+cargo run --release -p wavesim -- run data/pipeline.json --height 2.5 --period 14 \
+    --threads 3 --max-minutes 15 --handoff-y 511.5 --handoff-depth 9 --out out/pipeline_handoff
+cargo run --release -p wavesim -- slice --line data/pipeline_line_511.5.json \
+    --handoff-file out/pipeline_handoff/handoff_y511.5.json --period 14
+```
+
+The slice hands over only the followed wave, between the troughs either side of its crest, tapered to still water beyond: in a swell the wave ahead is breaking where this one will, and its foam cannot be followed this way. The water ahead is therefore still, not the previous wave's backwash, and the velocity across the line is dropped, a slice being two-dimensional. The slice's bed is the 1 m line, simplified to the points that keep it within 10 cm (52 of them here), and it ends in a wall where the water is half a metre deep.
+
+On that line a 2.5 m, 14 s swell breaks at the edge of the reef flat, and the two models agree on where, within 10 m:
+
+| | 2D run (where the wave is tallest) | Slice from the 2D run's wave (face vertical) |
+|---|---|---|
+| Where | 2224 m along | 2214 m along |
+| Still-water depth | 2.7 m | 2.9 m |
+| Wave | 2.3 m crest to trough | crest 1.73 m above still water |
+| Lip and tube | | thrown 7.6 m, tube 0.34 m tall and 0.38 m wide |
+| Computing | 12 min on 3 efficiency-core threads | 12 min on one efficiency core |
+
+A modest plunge with a small tube: this stretch of the coast is one the reef spreads energy away from (the 2D run's biggest waves, about 5 m, break elsewhere). macOS reported no thermal warning, slowdown or power limit at any reading, 30 s apart, through both runs.
+
+`--handoff-depth` without `--handoff-file` brings the swell in along the line alone instead. That overestimates waves wherever the reef spreads energy sideways, which a single line cannot: on this line its crest at 9 m was three times the 2D run's, and it broke 40 m further out.
+
 To watch it, start the viewer (see above) and open **Side view of a break**, or http://localhost:5173/slice.html. The page holds a still camera on the break at true proportions while the wave runs in (or shows the whole tank, height stretched), colours the surface by how fast the water moves against the wave's own speed (pale when still, white at 0.6, red where it outruns the wave, which is where the lip is thrown), and plays at down to a thirtieth of real time: the plunge itself lasts about a second. **Watch the break slowly** jumps there. Beside it are when and where the face stood vertical, where the lip landed and the size of the tube.
 
 ## Numerics
@@ -315,6 +342,8 @@ Choose the order with `Solver::with_order`; the default is `Order::Second`. Add 
 | Slice potential solve | Curved three-node elements: a uniform flow comes out exact (to 6e-13); a standing wave in a closed basin and a wavy surface over a bumpy bed converge at second order or better everywhere, including where the surface meets the walls (measured 1.0e-4 and 4.4e-4 of the largest surface flux on the finest edges). Straight elements were tried first and were only first order at those corners |
 | Slice in time | The surface's nodes follow the water, four solves a step. A 1 mm standing wave has the period of linear theory within 0.05% (measured 0.0008%); a steep one (`ka` 0.25) keeps its energy and volume within 0.1% over four periods (measured 0.004% and 0.001%); a solitary wave 0.2 of the depth travels within 0.05% of Grimshaw's fully nonlinear speed (measured 0.037% fast, where the depth-averaged theory's speed is 0.064% further), its crest steady within 1% (0.93%). Bounds set before the first run. The solitary wave's margins are thin, and the first run failed both: started with the depth-averaged velocity on the surface it was still swinging; it now starts from the velocity profile of the depth-averaged theory |
 | Slice breaking | Solitary waves on a 1:15 slope against Grilli, Svendsen & Subramanya's (1997) slope parameter, which sorts plunging from surging from not breaking. Their plunging case (0.3 of the depth, parameter 0.19) overturns, throws a lip over an open tube and lands, with energy within 0.5% until then (measured 0.37%); a wave 0.07 of the depth (0.38, beyond their 0.37 limit) does not overturn before 0.1 m of water (its face never passes 3°). The landing time agrees between node spacings of 0.04 and 0.05 m (5.985 and 5.986 s). Bounds set before the first run |
+| Hand-off from a run | On a synthetic beach a run saves its line once the sea has settled, as a crest passes the asked-for depth (to within a cell), in the bed file's frame (its bed matches the beach shoreward of the wave-maker). On Pipeline's line at y = 511.5 m the saved crest, 0.64 m above still water at 9 m depth, is the run's own highest surface there (0.65 m), and the slice breaks it within 10 m of where the run's wave is tallest. A first slice there ended a wavelength past the hand-off and its lip landed 2 m from that wall: reported as shaped by the wall, and with the wall moved to the shallows the crest at breaking came out 1.73 m instead of 1.38 m |
+| Line tool | The line lands on the bed frame exactly where the fetch tool lays it out, for four bearings; a plane is sampled exactly, and a gap in the DEM stays a gap |
 | Slices | The steep slice at 8 m depth repeats the tested 1 m case scaled up eightfold: the same 1083 steps, the face vertical at 15.97 s (the test's 5.646 s times the square root of 8) under a crest 3.27 m up (0.409 times 8). In that case the lip lands a metre from the wall that ends the beach; ending the beach in a shelf 24 m long instead moved the landing by 2 cm and changed nothing else, so the wall had not shaped it. A lip that lands within two wave heights of the wall is reported as shaped by it, not as a break. The tube a landed lip closes off is measured within 5% on a drawn circle. Slice files round-trip exactly, and the viewer's reader rejects one whose parts do not fit together |
 | Fetch tool | On a synthetic plane, `+x` follows the bearing and `+y` is 90° counter-clockwise from it, for four bearings; clipping is counted; a request outside the raster is an error |
 
@@ -359,7 +388,8 @@ wavesim/
 │       └── fixtures/tiny/      # written by waveio's golden test
 ├── tools/
 │   ├── fetch_spot.py           # crop, rotate and resample a remote GeoTIFF
-│   └── tests/test_fetch_spot.py
+│   ├── fetch_line.py           # one cross-shore line of a bed's frame from a finer DEM
+│   └── tests/test_fetch_{spot,line}.py
 └── crates/
     ├── wavecore/               # pure numerics, no dependencies
     │   ├── src/
@@ -381,7 +411,7 @@ wavesim/
     │   ├── src/{lib,bed,run,slice,error}.rs
     │   └── tests/{formats,golden}.rs
     ├── wavesim/                # the command line: `run`, `breaks`, `slice` and `info`
-    │   ├── src/{lib,main,slice}.rs
+    │   ├── src/{lib,main,slice,handoff}.rs
     │   └── tests/run.rs
     └── waveslice/              # side-on slice, potential flow; no dependencies
         ├── src/{lib,bem,linalg}.rs
@@ -414,7 +444,7 @@ The results do not depend on threads or priority: a run on 1 thread and on 4 giv
 ## Limitations
 
 - Depth-averaged: no overturning lip, so no barrels. The slice solver (`waveslice`) is being built for that.
-- The slice solver needs two numerical aids where the surface folds, both standard since Longuet-Higgins & Cokelet (1976): a light five-point smoothing every five steps, without which steep crests grow a zig-zag from node to node and the run blows up, and re-spacing nodes where they crowd at a lip's tip. It stops when the lip lands. It breaks one solitary wave, not a swell, between two walls, on made-up seabeds; it is two-dimensional, one line across the reef; and its dense solve grows with the cube of the node count, so one break takes 8 to 27 minutes on one efficiency core and long gentle slopes are out of reach.
+- The slice solver needs two numerical aids where the surface folds, both standard since Longuet-Higgins & Cokelet (1976): a light five-point smoothing every five steps, without which steep crests grow a zig-zag from node to node and the run blows up, and re-spacing nodes where they crowd at a lip's tip. It stops when the lip lands. It breaks one wave at a time between two walls: a solitary wave on a made-up seabed, or one wave of a run's swell on a real line, handed over alone with still water ahead of it; it is two-dimensional, one line across the reef, so the swell's velocity across the line is dropped; and its dense solve grows with the cube of the node count, so one break takes 8 to 27 minutes on one efficiency core and long gentle slopes are out of reach.
 - First order at shorelines: cells at or beside a wet/dry front drop to first order to stay positive, so runup is more diffusive than the open water.
 - Dispersion is the Serre–Green–Naghdi flat-bed operator: accurate in `kh` (wavenumber times depth) up to about 1 to 2, with the bed-slope terms of the dispersive operator omitted. Plain shallow water (`--dispersive false`) is accurate only up to `kh` of about 0.3 and steepens tall waves into shocks wherever they are.
 - Breaking is a switch, not a model of the overturning lip: it shows where a wave breaks and how tall it gets, not its shape. How it breaks, spilling or plunging, is estimated from the wave and the slope of the reef before it (Battjes' surf similarity), not computed.

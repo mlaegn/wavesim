@@ -89,6 +89,103 @@ pub struct RunOptions {
     /// it is the guard that keeps a run from using a laptop for longer than intended: the
     /// budget refuses what is seen coming, this stops what was not.
     pub max_wall_seconds: Option<f64>,
+    /// Save one line of the sea when the first crest of the settled sea passes a point on it,
+    /// for `wavesim slice` to break that wave with its full shape.
+    pub handoff: Option<HandoffLine>,
+}
+
+/// Where a run saves a wave for the slice solver: the line `y` metres along the shore, at the
+/// last point of it, coming from offshore, after which the water stays shallower than `depth`.
+#[derive(Clone, Copy, Debug)]
+pub struct HandoffLine {
+    pub y: f64,
+    pub depth: f64,
+}
+
+/// Watches one line of a grid, once the sea has settled, for the first crest to pass the
+/// hand-off point, and saves the line at that moment to `handoff_y<y>.json` in the run: the
+/// surface above still water and the velocity along the line, `hu / h`, at every cell, in the
+/// bed file's frame. The velocity across the line is left out; a slice is two-dimensional.
+struct Catch {
+    line: HandoffLine,
+    path: PathBuf,
+    /// The grid's `x = 0` in the bed file's frame.
+    offset: f64,
+    row: usize,
+    at: usize,
+    history: [f64; 3],
+    done: bool,
+}
+
+impl Catch {
+    fn new(
+        stage: &Stage,
+        line: HandoffLine,
+        offset: f64,
+        dir: &std::path::Path,
+    ) -> Result<Self, Error> {
+        let g = stage.bed.grid();
+        let row = ((line.y / g.dy).floor().max(0.0) as usize).min(g.ny - 1);
+        let depth = |i: usize| -stage.solver.bed.b[g.idx(GHOST + i, GHOST + row)];
+        let wet = (0..g.nx).take_while(|&i| depth(i) > 0.0).count();
+        let mut at = wet.saturating_sub(1);
+        while at > 0 && depth(at - 1) < line.depth {
+            at -= 1;
+        }
+        if at == 0 || depth(at) >= line.depth {
+            return Err(setup(format!(
+                "along y = {} m the water never stays shallower than {} m before the shore, \
+                 inside the grid",
+                line.y, line.depth
+            )));
+        }
+        Ok(Self {
+            line,
+            path: dir.join(format!("handoff_y{}.json", line.y)),
+            offset,
+            row,
+            at,
+            history: [0.0; 3],
+            done: false,
+        })
+    }
+
+    /// Look at the line after a step; save it if, after `settled`, a crest has just passed.
+    fn check(&mut self, stage: &Stage, settled: f64) -> Result<(), Error> {
+        if self.done {
+            return Ok(());
+        }
+        let g = stage.bed.grid();
+        let (s, b) = (&stage.state, &stage.solver.bed.b);
+        let k = |i: usize| g.idx(GHOST + i, GHOST + self.row);
+        let eta = |i: usize| s.h[k(i)] + b[k(i)];
+        self.history = [self.history[1], self.history[2], eta(self.at)];
+        let [a, top, c] = self.history;
+        if s.time < settled || !(top > a && c < top && top > 0.0) {
+            return Ok(());
+        }
+        let x = |i: usize| self.offset + (i as f64 + 0.5) * g.dx;
+        let doc = serde_json::json!({
+            "format": "wavesim-handoff",
+            "version": 1,
+            "y": self.line.y,
+            "row_y": (self.row as f64 + 0.5) * g.dy,
+            "depth": self.line.depth,
+            "time": s.time,
+            "crest": x(self.at),
+            "x": (0..g.nx).map(x).collect::<Vec<_>>(),
+            "eta": (0..g.nx).map(|i| if s.h[k(i)] > 1e-3 { eta(i) } else { 0.0 }).collect::<Vec<_>>(),
+            "ubar": (0..g.nx)
+                .map(|i| if s.h[k(i)] > 1e-3 { s.hu[k(i)] / s.h[k(i)] } else { 0.0 })
+                .collect::<Vec<_>>(),
+            "bed": (0..g.nx).map(|i| b[k(i)]).collect::<Vec<_>>(),
+        });
+        let text = serde_json::to_string(&doc).expect("numbers serialise");
+        std::fs::write(&self.path, text + "\n")
+            .map_err(|e| setup(format!("{}: {e}", self.path.display())))?;
+        self.done = true;
+        Ok(())
+    }
 }
 
 /// Where the forcing goes and how long to run, worked out from the bed and the options.
@@ -1105,6 +1202,17 @@ pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<
         _ => None,
     };
 
+    let mut catch = match (opts.handoff, nest.as_ref()) {
+        (None, _) => None,
+        (Some(line), Some((fine, _, _, f))) => {
+            let offset = f.x0 as f64 * fine.bed.header.dx;
+            Some(Catch::new(fine, line, offset, &opts.out)?)
+        }
+        (Some(line), None) => {
+            let offset = plan.crop as f64 * coarse.bed.header.dx;
+            Some(Catch::new(&coarse, line, offset, &opts.out)?)
+        }
+    };
     let mut truncated = false;
     let mut fine_seconds = 0.0;
     // Columns of the coarse grid under the fine grid's offshore relaxation zone.
@@ -1142,6 +1250,11 @@ pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<
             }
             before = Some(coarse.state.clone());
             coarse.step(plan.duration)?;
+            if nest.is_none()
+                && let Some(c) = catch.as_mut()
+            {
+                c.check(&coarse, stats_from)?;
+            }
             continue;
         }
         let Some((fine, zone, sampler, _)) = nest.as_mut() else {
@@ -1198,6 +1311,9 @@ pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<
         let fg = fine.bed.grid();
         zone.apply(&fg, &fine.solver.bed, &mut fine.state, dt, lerp);
         fine.record(dt);
+        if let Some(c) = catch.as_mut() {
+            c.check(fine, stats_from)?;
+        }
         fine_seconds += fine_started.elapsed().as_secs_f64();
     }
 
@@ -1210,6 +1326,15 @@ pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<
             .fold(0.0, f64::max)
     });
     let mut warnings = Vec::new();
+    if let Some(c) = catch.as_ref()
+        && !c.done
+    {
+        warnings.push(format!(
+            "no crest passed the hand-off point on y = {} m once the sea had settled, so nothing \
+             was saved for the slice solver",
+            c.line.y
+        ));
+    }
     if breaking_in_zone > 0.0 {
         warnings.push(format!(
             "the coarse run broke inside the fine grid's offshore relaxation zone {:.0}% of the \

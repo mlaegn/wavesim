@@ -19,9 +19,18 @@
 //! to break and wrong for one still shoaling, as a solitary wave 0.3 of the depth is from the
 //! start; the hand-off comes before the break.
 
-use wavecore::{Bathymetry, Breaking, Dispersion, GHOST, Grid, Order, Solver, State};
+use std::path::PathBuf;
 
-use crate::Error;
+use wavecore::{
+    Bathymetry, Breaking, Dispersion, GHOST, Grid, Order, Solver, Sponge, State, WaveMaker,
+    linear_wave,
+};
+use waveio::{BED_FORMAT, Bed, BedHeader, Frame};
+
+use crate::{
+    Error, Layout, RAMP_PERIODS, RunOptions, SETTLE_PERIODS, SIGMA_CELLS, SPONGE_STRENGTH, beds,
+    plan, solver_for,
+};
 
 /// The main model's wave at the moment of hand-off, along the line: cell centres, the surface
 /// above still water and the depth-averaged velocity.
@@ -111,7 +120,269 @@ pub fn approach(
     }
 }
 
+/// A swell `height` high (crest to trough at the wave-maker) and `period` long, run by the main
+/// model along one line of real bed, `(x, z)` with `z` up from still water, on cells `cell`
+/// wide, exactly as `wavesim run` runs it: the same wave-maker placement, sponge, ramp and
+/// breaking switch. Once the waves have reached the shore and the surf zone has had
+/// [`SETTLE_PERIODS`] to settle, the next crest to pass the last point where the water is
+/// `handoff_depth` deep is handed over, with the main model's whole line at that moment.
+///
+/// The breaking switch stays on here, unlike in [`approach`]: the waves ahead break, and the
+/// surf zone they make is part of the sea the followed wave runs into. At the hand-off the
+/// followed crest should still be well under 0.3 of the depth, where the switch starts; the
+/// returned [`Approach::eta_ratio`] says how far under.
+pub fn swell(
+    line: &[(f64, f64)],
+    cell: f64,
+    height: f64,
+    period: f64,
+    handoff_depth: f64,
+) -> Result<Approach, Error> {
+    let (x0, x1) = (line[0].0, line[line.len() - 1].0);
+    let nx = ((x1 - x0) / cell).floor() as usize;
+    let ny = 4;
+    let z_at = |x: f64| {
+        interpolate(
+            &line.iter().map(|p| p.0).collect::<Vec<_>>(),
+            &line.iter().map(|p| p.1).collect::<Vec<_>>(),
+            x,
+        )
+    };
+    let row: Vec<f32> = (0..nx)
+        .map(|i| z_at(x0 + (i as f64 + 0.5) * cell) as f32)
+        .collect();
+    let bed = Bed {
+        header: BedHeader {
+            format: BED_FORMAT.into(),
+            version: 1,
+            name: "line".into(),
+            description: String::new(),
+            nx,
+            ny,
+            dx: cell,
+            dy: cell,
+            data: String::new(),
+            dtype: "f32-le".into(),
+            layout: "row-major, y outer (increasing), x inner (increasing)".into(),
+            units: "metres above mean sea level; negative is underwater".into(),
+            frame: Frame {
+                crs: String::new(),
+                origin_easting: 0.0,
+                origin_northing: 0.0,
+                x_bearing_deg: 0.0,
+                note: String::new(),
+            },
+            stats: serde_json::Value::Null,
+            source: serde_json::Value::Null,
+        },
+        elevation: (0..ny).flat_map(|_| row.iter().copied()).collect(),
+    };
+    let opts = RunOptions {
+        bed: PathBuf::new(),
+        out: PathBuf::new(),
+        height,
+        period,
+        tide: 0.0,
+        duration: None,
+        frame_interval: 1.0,
+        manning: 0.0,
+        dispersive: true,
+        nested: false,
+        threads: 1,
+        background: false,
+        budget_seconds: None,
+        max_wall_seconds: None,
+        handoff: None,
+    };
+    let p = plan(&bed, &opts)?;
+    let (cropped, _) = beds(
+        &bed,
+        &Layout {
+            coarse: p,
+            fine: None,
+        },
+    );
+    let grid = cropped.grid();
+    let offset = x0 + p.crop as f64 * cell;
+    let maker = WaveMaker {
+        x: p.maker_x - p.crop as f64 * cell,
+        amplitude: height / 2.0,
+        period,
+        angle: 0.0,
+        sigma: SIGMA_CELLS * cell,
+        ramp_periods: RAMP_PERIODS,
+    };
+    let solver = solver_for(&cropped, &opts)
+        .with_wavemaker(maker)
+        .with_sponge(
+            Sponge::new(p.sponge_offshore, SPONGE_STRENGTH).edges(true, false, false, false),
+        );
+    let mut s = State::lake_at_rest(&grid, &solver.bed, 0.0);
+    let j = GHOST + ny / 2;
+    let depth_of = |i: usize| -solver.bed.b[grid.idx(GHOST + i, j)];
+
+    // The hand-off point: the last cell, coming from offshore, after which the water stays
+    // shallower than `handoff_depth` all the way to the shore.
+    let wet = (0..grid.nx).take_while(|&i| depth_of(i) > 0.0).count();
+    let mut at = wet.saturating_sub(1);
+    while at > 0 && depth_of(at - 1) < handoff_depth {
+        at -= 1;
+    }
+    if at == 0 || depth_of(at) >= handoff_depth {
+        return Err(Error::Setup(format!(
+            "the water along the line never stays shallower than {handoff_depth} m before the shore"
+        )));
+    }
+    let omega = std::f64::consts::TAU / period;
+    let maker_cell = (p.maker_x / cell) as usize - p.crop;
+    let travel: f64 = (maker_cell..=at)
+        .map(|i| cell / linear_wave(omega, depth_of(i).max(0.5), true).group_speed)
+        .sum();
+    let ready = (RAMP_PERIODS + SETTLE_PERIODS) * period + travel;
+
+    let k = |i: usize| grid.idx(GHOST + i, j);
+    let mut history = [0.0_f64; 3];
+    let mut steps = 0;
+    loop {
+        let dt = solver.stable_dt(&s);
+        if !dt.is_finite() || s.time > ready + 4.0 * period {
+            return Err(Error::Unstable {
+                time: s.time,
+                what: "the swell approach found no crest to hand over".into(),
+            });
+        }
+        solver.step(&mut s, dt);
+        steps += 1;
+        history = [history[1], history[2], s.h[k(at)] - depth_of(at)];
+        // The crest has just passed: the surface there rose and now falls.
+        if s.time > ready
+            && history[1] > history[0]
+            && history[2] < history[1]
+            && history[1] > 0.25 * height
+        {
+            break;
+        }
+    }
+    let x: Vec<f64> = (0..grid.nx)
+        .map(|i| offset + (i as f64 + 0.5) * cell)
+        .collect();
+    let eta: Vec<f64> = (0..grid.nx)
+        .map(|i| (s.h[k(i)] - depth_of(i)).max(-depth_of(i)))
+        .collect();
+    let ubar: Vec<f64> = (0..grid.nx)
+        .map(|i| {
+            if s.h[k(i)] > 1e-3 {
+                s.hu[k(i)] / s.h[k(i)]
+            } else {
+                0.0
+            }
+        })
+        .collect();
+    Ok(Approach {
+        time: s.time,
+        crest: x[at],
+        x,
+        eta,
+        ubar,
+        steps,
+    })
+}
+
+/// A `wavesim-handoff` file, as `wavesim run --handoff-y` saves it.
+#[derive(serde::Deserialize)]
+struct HandoffFile {
+    format: String,
+    depth: f64,
+    time: f64,
+    crest: f64,
+    x: Vec<f64>,
+    eta: Vec<f64>,
+    ubar: Vec<f64>,
+}
+
 impl Approach {
+    /// The wave a 2D run saved for the slice solver (see `wavesim run --handoff-y`), and the
+    /// depth it was saved at.
+    pub fn read(path: &std::path::Path) -> Result<(Approach, f64), Error> {
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| Error::Setup(format!("{}: {e}", path.display())))?;
+        let f: HandoffFile = serde_json::from_str(&text)
+            .map_err(|e| Error::Setup(format!("{}: not a wavesim-handoff: {e}", path.display())))?;
+        if f.format != "wavesim-handoff" || f.x.len() != f.eta.len() || f.x.len() != f.ubar.len() {
+            return Err(Error::Setup(format!(
+                "{}: not a wavesim-handoff",
+                path.display()
+            )));
+        }
+        let approach = Approach {
+            time: f.time,
+            x: f.x,
+            eta: f.eta,
+            ubar: f.ubar,
+            crest: f.crest,
+            steps: 0,
+        };
+        Ok((approach, f.depth))
+    }
+
+    /// The followed crest's height over the still depth beneath it, the measure the main
+    /// model's breaking switch starts at, at 0.3.
+    pub fn eta_ratio(&self, depth: &dyn Fn(f64) -> f64) -> f64 {
+        self.eta_at(self.crest) / depth(self.crest)
+    }
+
+    /// Only the followed wave: the surface and velocity between the troughs either side of the
+    /// crest, tapered to still water over `taper` metres beyond each, still water further out.
+    /// In a swell the wave ahead is breaking where this one will, and its foam cannot be handed
+    /// to the slice solver; the crest's own shape and flow, which make its break, are kept.
+    /// Returns the wave and its two troughs.
+    pub fn single_wave(&self, wavelength: f64, taper: f64) -> (Approach, f64, f64) {
+        let near = |lo: f64, hi: f64| -> usize {
+            (0..self.x.len())
+                .filter(|&i| self.x[i] >= lo && self.x[i] <= hi)
+                .min_by(|&a, &b| self.eta[a].total_cmp(&self.eta[b]))
+                .unwrap_or(0)
+        };
+        let crest = self.crest;
+        let behind = self.x[near(crest - 0.75 * wavelength, crest)];
+        let ahead = self.x[near(crest, crest + 0.75 * wavelength)];
+        let weight = |x: f64| {
+            let outside = if x < behind {
+                behind - x
+            } else if x > ahead {
+                x - ahead
+            } else {
+                0.0
+            };
+            if outside >= taper {
+                0.0
+            } else {
+                0.5 * (1.0 + (std::f64::consts::PI * outside / taper).cos())
+            }
+        };
+        let eta = self
+            .x
+            .iter()
+            .zip(&self.eta)
+            .map(|(&x, &e)| e * weight(x))
+            .collect();
+        let ubar = self
+            .x
+            .iter()
+            .zip(&self.ubar)
+            .map(|(&x, &u)| u * weight(x))
+            .collect();
+        let wave = Approach {
+            time: self.time,
+            x: self.x.clone(),
+            eta,
+            ubar,
+            crest: self.crest,
+            steps: self.steps,
+        };
+        (wave, behind, ahead)
+    }
+
     /// The surface above still water at `x`, straight between cell centres.
     pub fn eta_at(&self, x: f64) -> f64 {
         interpolate(&self.x, &self.eta, x)

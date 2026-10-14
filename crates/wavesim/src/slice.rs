@@ -93,6 +93,14 @@ pub struct SliceOptions {
     /// Carry the wave with the main model until its crest is over water this deep, then hand
     /// it to the slice solver (see [`crate::handoff`]); `None` runs the slice solver all the way.
     pub handoff_depth: Option<f64>,
+    /// A real line of seabed (a `wavesim-line` file) to break a swell on instead of `case`'s
+    /// made-up one, with a swell `height` from crest to trough and `period` long; it needs
+    /// `handoff_depth`.
+    pub line: Option<PathBuf>,
+    pub period: f64,
+    /// For `line`: the wave a 2D run saved (`wavesim run --handoff-y`), instead of bringing a
+    /// swell in along the line alone, which cannot spread energy sideways as the reef does.
+    pub handoff_file: Option<PathBuf>,
 }
 
 /// What a finished slice run found.
@@ -180,6 +188,152 @@ fn handed(
     })
 }
 
+/// A `wavesim-line` file, as `tools/fetch_line.py` writes it.
+#[derive(serde::Deserialize)]
+struct LineFile {
+    name: String,
+    x: Vec<f64>,
+    z: Vec<Option<f64>>,
+    z_bed: Vec<f64>,
+}
+
+/// The slice solver's tank for one wave of a swell on a real line: the main model brings the
+/// swell in along the whole line (the fine data where it has any, the bed file's where not)
+/// until a crest passes the last point `depth` deep, and that one wave is handed over (see
+/// [`crate::handoff::Approach::single_wave`]) to a slice from a little behind it to a wall where
+/// the water is half a metre deep, or two wavelengths ahead if that is nearer.
+/// Where the wave on a real line comes from.
+enum Source {
+    /// A 2D run's saved wave: the sea as the reef shapes it, refraction and all.
+    Run(PathBuf),
+    /// A swell brought in along the line alone by the main model, handed over at this depth.
+    /// The line cannot spread energy sideways: on the Pipeline line at y = 511.5 m the crest
+    /// it hands over at 9 m is three times as high as the 2D run's there.
+    Line(f64),
+}
+
+fn line_tank(opts: &SliceOptions, path: &std::path::Path, source: Source) -> Result<Handed, Error> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| Error::Setup(format!("{}: {e}", path.display())))?;
+    let line: LineFile = serde_json::from_str(&text)
+        .map_err(|e| Error::Setup(format!("{}: not a wavesim-line: {e}", path.display())))?;
+    let points: Vec<(f64, f64)> = line
+        .x
+        .iter()
+        .zip(line.z.iter().zip(&line.z_bed))
+        .map(|(&x, (z, &bed))| (x, z.unwrap_or(bed)))
+        .collect();
+    let still = |x: f64| -> f64 {
+        let k = points
+            .partition_point(|p| p.0 <= x)
+            .clamp(1, points.len() - 1);
+        let (a, b) = (points[k - 1], points[k]);
+        -(a.1 + (b.1 - a.1) * ((x - a.0) / (b.0 - a.0)).clamp(0.0, 1.0))
+    };
+    // The main model's cells: 2 m is about 60 to a wavelength of a 14 s swell on the reef.
+    let cell = 2.0;
+    let (approach, depth, from) = match &source {
+        Source::Run(file) => {
+            let (a, depth) = crate::handoff::Approach::read(file)?;
+            (a, depth, file.display().to_string())
+        }
+        Source::Line(depth) => (
+            crate::handoff::swell(&points, cell, opts.height, opts.period, *depth)?,
+            *depth,
+            "the line alone".to_string(),
+        ),
+    };
+    let eta_ratio = approach.eta_ratio(&still);
+    let omega = std::f64::consts::TAU / opts.period;
+    let wavelength =
+        std::f64::consts::TAU / wavecore::linear_wave(omega, still(approach.crest), true).k;
+    let taper = 0.15 * wavelength;
+    let (wave, behind, ahead) = approach.single_wave(wavelength, taper);
+    let start = behind - taper - 10.0;
+    // The wall at the shallow end: where the water is half a metre deep, or two wavelengths
+    // ahead of the handed crest if that is nearer. Every metre of shallow water costs nodes at
+    // the finest spacing, but one wavelength was too short: on the Pipeline line at y = 511.5 m
+    // the wave broke on the edge of the reef flat and its lip landed 2 m from a wall there. A
+    // lip that lands near the wall anyway is reported as shaped by it.
+    let shallow = points
+        .iter()
+        .find(|p| p.0 > approach.crest && -p.1 < 0.5)
+        .map(|p| p.0)
+        .ok_or_else(|| Error::Setup("the line never reaches water shallower than 0.5 m".into()))?;
+    let wall = shallow.min(approach.crest + 2.0 * wavelength);
+    let raw: Vec<(f64, f64)> = std::iter::once((start, still(start)))
+        .chain(
+            points
+                .iter()
+                .filter(|p| p.0 > start && p.0 < wall)
+                .map(|p| (p.0, -p.1)),
+        )
+        .chain(std::iter::once((wall, still(wall))))
+        .collect();
+    let cut = simplify(&raw, 0.1);
+    let mut tank = Tank::shaped(
+        G,
+        &cut,
+        opts.finest,
+        0.1 * cut[0].1,
+        &|x| wave.eta_at(x),
+        &|xs| wave.potential(xs, &still),
+    );
+    tank.time = wave.time;
+    let record = serde_json::json!({
+        "line": line.name,
+        "from": from,
+        "swell_height": opts.height,
+        "swell_period": opts.period,
+        "depth": depth,
+        "time": wave.time,
+        "crest": wave.crest,
+        "crest_over_depth": eta_ratio,
+        "trough_behind": behind,
+        "trough_ahead": ahead,
+        "wavelength": wavelength,
+        "start": start,
+        "cell": cell,
+        "approach_steps": wave.steps,
+        "bed_points": cut.len(),
+    });
+    Ok(Handed {
+        tank,
+        profile: cut,
+        record,
+    })
+}
+
+/// The points of `p` that keep it within `tolerance` of the original (Ramer-Douglas-Peucker),
+/// first and last kept: a metre-by-metre line of lidar comes down to the points that shape it.
+fn simplify(p: &[(f64, f64)], tolerance: f64) -> Vec<(f64, f64)> {
+    let mut keep = vec![false; p.len()];
+    keep[0] = true;
+    keep[p.len() - 1] = true;
+    let mut spans = vec![(0, p.len() - 1)];
+    while let Some((a, b)) = spans.pop() {
+        let (pa, pb) = (p[a], p[b]);
+        let off = |q: (f64, f64)| {
+            let t = (q.0 - pa.0) / (pb.0 - pa.0);
+            (q.1 - (pa.1 + t * (pb.1 - pa.1))).abs()
+        };
+        if let Some((k, d)) = (a + 1..b)
+            .map(|k| (k, off(p[k])))
+            .max_by(|x, y| x.1.total_cmp(&y.1))
+            && d > tolerance
+        {
+            keep[k] = true;
+            spans.push((a, k));
+            spans.push((k, b));
+        }
+    }
+    p.iter()
+        .zip(keep)
+        .filter(|(_, k)| *k)
+        .map(|(q, _)| *q)
+        .collect()
+}
+
 /// A tank after the hand-off, its cut profile, and the hand-off's record for the header.
 struct Handed {
     tank: Tank,
@@ -192,7 +346,7 @@ struct Handed {
 /// than the limit is refused before anything is written.
 pub fn run_slice(opts: &SliceOptions) -> Result<SliceSummary, Error> {
     let profile = opts.case.profile(opts.depth);
-    if opts.height <= 0.0 || opts.height > 0.6 * opts.depth {
+    if opts.line.is_none() && (opts.height <= 0.0 || opts.height > 0.6 * opts.depth) {
         return Err(Error::Setup(format!(
             "a wave {} m high in {} m of water: a solitary wave can be up to about 0.6 of the \
              depth",
@@ -206,13 +360,29 @@ pub fn run_slice(opts: &SliceOptions) -> Result<SliceSummary, Error> {
         height: opts.height,
         crest,
     };
-    let (mut tank, profile, handoff) = match opts.handoff_depth {
-        None => (
+    let (mut tank, profile, handoff) = match (&opts.line, opts.handoff_depth) {
+        (Some(path), depth) => {
+            let source = match (&opts.handoff_file, depth) {
+                (Some(file), _) => Source::Run(file.clone()),
+                (None, Some(depth)) => Source::Line(depth),
+                (None, None) => {
+                    return Err(Error::Setup(
+                        "a real line needs --handoff-file (a wave saved by `wavesim run \
+                         --handoff-y`) or --handoff-depth (a swell brought in along the line \
+                         alone)"
+                            .into(),
+                    ));
+                }
+            };
+            let h = line_tank(opts, path, source)?;
+            (h.tank, h.profile, h.record)
+        }
+        (None, None) => (
             Tank::over(&wave, &profile, opts.finest),
             profile,
             serde_json::Value::Null,
         ),
-        Some(depth) => {
+        (None, Some(depth)) => {
             let h = handed(opts, &wave, profile, depth)?;
             (h.tank, h.profile, h.record)
         }
@@ -246,17 +416,30 @@ pub fn run_slice(opts: &SliceOptions) -> Result<SliceSummary, Error> {
         )));
     }
 
-    let settings = serde_json::json!({
-        "case": opts.case.name(),
-        "depth": opts.depth,
-        "height": opts.height,
-        "crest": crest,
-        "g": G,
-        "finest": opts.finest,
-        "profile": profile,
-        "wave": "solitary",
-        "handoff": handoff,
-    });
+    let settings = match &opts.line {
+        // A real line: the wave is one of a swell, its height and depth the swell's and the
+        // line's, recorded with the hand-off.
+        Some(_) => serde_json::json!({
+            "case": "line",
+            "depth": profile[0].1,
+            "g": G,
+            "finest": opts.finest,
+            "profile": profile,
+            "wave": "swell",
+            "handoff": handoff,
+        }),
+        None => serde_json::json!({
+            "case": opts.case.name(),
+            "depth": opts.depth,
+            "height": opts.height,
+            "crest": crest,
+            "g": G,
+            "finest": opts.finest,
+            "profile": profile,
+            "wave": "solitary",
+            "handoff": handoff,
+        }),
+    };
     let mut out = SliceWriter::create(&opts.out, &tank.bed, tank.surface.len(), settings)?;
     out.write_frame(start_time, &start.0, &start.1)?;
     let (mut curl, mut landing) = (None, None);

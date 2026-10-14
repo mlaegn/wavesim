@@ -118,6 +118,7 @@ fn options(dir: &std::path::Path, bed: PathBuf) -> RunOptions {
         background: false,
         budget_seconds: None,
         max_wall_seconds: None,
+        handoff: None,
     }
 }
 
@@ -684,4 +685,51 @@ fn a_break_point_on_a_plane_beach_meets_the_beach_slope() {
     assert_eq!(p.column, 120);
     assert!((p.slope * 20.0 - 1.0).abs() < 1e-5, "slope {}", p.slope);
     assert!((p.depth_m - (10.0 - 120.5 / 20.0)).abs() < 1e-4);
+}
+
+#[test]
+fn a_run_saves_one_line_for_the_slice_solver_when_a_settled_crest_passes() {
+    let dir = scratch("handoff");
+    let o = RunOptions {
+        handoff: Some(wavesim::HandoffLine { y: 7.0, depth: 2.0 }),
+        ..options(&dir, beach(&dir))
+    };
+    let s = run(&o, |_| {}).unwrap();
+    assert!(s.warnings.is_empty(), "{:?}", s.warnings);
+    let text = fs::read_to_string(o.out.join("handoff_y7.json")).unwrap();
+    let h: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let get = |k: &str| h[k].as_f64().unwrap();
+    let list = |k: &str| -> Vec<f64> {
+        h[k].as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_f64().unwrap())
+            .collect()
+    };
+    let (x, eta, bed) = (list("x"), list("eta"), list("bed"));
+    // Saved once the sea had settled, the last four periods of the run.
+    let settled = 60.0 - wavesim::BREAKS_SHOWN * o.period;
+    assert!(get("time") >= settled, "saved at {} s", get("time"));
+    // In the bed file's frame: shoreward of the wave-maker (behind it the run flattens the bed
+    // under its sponge) the bed matches the beach at every saved x, so the cropped columns are
+    // accounted for.
+    let crest = get("crest");
+    let near: Vec<(f64, f64)> = x
+        .iter()
+        .zip(&bed)
+        .filter(|(x, _)| **x > crest - 30.0)
+        .map(|(x, b)| (*x, *b))
+        .collect();
+    assert!(near.len() > 20);
+    for (x, b) in near {
+        assert!((b + beach_depth(x)).abs() < 1e-4, "bed {b} at x {x}");
+    }
+    // The hand-off point is where the beach is 2 m deep, to within a cell, and the crest that
+    // just passed it stands above still water there.
+    assert!(
+        (beach_depth(crest) - 2.0).abs() <= DX / 45.0,
+        "crest at {crest}"
+    );
+    let i = x.iter().position(|&v| v == crest).unwrap();
+    assert!(eta[i] > 0.0 && eta[i] < o.height, "eta there {}", eta[i]);
 }
