@@ -118,7 +118,7 @@ fn options(dir: &std::path::Path, bed: PathBuf) -> RunOptions {
         background: false,
         budget_seconds: None,
         max_wall_seconds: None,
-        handoff: None,
+        handoff: Vec::new(),
     }
 }
 
@@ -688,14 +688,22 @@ fn a_break_point_on_a_plane_beach_meets_the_beach_slope() {
 }
 
 #[test]
-fn a_run_saves_one_line_for_the_slice_solver_when_a_settled_crest_passes() {
+fn a_run_saves_lines_for_the_slice_solver_when_a_settled_crest_passes() {
     let dir = scratch("handoff");
     let o = RunOptions {
-        handoff: Some(wavesim::HandoffLine { y: 7.0, depth: 2.0 }),
+        handoff: vec![
+            wavesim::HandoffLine { y: 7.0, depth: 2.0 },
+            wavesim::HandoffLine {
+                y: 11.0,
+                depth: 2.0,
+            },
+        ],
         ..options(&dir, beach(&dir))
     };
     let s = run(&o, |_| {}).unwrap();
     assert!(s.warnings.is_empty(), "{:?}", s.warnings);
+    // Both lines were saved; the first is looked at closely.
+    assert!(o.out.join("handoff_y11.json").exists());
     let text = fs::read_to_string(o.out.join("handoff_y7.json")).unwrap();
     let h: serde_json::Value = serde_json::from_str(&text).unwrap();
     let get = |k: &str| h[k].as_f64().unwrap();

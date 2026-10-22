@@ -89,9 +89,9 @@ pub struct RunOptions {
     /// it is the guard that keeps a run from using a laptop for longer than intended: the
     /// budget refuses what is seen coming, this stops what was not.
     pub max_wall_seconds: Option<f64>,
-    /// Save one line of the sea when the first crest of the settled sea passes a point on it,
-    /// for `wavesim slice` to break that wave with its full shape.
-    pub handoff: Option<HandoffLine>,
+    /// Save lines of the sea, each when the first crest of the settled sea passes a point on
+    /// it, for `wavesim slice` to break that wave with its full shape.
+    pub handoff: Vec<HandoffLine>,
 }
 
 /// Where a run saves a wave for the slice solver: the line `y` metres along the shore, at the
@@ -1202,17 +1202,21 @@ pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<
         _ => None,
     };
 
-    let mut catch = match (opts.handoff, nest.as_ref()) {
-        (None, _) => None,
-        (Some(line), Some((fine, _, _, f))) => {
-            let offset = f.x0 as f64 * fine.bed.header.dx;
-            Some(Catch::new(fine, line, offset, &opts.out)?)
-        }
-        (Some(line), None) => {
-            let offset = plan.crop as f64 * coarse.bed.header.dx;
-            Some(Catch::new(&coarse, line, offset, &opts.out)?)
-        }
-    };
+    let mut catches = opts
+        .handoff
+        .iter()
+        .map(|&line| match nest.as_ref() {
+            Some((fine, _, _, f)) => {
+                Catch::new(fine, line, f.x0 as f64 * fine.bed.header.dx, &opts.out)
+            }
+            None => Catch::new(
+                &coarse,
+                line,
+                plan.crop as f64 * coarse.bed.header.dx,
+                &opts.out,
+            ),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let mut truncated = false;
     let mut fine_seconds = 0.0;
     // Columns of the coarse grid under the fine grid's offshore relaxation zone.
@@ -1250,10 +1254,10 @@ pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<
             }
             before = Some(coarse.state.clone());
             coarse.step(plan.duration)?;
-            if nest.is_none()
-                && let Some(c) = catch.as_mut()
-            {
-                c.check(&coarse, stats_from)?;
+            if nest.is_none() {
+                for c in &mut catches {
+                    c.check(&coarse, stats_from)?;
+                }
             }
             continue;
         }
@@ -1311,7 +1315,7 @@ pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<
         let fg = fine.bed.grid();
         zone.apply(&fg, &fine.solver.bed, &mut fine.state, dt, lerp);
         fine.record(dt);
-        if let Some(c) = catch.as_mut() {
+        for c in &mut catches {
             c.check(fine, stats_from)?;
         }
         fine_seconds += fine_started.elapsed().as_secs_f64();
@@ -1326,9 +1330,7 @@ pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<
             .fold(0.0, f64::max)
     });
     let mut warnings = Vec::new();
-    if let Some(c) = catch.as_ref()
-        && !c.done
-    {
+    for c in catches.iter().filter(|c| !c.done) {
         warnings.push(format!(
             "no crest passed the hand-off point on y = {} m once the sea had settled, so nothing \
              was saved for the slice solver",

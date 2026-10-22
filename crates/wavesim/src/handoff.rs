@@ -192,7 +192,7 @@ pub fn swell(
         background: false,
         budget_seconds: None,
         max_wall_seconds: None,
-        handoff: None,
+        handoff: Vec::new(),
     };
     let p = plan(&bed, &opts)?;
     let (cropped, _) = beds(

@@ -79,10 +79,11 @@ enum Command {
         #[arg(long, value_enum, default_value_t = Priority::Background)]
         priority: Priority,
         /// Save one line of the sea, y metres along the shore, when the first crest of the
-        /// settled sea passes --handoff-depth on it, for `wavesim slice --handoff-file`
+        /// settled sea passes --handoff-depth on it, for `wavesim slice --handoff-file`; give it
+        /// several times for several lines
         #[arg(long)]
-        handoff_y: Option<f64>,
-        /// The depth of the hand-off point on the --handoff-y line, in metres
+        handoff_y: Vec<f64>,
+        /// The depth of the hand-off point on the --handoff-y lines, in metres
         #[arg(long, default_value_t = 9.0)]
         handoff_depth: f64,
         /// Output directory (default: out/<bed name>)
@@ -255,10 +256,13 @@ fn real_main() -> Result<(), Error> {
                 background: cfg!(target_os = "macos") && priority == Priority::Background,
                 budget_seconds: (max_minutes > 0.0).then_some(max_minutes * 60.0),
                 max_wall_seconds: (max_minutes > 0.0).then_some(max_minutes * 60.0),
-                handoff: handoff_y.map(|y| HandoffLine {
-                    y,
-                    depth: handoff_depth,
-                }),
+                handoff: handoff_y
+                    .iter()
+                    .map(|&y| HandoffLine {
+                        y,
+                        depth: handoff_depth,
+                    })
+                    .collect(),
             };
             if let Ok(bed) = Bed::read(&opts.bed)
                 && let Ok(layout) = layout(&bed, &opts)

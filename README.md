@@ -256,6 +256,8 @@ On that line a 2.5 m, 14 s swell breaks at the edge of the reef flat, and the tw
 
 A modest plunge with a small tube: this stretch of the coast is one the reef spreads energy away from (the 2D run's biggest waves, about 5 m, break elsewhere). macOS reported no thermal warning, slowdown or power limit at any reading, 30 s apart, through both runs.
 
+`--handoff-y` can be given several times: one 2D run then saves every line, each at its own first settled crest, so several lines along the reef cost one run. The hand-off point must lie at least about half a wavelength inside the fine grid, so that the trough behind the wave is in the saved line; nothing checks this yet.
+
 `--handoff-depth` without `--handoff-file` brings the swell in along the line alone instead. That overestimates waves wherever the reef spreads energy sideways, which a single line cannot: on this line its crest at 9 m was three times the 2D run's, and it broke 40 m further out.
 
 To watch it, start the viewer (see above) and open **Side view of a break**, or http://localhost:5173/slice.html. The page holds a still camera on the break at true proportions while the wave runs in (or shows the whole tank, height stretched), colours the surface by how fast the water moves against the wave's own speed (pale when still, white at 0.6, red where it outruns the wave, which is where the lip is thrown), and plays at down to a thirtieth of real time: the plunge itself lasts about a second. **Watch the break slowly** jumps there. Beside it are when and where the face stood vertical, where the lip landed and the size of the tube.
