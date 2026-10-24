@@ -254,9 +254,11 @@ On that line a 2.5 m, 14 s swell breaks at the edge of the reef flat, and the tw
 | Lip and tube | | thrown 7.6 m, tube 0.34 m tall and 0.38 m wide |
 | Computing | 12 min on 3 efficiency-core threads | 12 min on one efficiency core |
 
-A modest plunge with a small tube: this stretch of the coast is one the reef spreads energy away from (the 2D run's biggest waves, about 5 m, break elsewhere). macOS reported no thermal warning, slowdown or power limit at any reading, 30 s apart, through both runs.
+A modest plunge with a small tube: this stretch of the coast is one the reef spreads energy away from (the 2D run's biggest waves, about 5 m, break elsewhere).
 
-`--handoff-y` can be given several times: one 2D run then saves every line, each at its own first settled crest, so several lines along the reef cost one run. The hand-off point must lie at least about half a wavelength inside the fine grid, so that the trough behind the wave is in the saved line; nothing checks this yet.
+On the line through those biggest waves, y = 301.5 m (handed over at 9 m, its crest 0.31 of the depth), the wave stands up with a face vertical 2159 m along, in 6.2 m of water, under a crest 4.6 m above still water (the 2D run: tallest at 2180 m, 4.9 m deep), and keeps a near-vertical face for about 30 m while only a small curl, under a metre across, forms at its top and falls onto the face: a heavy, crumbling break rather than a hollow tube, as the surf-similarity rule calls most of that stretch. At 0.6 m node spacing (13 minutes) the curl lands; at 0.4 m (19 minutes) the face stands vertical at the same moment and place and the curl grows the same way, 0.34, 0.50 and 0.65 m across, until its thin tip tangles and the run stops itself before it lands. For a break like this "face vertical" marks the first small overturn and "lip thrown" how far the steep face travelled before the curl fell (33 m); they were made for clean plunges. macOS reported no thermal warning, slowdown or power limit at any reading, 30 s apart, through both runs.
+
+`--handoff-y` can be given several times: one 2D run then saves every line, each at its own first settled crest, so several lines along the reef cost one run. The hand-off point must lie at least about half a wavelength inside the fine grid, so that the trough behind the wave is in the saved line; a slice whose line does not reach back that far is refused and says why.
 
 `--handoff-depth` without `--handoff-file` brings the swell in along the line alone instead. That overestimates waves wherever the reef spreads energy sideways, which a single line cannot: on this line its crest at 9 m was three times the 2D run's, and it broke 40 m further out.
 

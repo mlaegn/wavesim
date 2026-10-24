@@ -250,6 +250,19 @@ fn line_tank(opts: &SliceOptions, path: &std::path::Path, source: Source) -> Res
     let taper = 0.15 * wavelength;
     let (wave, behind, ahead) = approach.single_wave(wavelength, taper);
     let start = behind - taper - 10.0;
+    // The saved line must reach back past the trough behind the wave and its taper: a 2D run
+    // saves only its fine grid, and a hand-off point too close to where that starts leaves the
+    // trough outside it, where the lowest point found would only be the edge of the data.
+    let first = wave.x[0];
+    let spacing = wave.x[1] - wave.x[0];
+    if start < first || behind - first < 2.0 * spacing {
+        return Err(Error::Setup(format!(
+            "the saved line starts at x = {first:.0} m, but the slice must begin at {start:.0} m to \
+             hold the trough behind the wave (at {behind:.0} m) and its taper; hand off further \
+             shoreward (a shallower --handoff-depth), or on a line whose hand-off point lies \
+             deeper inside the run's fine grid"
+        )));
+    }
     // The wall at the shallow end: where the water is half a metre deep, or two wavelengths
     // ahead of the handed crest if that is nearer. Every metre of shallow water costs nodes at
     // the finest spacing, but one wavelength was too short: on the Pipeline line at y = 511.5 m
