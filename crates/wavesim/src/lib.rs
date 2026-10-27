@@ -114,14 +114,26 @@ struct Catch {
     row: usize,
     at: usize,
     history: [f64; 3],
+    /// The swell's period, and the highest the surface has been at the hand-off point since a
+    /// period before the sea settled: a crest counts only if it is at least
+    /// [`CREST_SHARE`] of that, so a small ripple between waves is not taken for one.
+    period: f64,
+    highest: f64,
     done: bool,
 }
+
+/// How high, relative to the highest crest at the hand-off point over the last period or more,
+/// a crest must be for a run to save the line as it passes. A 3.5 m, 16 s swell on Pipeline
+/// sent a ripple 6 cm high past the point first, which a bare rise-and-fall above still water
+/// took for the wave.
+const CREST_SHARE: f64 = 0.8;
 
 impl Catch {
     fn new(
         stage: &Stage,
         line: HandoffLine,
         offset: f64,
+        period: f64,
         dir: &std::path::Path,
     ) -> Result<Self, Error> {
         let g = stage.bed.grid();
@@ -146,6 +158,8 @@ impl Catch {
             row,
             at,
             history: [0.0; 3],
+            period,
+            highest: 0.0,
             done: false,
         })
     }
@@ -160,8 +174,12 @@ impl Catch {
         let k = |i: usize| g.idx(GHOST + i, GHOST + self.row);
         let eta = |i: usize| s.h[k(i)] + b[k(i)];
         self.history = [self.history[1], self.history[2], eta(self.at)];
+        if s.time >= settled - self.period {
+            self.highest = self.highest.max(self.history[2]);
+        }
         let [a, top, c] = self.history;
-        if s.time < settled || !(top > a && c < top && top > 0.0) {
+        let crest = top > a && c < top && top > 0.0 && top >= CREST_SHARE * self.highest;
+        if s.time < settled || !crest {
             return Ok(());
         }
         let x = |i: usize| self.offset + (i as f64 + 0.5) * g.dx;
@@ -1206,13 +1224,18 @@ pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<
         .handoff
         .iter()
         .map(|&line| match nest.as_ref() {
-            Some((fine, _, _, f)) => {
-                Catch::new(fine, line, f.x0 as f64 * fine.bed.header.dx, &opts.out)
-            }
+            Some((fine, _, _, f)) => Catch::new(
+                fine,
+                line,
+                f.x0 as f64 * fine.bed.header.dx,
+                opts.period,
+                &opts.out,
+            ),
             None => Catch::new(
                 &coarse,
                 line,
                 plan.crop as f64 * coarse.bed.header.dx,
+                opts.period,
                 &opts.out,
             ),
         })

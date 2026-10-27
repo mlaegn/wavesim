@@ -739,5 +739,6 @@ fn a_run_saves_lines_for_the_slice_solver_when_a_settled_crest_passes() {
         "crest at {crest}"
     );
     let i = x.iter().position(|&v| v == crest).unwrap();
-    assert!(eta[i] > 0.0 && eta[i] < o.height, "eta there {}", eta[i]);
+    // A real crest, not a ripple between waves: well up the wave, not just above still water.
+    assert!(eta[i] > 0.25 * o.height && eta[i] < o.height, "eta there {}", eta[i]);
 }
