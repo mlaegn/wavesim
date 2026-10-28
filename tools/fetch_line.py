@@ -9,11 +9,13 @@ the DEM along it every `--step` metres, by bilinear interpolation, reading only 
 line crosses. Also samples the bed file itself along the same line, for comparison. Writes
 `data/<bed>_line_<y>.json`: a `wavesim-line` (see docs/data-format.md).
 
-With `--width`, the line is the average of parallel lines a metre apart across a strip that wide,
-centred on `y`, and is written as `data/<bed>_line_<y>_w<width>.json`. A slice treats its line's
-bed as if the reef were the same all along the shore, so a feature narrower than a wave crest
-counts in full in a slice and only in part in the sea; averaging across the strip lets it count
-in proportion. A point any of the parallel lines has no data for stays a gap.
+The line is the average of parallel lines a metre apart across a strip `--width` wide (50 m
+unless asked otherwise), centred on `y`, and is written as `data/<bed>_line_<y>_w<width>.json`.
+A slice treats its line's bed as if the reef were the same all along the shore, so a feature
+narrower than a wave crest counts in full in a slice and only in part in the sea; averaging
+across the strip lets it count in proportion. On Pipeline one 1 m line made a barrel 2.5 m tall
+out of a pocket in the reef narrower than 20 m. A point any of the parallel lines has no data
+for stays a gap. `--width 0` takes the single line, written as `data/<bed>_line_<y>.json`.
 
 The default DEM is the 2013 USACE NCMP topobathy lidar of Oahu, 1 m (see docs/bathymetry.md),
 whose gaps are masked, not filled: a gap is written as null.
@@ -101,7 +103,7 @@ def main(argv=None) -> int:
     ap.add_argument("bed", type=Path, help="bed file header, e.g. data/pipeline.json")
     ap.add_argument("--y", type=float, required=True, help="the line, metres along the shore in the bed's frame")
     ap.add_argument("--step", type=float, default=1.0, help="metres between samples")
-    ap.add_argument("--width", type=float, default=0.0, help="average across a strip this wide, metres")
+    ap.add_argument("--width", type=float, default=50.0, help="average across a strip this wide, metres (0: one line)")
     ap.add_argument("--url", default=LIDAR_1M, help="DEM to sample (lon/lat GeoTIFF or VRT)")
     ap.add_argument("--out", type=Path, help="output file (default data/<bed>_line_<y>.json)")
     args = ap.parse_args(argv)

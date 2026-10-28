@@ -231,18 +231,18 @@ The run is guarded like `wavesim run`: on the efficiency cores, it times its fir
 
 The earlier hand-off is the closer, as it should be: the main model is the more accurate the deeper the water. This is the way to real reefs: the main model brings a swell across the shelf, the slice solver breaks it. macOS reported no thermal warning, slowdown or power limit at any of 26 readings, 30 s apart, through both hand-off runs.
 
-**On a real reef: one line across Pipeline.** The 2D run brings the real swell in over the real reef, and saves one line of the sea when a settled crest passes a chosen depth on it; the slice solver breaks that wave over the same line from the 1 m lidar:
+**On a real reef: one line across Pipeline.** The 2D run brings the real swell in over the real reef, and saves one line of the sea when a settled crest passes a chosen depth on it; the slice solver breaks that wave over the same line from the 1 m lidar, averaged across a strip 50 m wide:
 
 ```bash
 uv run --python 3.12 --with rasterio --with numpy --with scipy --with pyproj \
-    tools/fetch_line.py data/pipeline.json --y 511.5          # the 1 m lidar along y = 511.5 m
+    tools/fetch_line.py data/pipeline.json --y 511.5   # the 1 m lidar along y = 511.5 m, over 50 m
 cargo run --release -p wavesim -- run data/pipeline.json --height 2.5 --period 14 \
     --threads 3 --max-minutes 15 --handoff-y 511.5 --handoff-depth 9 --out out/pipeline_handoff
-cargo run --release -p wavesim -- slice --line data/pipeline_line_511.5.json \
+cargo run --release -p wavesim -- slice --line data/pipeline_line_511.5_w50.json \
     --handoff-file out/pipeline_handoff/handoff_y511.5.json --period 14
 ```
 
-The slice hands over only the followed wave, between the troughs either side of its crest, tapered to still water beyond: in a swell the wave ahead is breaking where this one will, and its foam cannot be followed this way. The water ahead is therefore still, not the previous wave's backwash, and the velocity across the line is dropped, a slice being two-dimensional. The slice's bed is the 1 m line, simplified to the points that keep it within 10 cm (52 of them here), and it ends in a wall where the water is half a metre deep.
+The slice hands over only the followed wave, between the troughs either side of its crest, tapered to still water beyond: in a swell the wave ahead is breaking where this one will, and its foam cannot be followed this way. The water ahead is therefore still, not the previous wave's backwash, and the velocity across the line is dropped, a slice being two-dimensional. The slice's bed is the averaged line, simplified to the points that keep it within 10 cm, and it ends in a wall where the water is half a metre deep. The results below, up to the check that led to the averaging, were run on single 1 m lines (`--width 0`); the averaging changes the tube, and little else.
 
 On that line a 2.5 m, 14 s swell breaks at the edge of the reef flat, and the two models agree on where, within 10 m:
 
@@ -280,7 +280,7 @@ Every line plunges, and the slice and the 2D run agree on where within 20 m (mos
 
 The barrel is one line wide. Slices 30 m either side of it, from another run of the same swell (21 minutes, then 14 and 12), close tubes only 0.5 m across: at y = 481.5 the face stands vertical 2152.9 m along in 6.0 m of water under a 4.2 m crest, at 541.5 2171.3 m along in 4.4 m under 3.4 m. The 2D run, on 3 m cells, changes smoothly across those 60 m (its tallest wave 4.3 to 3.8 m, all at 2170 to 2174 m), so the difference comes from the 1 m line. On 511.5 the reef falls away to 9.7 m just seaward and rises 1 in 13 to the break; on 481.5 and 541.5 it is 7.6 m deep there and rises 1 in 25. A slice treats its line's bed as if the reef were the same all along the shore, so a feature this narrow counts in full in a slice and only in part in the sea, where a wave crest spans far more than 60 m. The barrel at 511.5 therefore shows what that profile does, not what the reef there does.
 
-`tools/fetch_line.py --width 50` makes the line the average of parallel lines a metre apart across a strip 50 m wide, so that a narrow feature counts in proportion. On that bed the barrel is gone: the tube is 0.7 m tall and 0.6 m wide, like its neighbours'. Averaged across 20 m it is the same (0.7 by 0.7 m), so the pocket behind it is narrower than 20 m.
+`tools/fetch_line.py` (50 m unless `--width` says otherwise) makes the line the average of parallel lines a metre apart across a strip 50 m wide, so that a narrow feature counts in proportion. On that bed the barrel is gone: the tube is 0.7 m tall and 0.6 m wide, like its neighbours'. Averaged across 20 m it is the same (0.7 by 0.7 m), so the pocket behind it is narrower than 20 m.
 
 | y (m) | Bed | Face vertical | Depth | Crest | Tube (tall × wide) |
 |---|---|---|---|---|---|
@@ -291,9 +291,26 @@ The barrel is one line wide. Slices 30 m either side of it, from another run of 
 
 Where the wave breaks, how deep and how tall hardly move with the averaging: by at most 8 m, 0.1 m and 0.3 m. Only the tube on 511.5 does. So on this swell the slices give heavy plunges with tubes under a metre across all along this stretch. That is much smaller than the barrels Pipeline is known for, and a likely reason, untested, is what a slice leaves out: the real wave is shaped across the reef as well as along it, and peels along the shore.
 
+**Heavy and mellow swells.** Four swells on two of those lines, 50 m strips, each from its own 2D run (9 to 35 minutes on 3 threads) and sliced at 0.6 m (2 to 11 minutes each; no thermal warning at any of 74 readings). A smaller swell's fine grid starts in shallower water, so the smaller swells hand over at 4 and 5 m rather than 9:
+
+| Swell | y (m) | ξ₀ | Hand-off (crest / depth) | Face vertical | Depth | Crest | Lip thrown | Tube (tall × wide) |
+|---|---|---|---|---|---|---|---|---|
+| 1.5 m, 16 s | 421.5 | 0.55 | 4 m (0.20) | 2221.3 m | 2.5 m | 1.7 m | 10 m | 0.6 × 0.7 m |
+| 1.5 m, 16 s | 511.5 | 0.17 | 4 m (0.17) | 2268.0 m | 2.5 m | 1.3 m | | stopped before it landed |
+| 2.5 m, 12 s | 421.5 | 0.41 | 5 m (0.26) | 2186.5 m | 3.6 m | 2.6 m | 7 m | 0.5 × 0.6 m |
+| 2.5 m, 12 s | 511.5 | 0.45 | 5 m (0.20) | 2202.5 m | 3.5 m | 1.8 m | | stopped before it landed |
+| 2.5 m, 16 s | 421.5 | 0.53 | 6 m (0.50) | 2174.6 m | 4.1 m | 4.1 m | 12 m | 0.6 × 0.5 m |
+| 2.5 m, 16 s | 511.5 | 0.55 | 5 m (0.21) | 2204.3 m | 3.5 m | 1.8 m | 8 m | 0.5 × 1.1 m |
+| 3.5 m, 16 s | 421.5 | 0.21 | 9 m (0.42) | 2116.1 m | 6.5 m | 5.0 m | 15 m | 1.1 × 0.8 m |
+| 3.5 m, 16 s | 511.5 | 0.51 | 9 m (0.23) | 2192.5 m | 3.9 m | 3.5 m | 11 m | 0.7 × 0.6 m |
+
+Here ξ₀'s slope is taken over the half wavelength seaward of the slice's vertical face. The bigger the swell, the further out and the deeper it breaks: on 421.5 from 2221 m in 2.5 m of water to 2116 m in 6.5 m; on 511.5 less so. The same 2.5 m swell is far bigger on the reef at 16 s than at 12 s (a 4.1 m crest against 2.6 m on 421.5), and 421.5 gathers more of every swell than 511.5. Every wave the slice follows to the end plunges, and every tube is about a metre across or less, so on this stretch the size of the wave varies far more than its shape. The two that stop are the weakest, a crest only half the depth on 511.5: the face stands vertical and the thin top tangles before a lip lands. ξ₀ does not sort these either: the 3.5 m swell on 421.5 has the lowest but one and the biggest tube.
+
+Handing over at 5 m on 421.5 first gave a 2.6 by 3.0 m tube for the 2.5 m, 16 s swell, from a crest already 0.59 of the depth at the hand-off. At 0.4 m node spacing it came out the same (2.7 by 3.0 m), but handed over at 6 m, its crest 0.50 of the depth, the face stands vertical 4 m further out under the same crest and the tube is 0.6 by 0.5 m. A wave handed over that near to breaking has already been worked on by the main model's breaking switch, and the tube is the first thing to show it; where, how deep and how tall barely move. Every other hand-off in the table is at 0.42 of the depth or less.
+
 Against the real place, the check can only be coarse. Published positions for Pipeline disagree with each other by up to 250 m along the shore: in this frame they fall at y = 326 m (Wikipedia), 410 m (Mondo Surf, Pipeline) and 576 m (Mondo Surf, Ehukai). The barrel line, 511.5, lies among them, as does the heavy break at 301.5, so the comparison neither confirms nor rules out that the model's barrel is the real one. Across the shore, the 3.5 m swell breaks on 511.5 about 115 m out from where the water is half a metre deep, in 3.9 m of water. Pipeline's First Reef is usually described as about 60 m out and 0.6 to 2.4 m deep. The 2.5 m swell on the same line breaks closer to that, 85 m out in 2.9 m of water. That fits bigger swells breaking further out, but the descriptions are secondary sources, not a survey.
 
-`--handoff-y` can be given several times: one 2D run then saves every line, each at its own first settled crest, so several lines along the reef cost one run. The hand-off point must lie at least about half a wavelength inside the fine grid, so that the trough behind the wave is in the saved line; a slice whose line does not reach back that far is refused and says why.
+`--handoff-y` can be given several times: one 2D run then saves every line, each at its own first settled crest, so several lines along the reef cost one run. The hand-off point must lie at least about half a wavelength inside the fine grid, so that the trough behind the wave is in the saved line. The 2D run checks this for every line before it starts, and refuses at once, saying why, rather than after minutes of running: a smaller swell gets a fine grid that starts in shallower water (for 1.5 m it starts in 6 m), so it needs a shallower `--handoff-depth`. A slice whose line still does not reach back far enough is refused too.
 
 `--handoff-depth` without `--handoff-file` brings the swell in along the line alone instead. That overestimates waves wherever the reef spreads energy sideways, which a single line cannot: on this line its crest at 9 m was three times the 2D run's, and it broke 40 m further out.
 

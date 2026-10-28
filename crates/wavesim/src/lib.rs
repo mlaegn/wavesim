@@ -129,16 +129,20 @@ struct Catch {
 const CREST_SHARE: f64 = 0.8;
 
 impl Catch {
+    /// The hand-off point on the grid of `bed` (the one the run will follow it on, its seabed as
+    /// the solver will have it at `tide`), checked before the run starts.
     fn new(
-        stage: &Stage,
+        bed: &Bed,
+        tide: f64,
         line: HandoffLine,
         offset: f64,
         period: f64,
         dir: &std::path::Path,
     ) -> Result<Self, Error> {
-        let g = stage.bed.grid();
+        let g = bed.grid();
+        let b = bed.bathymetry(tide);
         let row = ((line.y / g.dy).floor().max(0.0) as usize).min(g.ny - 1);
-        let depth = |i: usize| -stage.solver.bed.b[g.idx(GHOST + i, GHOST + row)];
+        let depth = |i: usize| -b.b[g.idx(GHOST + i, GHOST + row)];
         let wet = (0..g.nx).take_while(|&i| depth(i) > 0.0).count();
         let mut at = wet.saturating_sub(1);
         while at > 0 && depth(at - 1) < line.depth {
@@ -149,6 +153,23 @@ impl Catch {
                 "along y = {} m the water never stays shallower than {} m before the shore, \
                  inside the grid",
                 line.y, line.depth
+            )));
+        }
+        // The slice needs the line back to the trough behind the wave, half a wavelength, and
+        // its taper, 0.15 of one, and 10 m more; with a margin for a crest that has passed the
+        // point, refuse now rather than after the run. A 2.5 m, 16 s swell handed over at 9 m
+        // on Pipeline ran 11 minutes and saved a line the slice then refused.
+        let wavelength = std::f64::consts::TAU
+            / wavecore::linear_wave(std::f64::consts::TAU / period, line.depth, true).k;
+        let behind = at as f64 * g.dx;
+        if behind < 0.75 * wavelength + 10.0 {
+            return Err(setup(format!(
+                "along y = {} m the {} m hand-off point is only {behind:.0} m inside the fine grid, \
+                 and a slice needs about {:.0} m of the line behind it; hand off at a shallower \
+                 --handoff-depth",
+                line.y,
+                line.depth,
+                0.75 * wavelength + 10.0
             )));
         }
         Ok(Self {
@@ -1127,6 +1148,29 @@ pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<
     }
     let plan = layout.coarse;
     let (coarse_bed, fine_bed) = beds(&full, &layout);
+    // The hand-off points, checked before anything is written.
+    let mut catches = opts
+        .handoff
+        .iter()
+        .map(|&line| match (&layout.fine, &fine_bed) {
+            (Some(f), Some(bed)) => Catch::new(
+                bed,
+                opts.tide,
+                line,
+                f.x0 as f64 * bed.header.dx,
+                opts.period,
+                &opts.out,
+            ),
+            _ => Catch::new(
+                &coarse_bed,
+                opts.tide,
+                line,
+                plan.crop as f64 * coarse_bed.header.dx,
+                opts.period,
+                &opts.out,
+            ),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let grid = coarse_bed.grid();
     let maker_x = plan.maker_x - plan.crop as f64 * grid.dx;
     let maker = WaveMaker {
@@ -1220,26 +1264,6 @@ pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<
         _ => None,
     };
 
-    let mut catches = opts
-        .handoff
-        .iter()
-        .map(|&line| match nest.as_ref() {
-            Some((fine, _, _, f)) => Catch::new(
-                fine,
-                line,
-                f.x0 as f64 * fine.bed.header.dx,
-                opts.period,
-                &opts.out,
-            ),
-            None => Catch::new(
-                &coarse,
-                line,
-                plan.crop as f64 * coarse.bed.header.dx,
-                opts.period,
-                &opts.out,
-            ),
-        })
-        .collect::<Result<Vec<_>, _>>()?;
     let mut truncated = false;
     let mut fine_seconds = 0.0;
     // Columns of the coarse grid under the fine grid's offshore relaxation zone.

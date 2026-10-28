@@ -742,3 +742,20 @@ fn a_run_saves_lines_for_the_slice_solver_when_a_settled_crest_passes() {
     // A real crest, not a ripple between waves: well up the wave, not just above still water.
     assert!(eta[i] > 0.25 * o.height && eta[i] < o.height, "eta there {}", eta[i]);
 }
+
+#[test]
+fn a_run_refuses_at_once_a_hand_off_point_too_near_the_edge_of_its_fine_grid() {
+    // The reef grid starts about 80 m seaward of where the long beach is 3.3 m deep, so its 4.5 m
+    // point is some 20 m inside: too little line behind the wave for a slice, refused before
+    // the run rather than after it.
+    let dir = scratch("handoff_edge");
+    let o = RunOptions {
+        handoff: vec![wavesim::HandoffLine { y: 7.0, depth: 4.5 }],
+        ..nested_options(&dir)
+    };
+    let start = std::time::Instant::now();
+    let e = run(&o, |_| {}).unwrap_err().to_string();
+    assert!(e.contains("inside the fine grid"), "{e}");
+    assert!(start.elapsed().as_secs_f64() < 5.0);
+    assert!(!o.out.join("frames.f32").exists());
+}
