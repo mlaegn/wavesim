@@ -244,6 +244,21 @@ fn line_tank(opts: &SliceOptions, path: &std::path::Path, source: Source) -> Res
         ),
     };
     let eta_ratio = approach.eta_ratio(&still);
+    // A 2D run's wave must be handed over before the run's breaking switch has begun to act on
+    // its crest, which it does once the crest is 0.30 of the total depth beneath it: past that
+    // the run has turned its dispersion down, and the slice would start from a wave already
+    // part broken. On Pipeline at y = 421.5 m a 2.5 m, 16 s swell handed over with its crest
+    // at 0.37 closed a tube 2.6 m tall, four times the tube from a hand-off 1 m deeper.
+    // (A swell brought in along the line alone has the switch off, so it is not refused.)
+    let onset = wavecore::Breaking::default().eta_ratio.0;
+    if matches!(source, Source::Run(_)) && eta_ratio / (1.0 + eta_ratio) > onset {
+        return Err(Error::Setup(format!(
+            "the saved crest is {:.2} of the total depth beneath it, past the {onset:.2} where \
+             the 2D run's breaking switch starts to act, so the wave was already part broken \
+             when saved; hand off at a deeper --handoff-depth",
+            eta_ratio / (1.0 + eta_ratio)
+        )));
+    }
     let omega = std::f64::consts::TAU / opts.period;
     let wavelength =
         std::f64::consts::TAU / wavecore::linear_wave(omega, still(approach.crest), true).k;
@@ -531,4 +546,69 @@ pub fn run_slice(opts: &SliceOptions) -> Result<SliceSummary, Error> {
         seconds: clock.elapsed().as_secs_f64(),
         estimate,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A slice of a 16 s swell from a saved wave on a plane beach rising 1 in 40, its crest
+    /// `crest` m above still water where the beach is 5 m deep; refused at once by a limit of
+    /// no time at all if nothing refuses it first.
+    fn slice_of_saved_wave(name: &str, crest: f64) -> String {
+        let dir = std::env::temp_dir().join(format!("wavesim-slice-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let x: Vec<f64> = (0..=400).map(f64::from).collect();
+        let depth = |x: f64| 10.0 - x / 40.0;
+        let z: Vec<f64> = x.iter().map(|&x| -depth(x)).collect();
+        let line = dir.join("line.json");
+        let doc = serde_json::json!({ "name": "plane", "x": x, "z": z, "z_bed": z });
+        std::fs::write(&line, doc.to_string()).unwrap();
+        let wavelength = 107.0;
+        let eta: Vec<f64> = x
+            .iter()
+            .map(|&x| crest * (std::f64::consts::TAU * (x - 200.0) / wavelength).cos())
+            .collect();
+        let ubar: Vec<f64> = x
+            .iter()
+            .zip(&eta)
+            .map(|(&x, &e)| {
+                if depth(x) > 0.0 {
+                    (G / depth(x)).sqrt() * e
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+        let saved = dir.join("handoff.json");
+        let doc = serde_json::json!({
+            "format": "wavesim-handoff", "depth": 5.0, "time": 300.0, "crest": 200.0,
+            "x": x, "eta": eta, "ubar": ubar,
+        });
+        std::fs::write(&saved, doc.to_string()).unwrap();
+        let opts = SliceOptions {
+            case: Case::Steep,
+            depth: 10.0,
+            height: 2.5,
+            finest: 0.6,
+            frame_every: 4,
+            out: dir.join("slice"),
+            max_wall_seconds: Some(0.0),
+            handoff_depth: None,
+            line: Some(line),
+            period: 16.0,
+            handoff_file: Some(saved),
+        };
+        run_slice(&opts).unwrap_err().to_string()
+    }
+
+    #[test]
+    fn a_wave_saved_after_the_breaking_switch_began_on_it_is_refused() {
+        // 3 m over 5 m is 0.375 of the total depth; 1 m is 0.17, refused only by the time limit.
+        let e = slice_of_saved_wave("broken", 3.0);
+        assert!(e.contains("part broken"), "{e}");
+        let e = slice_of_saved_wave("whole", 1.0);
+        assert!(e.contains("more than its limit"), "{e}");
+    }
 }

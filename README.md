@@ -293,20 +293,20 @@ Where the wave breaks, how deep and how tall hardly move with the averaging: by 
 
 **Heavy and mellow swells.** Four swells on two of those lines, 50 m strips, each from its own 2D run (9 to 35 minutes on 3 threads) and sliced at 0.6 m (2 to 11 minutes each; no thermal warning at any of 74 readings). A smaller swell's fine grid starts in shallower water, so the smaller swells hand over at 4 and 5 m rather than 9:
 
-| Swell | y (m) | ξ₀ | Hand-off (crest / depth) | Face vertical | Depth | Crest | Lip thrown | Tube (tall × wide) |
+| Swell | y (m) | ξ₀ | Hand-off (crest / total depth) | Face vertical | Depth | Crest | Lip thrown | Tube (tall × wide) |
 |---|---|---|---|---|---|---|---|---|
-| 1.5 m, 16 s | 421.5 | 0.55 | 4 m (0.20) | 2221.3 m | 2.5 m | 1.7 m | 10 m | 0.6 × 0.7 m |
-| 1.5 m, 16 s | 511.5 | 0.17 | 4 m (0.17) | 2268.0 m | 2.5 m | 1.3 m | | stopped before it landed |
-| 2.5 m, 12 s | 421.5 | 0.41 | 5 m (0.26) | 2186.5 m | 3.6 m | 2.6 m | 7 m | 0.5 × 0.6 m |
-| 2.5 m, 12 s | 511.5 | 0.45 | 5 m (0.20) | 2202.5 m | 3.5 m | 1.8 m | | stopped before it landed |
-| 2.5 m, 16 s | 421.5 | 0.53 | 6 m (0.50) | 2174.6 m | 4.1 m | 4.1 m | 12 m | 0.6 × 0.5 m |
-| 2.5 m, 16 s | 511.5 | 0.55 | 5 m (0.21) | 2204.3 m | 3.5 m | 1.8 m | 8 m | 0.5 × 1.1 m |
-| 3.5 m, 16 s | 421.5 | 0.21 | 9 m (0.42) | 2116.1 m | 6.5 m | 5.0 m | 15 m | 1.1 × 0.8 m |
-| 3.5 m, 16 s | 511.5 | 0.51 | 9 m (0.23) | 2192.5 m | 3.9 m | 3.5 m | 11 m | 0.7 × 0.6 m |
+| 1.5 m, 16 s | 421.5 | 0.55 | 4 m (0.16) | 2221.3 m | 2.5 m | 1.7 m | 10 m | 0.6 × 0.7 m |
+| 1.5 m, 16 s | 511.5 | 0.17 | 4 m (0.15) | 2268.0 m | 2.5 m | 1.3 m | | stopped before it landed |
+| 2.5 m, 12 s | 421.5 | 0.41 | 5 m (0.21) | 2186.5 m | 3.6 m | 2.6 m | 7 m | 0.5 × 0.6 m |
+| 2.5 m, 12 s | 511.5 | 0.45 | 5 m (0.17) | 2202.5 m | 3.5 m | 1.8 m | | stopped before it landed |
+| 2.5 m, 16 s | 421.5 | 0.53 | 6 m (0.33, refused) | 2174.6 m | 4.1 m | 4.1 m | 12 m | no clean result |
+| 2.5 m, 16 s | 511.5 | 0.55 | 5 m (0.17) | 2204.3 m | 3.5 m | 1.8 m | 8 m | 0.5 × 1.1 m |
+| 3.5 m, 16 s | 421.5 | 0.21 | 9 m (0.29) | 2116.1 m | 6.5 m | 5.0 m | 15 m | 1.1 × 0.8 m |
+| 3.5 m, 16 s | 511.5 | 0.51 | 9 m (0.19) | 2192.5 m | 3.9 m | 3.5 m | 11 m | 0.7 × 0.6 m |
 
 Here ξ₀'s slope is taken over the half wavelength seaward of the slice's vertical face. The bigger the swell, the further out and the deeper it breaks: on 421.5 from 2221 m in 2.5 m of water to 2116 m in 6.5 m; on 511.5 less so. The same 2.5 m swell is far bigger on the reef at 16 s than at 12 s (a 4.1 m crest against 2.6 m on 421.5), and 421.5 gathers more of every swell than 511.5. Every wave the slice follows to the end plunges, and every tube is about a metre across or less, so on this stretch the size of the wave varies far more than its shape. The two that stop are the weakest, a crest only half the depth on 511.5: the face stands vertical and the thin top tangles before a lip lands. ξ₀ does not sort these either: the 3.5 m swell on 421.5 has the lowest but one and the biggest tube.
 
-Handing over at 5 m on 421.5 first gave a 2.6 by 3.0 m tube for the 2.5 m, 16 s swell, from a crest already 0.59 of the depth at the hand-off. At 0.4 m node spacing it came out the same (2.7 by 3.0 m), but handed over at 6 m, its crest 0.50 of the depth, the face stands vertical 4 m further out under the same crest and the tube is 0.6 by 0.5 m. A wave handed over that near to breaking has already been worked on by the main model's breaking switch, and the tube is the first thing to show it; where, how deep and how tall barely move. Every other hand-off in the table is at 0.42 of the depth or less.
+Handing over at 5 m on 421.5 first gave a 2.6 by 3.0 m tube for the 2.5 m, 16 s swell, from a crest already 0.37 of the total depth beneath it at the hand-off. At 0.4 m node spacing it came out the same (2.7 by 3.0 m), but handed over at 6 m, the crest 0.33 of the total depth, the face stands vertical 4 m further out under the same crest and the tube is 0.6 by 0.5 m. Past 0.30 the 2D run's breaking switch has begun to turn its dispersion down, so the wave is saved already part broken, and the tube is the first thing to show it; where, how deep and how tall barely move. A slice now refuses such a wave and says so. This one cannot be handed over cleanly: at 6.5 m its crest is 0.31, and at 7 m the hand-off point is too near the edge of the run's fine grid, which starts in 6.2 m of water, for the trough behind it. Every other hand-off in the table is under 0.30.
 
 Against the real place, the check can only be coarse. Published positions for Pipeline disagree with each other by up to 250 m along the shore: in this frame they fall at y = 326 m (Wikipedia), 410 m (Mondo Surf, Pipeline) and 576 m (Mondo Surf, Ehukai). The barrel line, 511.5, lies among them, as does the heavy break at 301.5, so the comparison neither confirms nor rules out that the model's barrel is the real one. Across the shore, the 3.5 m swell breaks on 511.5 about 115 m out from where the water is half a metre deep, in 3.9 m of water. Pipeline's First Reef is usually described as about 60 m out and 0.6 to 2.4 m deep. The 2.5 m swell on the same line breaks closer to that, 85 m out in 2.9 m of water. That fits bigger swells breaking further out, but the descriptions are secondary sources, not a survey.
 
