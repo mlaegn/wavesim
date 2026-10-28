@@ -51,3 +51,46 @@ def test_a_plane_is_sampled_exactly_and_a_gap_is_not_filled():
             # Next to the masked pixel the sample is missing, not interpolated across it.
             near_gap = fetch_line.sample(ds, np.array([west + 25.2 * res]), np.array([north - 10.4 * res]))
             assert np.isnan(near_gap[0])
+
+
+def test_a_strip_averages_parallel_lines_and_keeps_their_gaps():
+    from pyproj import Transformer
+
+    assert list(fetch_line.offsets(0.0)) == [0.0]
+    assert np.allclose(fetch_line.offsets(4.0), [-2.0, -1.0, 0.0, 1.0, 2.0])
+    # A plane in lon/lat pixels about 2 m across, and a frame inside it: across a strip the average of
+    # a plane is the plane on the centre line.
+    res, cols, rows = 0.00002, 300, 300
+    west, north = -158.06, 21.67
+    transform = from_origin(west, north, res, res)
+    lon = west + (np.arange(cols) + 0.5) * res
+    lat = north - (np.arange(rows) + 0.5) * res
+    z = (20000.0 * (lon[None, :] - west) + 30000.0 * (lat[:, None] - north)).astype("float64")
+    to_utm = Transformer.from_crs("EPSG:4326", "EPSG:32604", always_xy=True)
+    e0, n0 = to_utm.transform(west + 100 * res, north - 200 * res)
+    frame = {"crs": "EPSG:32604", "origin_easting": e0, "origin_northing": n0, "x_bearing_deg": 130.0}
+    to_ll = Transformer.from_crs("EPSG:32604", "EPSG:4326", always_xy=True)
+    xs = np.array([10.0, 40.0, 80.0])
+    profile = dict(driver="GTiff", width=cols, height=rows, count=1, dtype="float64",
+                   crs="EPSG:4326", transform=transform, nodata=-9999.0)
+    with MemoryFile() as mem:
+        with mem.open(**profile) as ds:
+            ds.write(z, 1)
+        with mem.open() as ds:
+            centre = fetch_line.strip(ds, frame, to_ll, 30.0, 0.0, xs)
+            wide = fetch_line.strip(ds, frame, to_ll, 30.0, 20.0, xs)
+            assert not np.isnan(centre).any()
+            assert np.allclose(wide, centre, atol=1e-6)
+    # Mask the pixel under one parallel line 8 m off the centre, at the middle point: the 20 m
+    # strip loses that point, a 2 m one (whose interpolation reaches 3 m out) does not.
+    e, n = fetch_line.line_points(frame, 38.0, np.array([40.0]))
+    plon, plat = to_ll.transform(e, n)
+    z[int((north - plat[0]) / res), int((plon[0] - west) / res)] = -9999.0
+    with MemoryFile() as mem:
+        with mem.open(**profile) as ds:
+            ds.write(z, 1)
+        with mem.open() as ds:
+            wide = fetch_line.strip(ds, frame, to_ll, 30.0, 20.0, xs)
+            narrow = fetch_line.strip(ds, frame, to_ll, 30.0, 2.0, xs)
+    assert np.isnan(wide[1]) and not np.isnan(wide[0]) and not np.isnan(wide[2])
+    assert not np.isnan(narrow).any()

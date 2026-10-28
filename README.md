@@ -264,17 +264,32 @@ The same swell on y = 511.5 m, where the 2.5 m swell gave only a modest plunge, 
 
 Along the reef, one 2D run (18 minutes) saved seven lines across the middle half of the width, and each was sliced at 0.6 m (6 to 15 minutes each; no thermal warning at any of 73 readings). The 2D run repeats exactly: its saves at 301.5 and 511.5 are the same bytes as before.
 
-| y (m) | Face vertical | Depth | Crest | Lip thrown | Tube (tall × wide) | 2D run: tallest |
-|---|---|---|---|---|---|---|
-| 301.5 | 2147.5 m | 6.7 m | 5.5 m | 16 m | 1.0 × 0.8 m | 2155.5 m, 6.3 m deep |
-| 421.5 | 2112.7 m | 6.6 m | 4.9 m | 15 m | 0.7 × 0.6 m | 2116.5 m, 6.4 m deep |
-| 511.5 | 2185.2 m | 3.9 m | 3.8 m | 16 m | **2.5 × 3.7 m** | 2170.5 m, 4.8 m deep |
-| 571.5 | 2181.4 m | 3.8 m | 2.2 m | 7 m | 0.7 × 0.7 m | 2188.5 m, 3.7 m deep |
-| 661.5 | 2198.4 m | 4.2 m | 2.6 m | 7 m | 0.7 × 0.8 m | 2197.5 m, 4.0 m deep |
-| 751.5 | 2147.9 m | 5.3 m | 4.6 m | 14 m | 0.9 × 0.7 m | 2167.5 m, 5.1 m deep |
-| 841.5 | 2190.5 m | 5.5 m | 4.0 m | 13 m | 0.8 × 0.6 m | 2194.5 m, 5.4 m deep |
+| y (m) | ξ₀ | Face vertical | Depth | Crest | Lip thrown | Tube (tall × wide) | 2D run: tallest |
+|---|---|---|---|---|---|---|---|
+| 301.5 | 0.40 | 2147.5 m | 6.7 m | 5.5 m | 16 m | 1.0 × 0.8 m | 2155.5 m, 6.3 m deep |
+| 421.5 | 0.26 | 2112.7 m | 6.6 m | 4.9 m | 15 m | 0.7 × 0.6 m | 2116.5 m, 6.4 m deep |
+| 511.5 | 0.54 | 2185.2 m | 3.9 m | 3.8 m | 16 m | **2.5 × 3.7 m** | 2170.5 m, 4.8 m deep |
+| 571.5 | 0.52 | 2181.4 m | 3.8 m | 2.2 m | 7 m | 0.7 × 0.7 m | 2188.5 m, 3.7 m deep |
+| 661.5 | 0.40 | 2198.4 m | 4.2 m | 2.6 m | 7 m | 0.7 × 0.8 m | 2197.5 m, 4.0 m deep |
+| 751.5 | 0.50 | 2147.9 m | 5.3 m | 4.6 m | 14 m | 0.9 × 0.7 m | 2167.5 m, 5.1 m deep |
+| 841.5 | 0.47 | 2190.5 m | 5.5 m | 4.0 m | 13 m | 0.8 × 0.6 m | 2194.5 m, 5.4 m deep |
 
 Every line plunges, and the slice and the 2D run agree on where within 20 m (mostly within 8). Only 511.5 makes a big tube; everywhere else the lip closes a tube under a metre across, whether the wave is 2 m or 5.5 m. On 511.5 the reef falls from 9 to 5 m deep over 50 m just before the break, about 1 in 13, against 1 in 20 to 1 in 25 on the other lines, and a fair-sized wave (4.1 m crest to trough in the 2D run) arrives over it: a likely reason, not a tested one. Lines 60 m apart cannot say how wide that stretch is.
+
+ξ₀ is Battjes' (1974) surf similarity from the deep-water swell, `tan β / sqrt(H0 / L0)` with `L0 = g T² / 2π` (400 m here) and `tan β` the reef's mean rise over the half wavelength seaward of the 2D run's break: below 0.5 a wave should spill, from 0.5 to 3.3 plunge. All seven lines sit near that border, and the slices bear it out in kind: every one overturns, but only just, except 511.5. The number does not tell the barrel apart, though: 571.5 has nearly the same ξ₀ as 511.5 and closes a tube a quarter as tall, because the reef brings it a wave with a crest little more than half as high. ξ₀ sorts the kind of break, not the size of the tube.
+
+The barrel is one line wide. Slices 30 m either side of it, from another run of the same swell (21 minutes, then 14 and 12), close tubes only 0.5 m across: at y = 481.5 the face stands vertical 2152.9 m along in 6.0 m of water under a 4.2 m crest, at 541.5 2171.3 m along in 4.4 m under 3.4 m. The 2D run, on 3 m cells, changes smoothly across those 60 m (its tallest wave 4.3 to 3.8 m, all at 2170 to 2174 m), so the difference comes from the 1 m line. On 511.5 the reef falls away to 9.7 m just seaward and rises 1 in 13 to the break; on 481.5 and 541.5 it is 7.6 m deep there and rises 1 in 25. A slice treats its line's bed as if the reef were the same all along the shore, so a feature this narrow counts in full in a slice and only in part in the sea, where a wave crest spans far more than 60 m. The barrel at 511.5 therefore shows what that profile does, not what the reef there does.
+
+`tools/fetch_line.py --width 50` makes the line the average of parallel lines a metre apart across a strip 50 m wide, so that a narrow feature counts in proportion. On that bed the barrel is gone: the tube is 0.7 m tall and 0.6 m wide, like its neighbours'. Averaged across 20 m it is the same (0.7 by 0.7 m), so the pocket behind it is narrower than 20 m.
+
+| y (m) | Bed | Face vertical | Depth | Crest | Tube (tall × wide) |
+|---|---|---|---|---|---|
+| 481.5 | one line / 50 m strip | 2152.9 / 2157.2 m | 6.0 / 6.0 m | 4.2 / 4.3 m | 0.5 × 0.6 / 0.6 × 0.6 m |
+| 511.5 | one line | 2185.2 m | 3.9 m | 3.8 m | 2.5 × 3.7 m |
+| 511.5 | 20 m / 50 m strip | 2192.7 / 2192.5 m | 3.8 / 3.9 m | 3.6 / 3.5 m | 0.7 × 0.7 / 0.7 × 0.6 m |
+| 541.5 | one line / 50 m strip | 2171.3 / 2171.1 m | 4.4 / 4.5 m | 3.4 / 3.4 m | 0.5 × 0.4 / 0.7 × 0.6 m |
+
+Where the wave breaks, how deep and how tall hardly move with the averaging: by at most 8 m, 0.1 m and 0.3 m. Only the tube on 511.5 does. So on this swell the slices give heavy plunges with tubes under a metre across all along this stretch. That is much smaller than the barrels Pipeline is known for, and a likely reason, untested, is what a slice leaves out: the real wave is shaped across the reef as well as along it, and peels along the shore.
 
 Against the real place, the check can only be coarse. Published positions for Pipeline disagree with each other by up to 250 m along the shore: in this frame they fall at y = 326 m (Wikipedia), 410 m (Mondo Surf, Pipeline) and 576 m (Mondo Surf, Ehukai). The barrel line, 511.5, lies among them, as does the heavy break at 301.5, so the comparison neither confirms nor rules out that the model's barrel is the real one. Across the shore, the 3.5 m swell breaks on 511.5 about 115 m out from where the water is half a metre deep, in 3.9 m of water. Pipeline's First Reef is usually described as about 60 m out and 0.6 to 2.4 m deep. The 2.5 m swell on the same line breaks closer to that, 85 m out in 2.9 m of water. That fits bigger swells breaking further out, but the descriptions are secondary sources, not a survey.
 

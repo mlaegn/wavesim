@@ -119,7 +119,7 @@ A frame is the node's `x` for every node, then every `z`, then every `speed` (th
 
 ## Line (`wavesim-line`, version 1)
 
-One cross-shore line of a bed file's frame, sampled from a finer DEM by `tools/fetch_line.py`: `bed` (the bed file it belongs to), `y` (metres along the shore in that frame), `step`, and three lists of equal length: `x` (metres along `+x`), `z` (the finer DEM's elevation above local mean sea level, `null` where it has no data) and `z_bed` (the bed file's own, along the same line, for comparison). `source` records the DEM's `url`, when it was read and how many points it was `missing`.
+One cross-shore line of a bed file's frame, sampled from a finer DEM by `tools/fetch_line.py`: `bed` (the bed file it belongs to), `y` (metres along the shore in that frame), `step`, `width` (0 for one line; otherwise the line is the average of parallel lines a metre apart across a strip that wide, centred on `y`, and a point is `null` if any of them has no data there), and three lists of equal length: `x` (metres along `+x`), `z` (the finer DEM's elevation above local mean sea level, `null` where it has no data) and `z_bed` (the bed file's own, along the same line, for comparison). `source` records the DEM's `url`, when it was read and how many points it was `missing`.
 
 ## Hand-off (`wavesim-handoff`, version 1)
 

@@ -9,6 +9,12 @@ the DEM along it every `--step` metres, by bilinear interpolation, reading only 
 line crosses. Also samples the bed file itself along the same line, for comparison. Writes
 `data/<bed>_line_<y>.json`: a `wavesim-line` (see docs/data-format.md).
 
+With `--width`, the line is the average of parallel lines a metre apart across a strip that wide,
+centred on `y`, and is written as `data/<bed>_line_<y>_w<width>.json`. A slice treats its line's
+bed as if the reef were the same all along the shore, so a feature narrower than a wave crest
+counts in full in a slice and only in part in the sea; averaging across the strip lets it count
+in proportion. A point any of the parallel lines has no data for stays a gap.
+
 The default DEM is the 2013 USACE NCMP topobathy lidar of Oahu, 1 m (see docs/bathymetry.md),
 whose gaps are masked, not filled: a gap is written as null.
 """
@@ -62,6 +68,24 @@ def sample(ds, lons: np.ndarray, lats: np.ndarray) -> np.ndarray:
     return map_coordinates(data, [rows - 0.5 - r0, cols - 0.5 - c0], order=1, mode="nearest")
 
 
+def offsets(width: float) -> np.ndarray:
+    """Offsets in y of the parallel lines that make up a strip `width` wide, a metre apart (or
+    the line itself for a width of 0)."""
+    n = int(round(width)) + 1
+    return np.linspace(-width / 2.0, width / 2.0, n)
+
+
+def strip(ds, frame: dict, crs_to_ll, y: float, width: float, xs: np.ndarray) -> np.ndarray:
+    """The DEM along the line at `y`, averaged across a strip `width` wide; NaN wherever any of
+    the parallel lines has no data."""
+    total = np.zeros_like(xs)
+    for o in offsets(width):
+        easting, northing = line_points(frame, y + o, xs)
+        lons, lats = crs_to_ll.transform(easting, northing)
+        total += sample(ds, np.asarray(lons), np.asarray(lats))
+    return total / len(offsets(width))
+
+
 def bed_along(header: dict, bed_path: Path, y: float, xs: np.ndarray) -> np.ndarray:
     """The bed file's elevation along the line, straight between its cell centres in x, from
     the row nearest `y`."""
@@ -77,6 +101,7 @@ def main(argv=None) -> int:
     ap.add_argument("bed", type=Path, help="bed file header, e.g. data/pipeline.json")
     ap.add_argument("--y", type=float, required=True, help="the line, metres along the shore in the bed's frame")
     ap.add_argument("--step", type=float, default=1.0, help="metres between samples")
+    ap.add_argument("--width", type=float, default=0.0, help="average across a strip this wide, metres")
     ap.add_argument("--url", default=LIDAR_1M, help="DEM to sample (lon/lat GeoTIFF or VRT)")
     ap.add_argument("--out", type=Path, help="output file (default data/<bed>_line_<y>.json)")
     args = ap.parse_args(argv)
@@ -87,25 +112,32 @@ def main(argv=None) -> int:
     if not 0 <= args.y <= header["ny"] * header["dy"]:
         print(f"y = {args.y} is outside the bed (0 to {header['ny'] * header['dy']})", file=sys.stderr)
         return 1
+    if args.width < 0:
+        print("--width must not be negative", file=sys.stderr)
+        return 1
     xs = np.arange(0.0, length + 1e-9, args.step)
-    easting, northing = line_points(frame, args.y, xs)
     to_ll = Transformer.from_crs(frame["crs"], "EPSG:4326", always_xy=True)
-    lons, lats = to_ll.transform(easting, northing)
     with rasterio.open(args.url) as ds:
-        z = sample(ds, lons, lats)
-    near = bed_along(header, args.bed.parent / header["data"], args.y, xs)
+        z = strip(ds, frame, to_ll, args.y, args.width, xs)
+    near = np.mean(
+        [bed_along(header, args.bed.parent / header["data"], args.y + o, xs) for o in offsets(args.width)],
+        axis=0,
+    )
 
     missing = int(np.isnan(z).sum())
     wet = (near < -1.0) & (near > -10.0)
     both = wet & ~np.isnan(z)
-    out = args.out or args.bed.parent / f"{header['name']}_line_{args.y:g}.json"
+    tag = f"_w{args.width:g}" if args.width > 0 else ""
+    out = args.out or args.bed.parent / f"{header['name']}_line_{args.y:g}{tag}.json"
     doc = {
         "format": FORMAT,
         "version": VERSION,
-        "name": f"{header['name']} line y = {args.y:g} m",
+        "name": f"{header['name']} line y = {args.y:g} m"
+        + (f", averaged across {args.width:g} m" if args.width > 0 else ""),
         "bed": args.bed.name,
         "y": args.y,
         "step": args.step,
+        "width": args.width,
         "x": [round(float(v), 3) for v in xs],
         "z": [None if math.isnan(v) else round(float(v), 3) for v in z],
         "z_bed": [round(float(v), 3) for v in near],
