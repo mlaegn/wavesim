@@ -262,6 +262,20 @@ A bigger swell, 3.5 m and 16 s (the 2D run took 19 minutes on 3 threads), turns 
 
 The same swell on y = 511.5 m, where the 2.5 m swell gave only a modest plunge, makes the hollowest wave of all. Handed over at 9 m with its crest 2.0 m up (0.18 of the total depth, the breaking switch off), the face stands vertical 2185 m along, in 3.9 m of water, under a crest 3.8 m above still water (the 2D run: tallest at 2170.5 m, 4.8 m deep, 4.1 m crest to trough, plunging by the surf-similarity rule). The lip is thrown 16 m and closes off a tube 2.5 m tall and 3.7 m wide, 4.5 m² of air: thirteen times the tube on the bigger wave at 301.5. Here the reef rises more steeply before the break (1 in 20 against 1 in 27 at 301.5, over the half wavelength seaward), and the wave stands up in water about as deep as its crest is high (at 301.5 the crest is 0.8 of the depth). At 0.4 m node spacing instead of 0.6 the face stands vertical at the same moment and place (within 0.01 s and 0.1 m) under the same crest, and the tube comes out 5% bigger (2.6 by 3.8 m, 4.7 m²). 15 and 25 minutes on one efficiency core, after a 21-minute 2D run on 3 threads; no thermal warning at any of 62 readings.
 
+Along the reef, one 2D run (18 minutes) saved seven lines across the middle half of the width, and each was sliced at 0.6 m (6 to 15 minutes each; no thermal warning at any of 73 readings). The 2D run repeats exactly: its saves at 301.5 and 511.5 are the same bytes as before.
+
+| y (m) | Face vertical | Depth | Crest | Lip thrown | Tube (tall × wide) | 2D run: tallest |
+|---|---|---|---|---|---|---|
+| 301.5 | 2147.5 m | 6.7 m | 5.5 m | 16 m | 1.0 × 0.8 m | 2155.5 m, 6.3 m deep |
+| 421.5 | 2112.7 m | 6.6 m | 4.9 m | 15 m | 0.7 × 0.6 m | 2116.5 m, 6.4 m deep |
+| 511.5 | 2185.2 m | 3.9 m | 3.8 m | 16 m | **2.5 × 3.7 m** | 2170.5 m, 4.8 m deep |
+| 571.5 | 2181.4 m | 3.8 m | 2.2 m | 7 m | 0.7 × 0.7 m | 2188.5 m, 3.7 m deep |
+| 661.5 | 2198.4 m | 4.2 m | 2.6 m | 7 m | 0.7 × 0.8 m | 2197.5 m, 4.0 m deep |
+| 751.5 | 2147.9 m | 5.3 m | 4.6 m | 14 m | 0.9 × 0.7 m | 2167.5 m, 5.1 m deep |
+| 841.5 | 2190.5 m | 5.5 m | 4.0 m | 13 m | 0.8 × 0.6 m | 2194.5 m, 5.4 m deep |
+
+Every line plunges, and the slice and the 2D run agree on where within 20 m (mostly within 8). Only 511.5 makes a big tube; everywhere else the lip closes a tube under a metre across, whether the wave is 2 m or 5.5 m. On 511.5 the reef falls from 9 to 5 m deep over 50 m just before the break, about 1 in 13, against 1 in 20 to 1 in 25 on the other lines, and a fair-sized wave (4.1 m crest to trough in the 2D run) arrives over it: a likely reason, not a tested one. Lines 60 m apart cannot say how wide that stretch is.
+
 `--handoff-y` can be given several times: one 2D run then saves every line, each at its own first settled crest, so several lines along the reef cost one run. The hand-off point must lie at least about half a wavelength inside the fine grid, so that the trough behind the wave is in the saved line; a slice whose line does not reach back that far is refused and says why.
 
 `--handoff-depth` without `--handoff-file` brings the swell in along the line alone instead. That overestimates waves wherever the reef spreads energy sideways, which a single line cannot: on this line its crest at 9 m was three times the 2D run's, and it broke 40 m further out.
