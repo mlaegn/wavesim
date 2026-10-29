@@ -748,18 +748,59 @@ fn a_run_saves_lines_for_the_slice_solver_when_a_settled_crest_passes() {
 }
 
 #[test]
-fn a_run_refuses_at_once_a_hand_off_point_too_near_the_edge_of_its_fine_grid() {
+fn a_nested_run_starts_its_fine_grid_far_enough_offshore_for_each_hand_off_point() {
     // The reef grid starts about 80 m seaward of where the long beach is 3.3 m deep, so its 4.5 m
-    // point is some 20 m inside: too little line behind the wave for a slice, refused before
-    // the run rather than after it.
+    // point would be some 20 m inside: too little line behind the wave for a slice. The grid
+    // starts further offshore instead, by as much as that point needs (a 14 s swell is about
+    // 90 m long there: 0.75 of that, and 10 m), and no further than it needs.
+    let dir = scratch("handoff_reach");
+    let plain = nested_options(&dir);
+    let bed = Bed::read(&plain.bed).unwrap();
+    let at = |depth: f64| (((16.0 - depth) * 50.0) / DX).floor() as usize;
+    let reach = |depth: f64| {
+        let k = linear_wave(std::f64::consts::TAU / plain.period, depth, true).k;
+        0.75 * std::f64::consts::TAU / k + 10.0
+    };
+    let x0 = |depth: f64| {
+        let o = RunOptions {
+            handoff: vec![wavesim::HandoffLine { y: 7.0, depth }],
+            ..nested_options(&dir)
+        };
+        layout(&bed, &o).unwrap().fine.unwrap().x0
+    };
+    let own = layout(&bed, &plain).unwrap().fine.unwrap().x0;
+    let needed = at(4.5) - (reach(4.5) / DX).ceil() as usize;
+    assert!(needed < own, "the point fits already: {needed} >= {own}");
+    assert!(
+        x0(4.5).abs_diff(needed) <= 1,
+        "x0 {} where {needed} is needed",
+        x0(4.5)
+    );
+    // A point that already fits leaves the grid where it was.
+    assert_eq!(x0(2.0), own);
+}
+
+#[test]
+fn a_run_refuses_at_once_a_hand_off_point_the_wave_maker_leaves_no_room_behind() {
+    // The fine grid can start no nearer the wave-maker than its near field, so a point 20 m
+    // past where it can start has too little line behind it: refused before the run rather
+    // than after it. A point seaward of that is outside the fine grid altogether.
     let dir = scratch("handoff_edge");
-    let o = RunOptions {
-        handoff: vec![wavesim::HandoffLine { y: 7.0, depth: 4.5 }],
+    let bed = Bed::read(&nested_options(&dir).bed).unwrap();
+    let options = |depth: f64| RunOptions {
+        handoff: vec![wavesim::HandoffLine { y: 7.0, depth }],
         ..nested_options(&dir)
     };
-    let start = std::time::Instant::now();
-    let e = run(&o, |_| {}).unwrap_err().to_string();
-    assert!(e.contains("inside the fine grid"), "{e}");
-    assert!(start.elapsed().as_secs_f64() < 5.0);
-    assert!(!o.out.join("frames.f32").exists());
+    let nearest = layout(&bed, &options(15.0)).unwrap().fine.unwrap().x0;
+    let depth = 16.0 - ((nearest + 10) as f64 + 0.5) * DX / 50.0;
+    for (o, says) in [
+        (options(depth), "inside the grid, and a slice needs"),
+        (options(15.0), "never stays shallower"),
+    ] {
+        let start = std::time::Instant::now();
+        let e = run(&o, |_| {}).unwrap_err().to_string();
+        assert!(e.contains(says), "{e}");
+        assert!(start.elapsed().as_secs_f64() < 5.0);
+        assert!(!o.out.join("frames.f32").exists());
+    }
 }

@@ -128,6 +128,31 @@ struct Catch {
 /// took for the wave.
 const CREST_SHARE: f64 = 0.8;
 
+/// The row of `bed` that `line` runs along, and the column of its hand-off point there: the last
+/// one, coming from offshore, after which the water stays shallower than `line.depth` at `tide`.
+/// `None` if there is none inside the grid.
+fn handoff_point(bed: &Bed, tide: f64, line: HandoffLine) -> Option<(usize, usize)> {
+    let g = bed.grid();
+    let b = bed.bathymetry(tide);
+    let row = ((line.y / g.dy).floor().max(0.0) as usize).min(g.ny - 1);
+    let depth = |i: usize| -b.b[g.idx(GHOST + i, GHOST + row)];
+    let wet = (0..g.nx).take_while(|&i| depth(i) > 0.0).count();
+    let mut at = wet.saturating_sub(1);
+    while at > 0 && depth(at - 1) < line.depth {
+        at -= 1;
+    }
+    (at > 0 && depth(at) < line.depth).then_some((row, at))
+}
+
+/// How much of the line behind a hand-off point `depth` deep a slice needs: back to the trough
+/// behind the wave, half a wavelength, and its taper, 0.15 of one, and 10 m more, with a margin
+/// for a crest that has passed the point.
+fn handoff_reach(period: f64, depth: f64) -> f64 {
+    let wavelength = std::f64::consts::TAU
+        / wavecore::linear_wave(std::f64::consts::TAU / period, depth, true).k;
+    0.75 * wavelength + 10.0
+}
+
 impl Catch {
     /// The hand-off point on the grid of `bed` (the one the run will follow it on, its seabed as
     /// the solver will have it at `tide`), checked before the run starts.
@@ -140,36 +165,25 @@ impl Catch {
         dir: &std::path::Path,
     ) -> Result<Self, Error> {
         let g = bed.grid();
-        let b = bed.bathymetry(tide);
-        let row = ((line.y / g.dy).floor().max(0.0) as usize).min(g.ny - 1);
-        let depth = |i: usize| -b.b[g.idx(GHOST + i, GHOST + row)];
-        let wet = (0..g.nx).take_while(|&i| depth(i) > 0.0).count();
-        let mut at = wet.saturating_sub(1);
-        while at > 0 && depth(at - 1) < line.depth {
-            at -= 1;
-        }
-        if at == 0 || depth(at) >= line.depth {
-            return Err(setup(format!(
+        let (row, at) = handoff_point(bed, tide, line).ok_or_else(|| {
+            setup(format!(
                 "along y = {} m the water never stays shallower than {} m before the shore, \
                  inside the grid",
                 line.y, line.depth
-            )));
-        }
-        // The slice needs the line back to the trough behind the wave, half a wavelength, and
-        // its taper, 0.15 of one, and 10 m more; with a margin for a crest that has passed the
-        // point, refuse now rather than after the run. A 2.5 m, 16 s swell handed over at 9 m
-        // on Pipeline ran 11 minutes and saved a line the slice then refused.
-        let wavelength = std::f64::consts::TAU
-            / wavecore::linear_wave(std::f64::consts::TAU / period, line.depth, true).k;
+            ))
+        })?;
+        // A nested run starts its fine grid far enough offshore for this (see [`layout`]),
+        // unless the wave-maker is in the way; refuse now rather than after the run. A 2.5 m,
+        // 16 s swell handed over at 9 m on Pipeline ran 11 minutes and saved a line the slice
+        // then refused.
+        let need = handoff_reach(period, line.depth);
         let behind = at as f64 * g.dx;
-        if behind < 0.75 * wavelength + 10.0 {
+        if behind < need {
             return Err(setup(format!(
-                "along y = {} m the {} m hand-off point is only {behind:.0} m inside the fine grid, \
-                 and a slice needs about {:.0} m of the line behind it; hand off at a shallower \
-                 --handoff-depth",
-                line.y,
-                line.depth,
-                0.75 * wavelength + 10.0
+                "along y = {} m the {} m hand-off point is only {behind:.0} m inside the grid, \
+                 and a slice needs about {need:.0} m of the line behind it; hand off at a \
+                 shallower --handoff-depth",
+                line.y, line.depth
             )));
         }
         Ok(Self {
@@ -310,7 +324,9 @@ pub struct Progress {
 /// surf zone, which it cannot resolve, on the fine one.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Fine {
-    /// First column of the bed file that the fine grid covers; it runs to the last.
+    /// First column of the bed file that the fine grid covers; it runs to the last. A wavelength
+    /// at `edge_depth` seaward of where the reef begins, or further where a hand-off point needs
+    /// more of its line behind it (see `RunOptions::handoff`).
     pub x0: usize,
     /// The still-water depth that sets where the reef begins: the deeper of
     /// [`FINE_DEPTH_PER_HEIGHT`] wave heights, and the depth where the swell is
@@ -522,7 +538,17 @@ pub fn layout(bed: &Bed, opts: &RunOptions) -> Result<Layout, Error> {
     let edge = (near_field..grid.nx)
         .find(|&i| shallowest(i) < edge_depth)
         .ok_or_else(|| setup("the water never gets shallow enough for a reef to break on"))?;
-    let x0 = edge.saturating_sub(zone_offshore).max(near_field);
+    let mut x0 = edge.saturating_sub(zone_offshore).max(near_field);
+    // Every hand-off point needs the line behind it inside the fine grid: start the grid that
+    // much further offshore where one does, rather than make it hand off shallower. On Pipeline
+    // a 2.5 m, 16 s swell could otherwise hand over at no more than 6.5 m on y = 421.5 m, where
+    // its crest had already set off the breaking switch.
+    for &line in &opts.handoff {
+        if let Some((_, at)) = handoff_point(bed, opts.tide, line) {
+            let need = (handoff_reach(opts.period, line.depth) / grid.dx).ceil() as usize;
+            x0 = x0.min(at.saturating_sub(need).max(near_field));
+        }
+    }
     if grid.nx - x0 < 2 * zone_offshore {
         return Err(setup(format!(
             "the fine grid would be only {} cells long, with a relaxation zone of {zone_offshore}; \
