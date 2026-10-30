@@ -103,9 +103,11 @@ pub struct HandoffLine {
 }
 
 /// Watches one line of a grid, once the sea has settled, for the first crest to pass the
-/// hand-off point, and saves the line at that moment to `handoff_y<y>.json` in the run: the
+/// hand-off point, and keeps the line at that moment for `handoff_y<y>.json` in the run: the
 /// surface above still water and the velocity along the line, `hu / h`, at every cell, in the
-/// bed file's frame. The velocity across the line is left out; a slice is two-dimensional.
+/// bed file's frame. The velocity across the line is left out; a slice is two-dimensional. The
+/// file is written when the run ends, with where the settled sea broke seaward of the point, if
+/// it did (see [`Catch::finish`]).
 struct Catch {
     line: HandoffLine,
     path: PathBuf,
@@ -119,7 +121,8 @@ struct Catch {
     /// [`CREST_SHARE`] of that, so a small ripple between waves is not taken for one.
     period: f64,
     highest: f64,
-    done: bool,
+    /// The line, once saved.
+    doc: Option<serde_json::Value>,
 }
 
 /// How high, relative to the highest crest at the hand-off point over the last period or more,
@@ -195,13 +198,13 @@ impl Catch {
             history: [0.0; 3],
             period,
             highest: 0.0,
-            done: false,
+            doc: None,
         })
     }
 
     /// Look at the line after a step; save it if, after `settled`, a crest has just passed.
     fn check(&mut self, stage: &Stage, settled: f64) -> Result<(), Error> {
-        if self.done {
+        if self.doc.is_some() {
             return Ok(());
         }
         let g = stage.bed.grid();
@@ -233,11 +236,43 @@ impl Catch {
                 .collect::<Vec<_>>(),
             "bed": (0..g.nx).map(|i| b[k(i)]).collect::<Vec<_>>(),
         });
+        self.doc = Some(doc);
+        Ok(())
+    }
+
+    /// Write the saved line, once the run has ended on `stage`, the grid it was watched on. If
+    /// the waves broke anywhere seaward of the hand-off point on its row in the settled sea (a
+    /// cell the run counts as breaking, at any step of the last [`BREAKS_SHOWN`] periods), from
+    /// column `from` on (past the fine grid's relaxation zone, whose waves are the coarse run's,
+    /// or the wave-maker's own bump; at the fine grid's very edge a 5 m swell on Pipeline read
+    /// as breaking 17% of the time, in 24 m of water), the
+    /// saved wave had already broken once: the file says where (`broke_seaward_at`, in the bed
+    /// file's frame), a slice refuses it, and the warning returned says so. A crest's height
+    /// alone does not show this, since a wave that has broken and re-formed is low again: on
+    /// Pipeline a 5 m swell broke on the outer reef at y = 511.5 m, 57 m seaward of its 12 m
+    /// hand-off point. `None` for a line never saved.
+    fn finish(&self, stage: &Stage, from: usize) -> Result<Option<String>, Error> {
+        let Some(doc) = &self.doc else {
+            return Ok(None);
+        };
+        let g = stage.bed.grid();
+        let first =
+            (from..self.at).find(|&i| stage.stats.breaking_seconds[self.row * g.nx + i] > 0.0);
+        let x = first.map(|i| self.offset + (i as f64 + 0.5) * g.dx);
+        let mut doc = doc.clone();
+        doc["broke_seaward_at"] = serde_json::json!(x);
         let text = serde_json::to_string(&doc).expect("numbers serialise");
         std::fs::write(&self.path, text + "\n")
             .map_err(|e| setup(format!("{}: {e}", self.path.display())))?;
-        self.done = true;
-        Ok(())
+        Ok(first.map(|i| {
+            format!(
+                "along y = {} m the waves broke {:.0} m seaward of the {} m hand-off point, so the \
+                 wave saved there had already broken once and a slice will refuse it",
+                self.line.y,
+                (self.at - i) as f64 * g.dx,
+                self.line.depth
+            )
+        }))
     }
 }
 
@@ -1402,8 +1437,18 @@ pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<
             .flat_map(|j| fraction[j * g.nx + first..j * g.nx + last].to_vec())
             .fold(0.0, f64::max)
     });
+    // The coarse grid's break line starts past its wave-maker's own bump; the fine grid's past
+    // its relaxation zone, which is the coarse run. So do the hand-off lines' checks.
+    let past_maker = ((maker_x + 6.0 * SIGMA_CELLS * grid.dx) / grid.dx).ceil() as usize;
     let mut warnings = Vec::new();
-    for c in catches.iter().filter(|c| !c.done) {
+    for c in &catches {
+        let (stage, from) = match &nest {
+            Some((fine, _, _, f)) => (fine, f.zone_offshore),
+            None => (&coarse, past_maker),
+        };
+        warnings.extend(c.finish(stage, from)?);
+    }
+    for c in catches.iter().filter(|c| c.doc.is_none()) {
         warnings.push(format!(
             "no crest passed the hand-off point on y = {} m once the sea had settled, so nothing \
              was saved for the slice solver",
@@ -1420,9 +1465,6 @@ pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<
     }
     let coarse_steps = coarse.steps;
     let coarse_dispersion = coarse.solver.dispersion_stats();
-    // The coarse grid's break line starts past its wave-maker's own bump; the fine grid's past
-    // its relaxation zone, which is the coarse run.
-    let past_maker = ((maker_x + 6.0 * SIGMA_CELLS * grid.dx) / grid.dx).ceil() as usize;
     let (main_out, coarse_header) = match nest {
         Some((fine, _, _, f)) => {
             let (coarse_header, _) = coarse.finish(truncated, &[], past_maker)?;

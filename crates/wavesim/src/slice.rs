@@ -234,7 +234,15 @@ fn line_tank(opts: &SliceOptions, path: &std::path::Path, source: Source) -> Res
     let cell = 2.0;
     let (approach, depth, from) = match &source {
         Source::Run(file) => {
-            let (a, depth) = crate::handoff::Approach::read(file)?;
+            let (a, depth, broke) = crate::handoff::Approach::read(file)?;
+            if let Some(x) = broke {
+                return Err(Error::Setup(format!(
+                    "the 2D run's waves broke at x = {x:.0} m, seaward of where this one was saved \
+                     (crest at {:.0} m), so it had already broken once: a slice would start from \
+                     a broken wave",
+                    a.crest
+                )));
+            }
             (a, depth, file.display().to_string())
         }
         Source::Line(depth) => (
@@ -553,9 +561,10 @@ mod tests {
     use super::*;
 
     /// A slice of a 16 s swell from a saved wave on a plane beach rising 1 in 40, its crest
-    /// `crest` m above still water where the beach is 5 m deep; refused at once by a limit of
-    /// no time at all if nothing refuses it first.
-    fn slice_of_saved_wave(name: &str, crest: f64) -> String {
+    /// `crest` m above still water where the beach is 5 m deep, the run's waves having broken
+    /// at `broke` if they did; refused at once by a limit of no time at all if nothing refuses
+    /// it first.
+    fn slice_of_saved_wave(name: &str, crest: f64, broke: Option<f64>) -> String {
         let dir = std::env::temp_dir().join(format!("wavesim-slice-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -584,7 +593,7 @@ mod tests {
         let saved = dir.join("handoff.json");
         let doc = serde_json::json!({
             "format": "wavesim-handoff", "depth": 5.0, "time": 300.0, "crest": 200.0,
-            "x": x, "eta": eta, "ubar": ubar,
+            "x": x, "eta": eta, "ubar": ubar, "broke_seaward_at": broke,
         });
         std::fs::write(&saved, doc.to_string()).unwrap();
         let opts = SliceOptions {
@@ -606,9 +615,16 @@ mod tests {
     #[test]
     fn a_wave_saved_after_the_breaking_switch_began_on_it_is_refused() {
         // 3 m over 5 m is 0.375 of the total depth; 1 m is 0.17, refused only by the time limit.
-        let e = slice_of_saved_wave("broken", 3.0);
+        let e = slice_of_saved_wave("broken", 3.0, None);
         assert!(e.contains("part broken"), "{e}");
-        let e = slice_of_saved_wave("whole", 1.0);
+        let e = slice_of_saved_wave("whole", 1.0, None);
         assert!(e.contains("more than its limit"), "{e}");
+    }
+
+    #[test]
+    fn a_wave_saved_behind_where_the_run_broke_is_refused() {
+        // Low again, as a re-formed wave is, so only where the run broke tells.
+        let e = slice_of_saved_wave("reformed", 1.0, Some(150.0));
+        assert!(e.contains("already broken once"), "{e}");
     }
 }

@@ -298,12 +298,16 @@ struct HandoffFile {
     x: Vec<f64>,
     eta: Vec<f64>,
     ubar: Vec<f64>,
+    /// Where the settled sea broke seaward of the hand-off point, if it did (absent in files
+    /// written before runs recorded it).
+    #[serde(default)]
+    broke_seaward_at: Option<f64>,
 }
 
 impl Approach {
-    /// The wave a 2D run saved for the slice solver (see `wavesim run --handoff-y`), and the
-    /// depth it was saved at.
-    pub fn read(path: &std::path::Path) -> Result<(Approach, f64), Error> {
+    /// The wave a 2D run saved for the slice solver (see `wavesim run --handoff-y`), the depth
+    /// it was saved at, and where the run's waves broke seaward of that point, if they did.
+    pub fn read(path: &std::path::Path) -> Result<(Approach, f64, Option<f64>), Error> {
         let text = std::fs::read_to_string(path)
             .map_err(|e| Error::Setup(format!("{}: {e}", path.display())))?;
         let f: HandoffFile = serde_json::from_str(&text)
@@ -322,7 +326,7 @@ impl Approach {
             crest: f.crest,
             steps: 0,
         };
-        Ok((approach, f.depth))
+        Ok((approach, f.depth, f.broke_seaward_at))
     }
 
     /// The followed crest's height over the still depth beneath it, the measure the main

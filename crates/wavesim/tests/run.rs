@@ -804,3 +804,37 @@ fn a_run_refuses_at_once_a_hand_off_point_the_wave_maker_leaves_no_room_behind()
         assert!(!o.out.join("frames.f32").exists());
     }
 }
+
+#[test]
+fn a_saved_line_says_whether_the_waves_broke_seaward_of_its_hand_off_point() {
+    // A 1.5 m swell on the test beach reads as breaking (a field of 0.8 or more) only in water
+    // under about 0.4 m deep: a point 0.25 m deep lies inside its surf zone, one 5 m deep far
+    // seaward of it.
+    let dir = scratch("handoff_broken");
+    let mut o = options(&dir, beach(&dir));
+    o.dispersive = true;
+    o.height = 1.5;
+    o.duration = None;
+    o.handoff = vec![
+        wavesim::HandoffLine { y: 7.0, depth: 5.0 },
+        wavesim::HandoffLine {
+            y: 11.0,
+            depth: 0.25,
+        },
+    ];
+    let s = run(&o, |_| {}).unwrap();
+    let broke = |y: &str| {
+        let text = fs::read_to_string(o.out.join(format!("handoff_y{y}.json"))).unwrap();
+        let h: serde_json::Value = serde_json::from_str(&text).unwrap();
+        (h["broke_seaward_at"].as_f64(), h["crest"].as_f64().unwrap())
+    };
+    assert_eq!(broke("7").0, None);
+    let (at, crest) = broke("11");
+    let at = at.expect("the waves broke seaward of the 0.25 m point");
+    assert!(
+        at < crest && beach_depth(at) < 0.5,
+        "broke at {at} m, saved at {crest} m"
+    );
+    assert_eq!(s.warnings.len(), 1, "{:?}", s.warnings);
+    assert!(s.warnings[0].contains("y = 11 m") && s.warnings[0].contains("already broken"));
+}
