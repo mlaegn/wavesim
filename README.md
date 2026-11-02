@@ -231,9 +231,9 @@ The run is guarded like `wavesim run`: on the efficiency cores, it times its fir
 
 The earlier hand-off is the closer, as it should be: the main model is the more accurate the deeper the water. This is the way to real reefs: the main model brings a swell across the shelf, the slice solver breaks it. macOS reported no thermal warning, slowdown or power limit at any of 26 readings, 30 s apart, through both hand-off runs.
 
-**What it finds on Pipeline, in short** (on the 2013 lidar, swells from one direction; the details follow):
+**What it finds on Pipeline, in short** (on the 2013 lidar, swells from 310° but for one from 290°; the details follow):
 
-- **Where it breaks.** The bigger and longer the swell, the further out and the deeper: on y = 421.5 m a 1.5 m, 16 s swell stands up in 2.3 m of water, a 3.5 m one 118 m further out in 6.5 m, and a 5 m one breaks on the outer reef instead, another 450 to 570 m out, in 9 to 11 m. The slice and the 2D run agree on where within 20 m.
+- **Where it breaks.** The bigger and longer the swell, the further out and the deeper: on y = 421.5 m a 1.5 m, 16 s swell stands up in 2.3 m of water, a 3.5 m one 118 m further out in 6.5 m, and a 5 m one breaks on the outer reef instead, another 450 to 570 m out, in 9 to 11 m. The slice and the 2D run agree on where within 20 m. From 290° instead of 310°, the 3.5 m swell is focused by the outer reef, half as tall again in 8 m of water, and breaks there.
 - **How heavy.** Most waves plunge, but only just: the lip closes a tube about a metre across or less, for every swell from 1.5 to 5 m. Some of the smaller swells' lips never land at all, only curling at the top, which is how a spilling break starts. The one big barrel, 2.5 by 3.7 m on y = 511.5 m, comes from a single 1 m line of lidar and is gone once the bed is averaged across 20 m.
 - **Why the tubes are small.** A hollow tube needs a surf similarity ξ₀ near 1 or more (on plane beaches, about 1 in 10 for a 2 m, 12 s swell). Pipeline's lines give 0.17 to 0.55: the reef rises 0.03 to 0.06 where the waves stand up, with no hidden ledge, and the waves meet it square, so cutting the slices at an angle would not change that.
 - **What is still open.** What a slice leaves out: the waves peel along the shore, their crests at about 20° to the line they break along, and their height changes by up to 2 m over 60 m. That needs a 3D computation of the break. Or the real reef is steeper than this survey shows.
@@ -347,6 +347,20 @@ A bigger sea, 5 m and 16 s, needs its wave-maker in 42 m of water, beyond the en
 | Height at the break, and its largest change over 60 m along the shore | 3.1 to 6.2 m, 1.8 m | 2.4 to 5.3 m, 2.1 m |
 
 The waves arrive square to the slices, so a slice along each wave's own path would meet the same slope, within 2% on most rows, and no steeper than 1 in 18 anywhere: the direction is not what keeps the tubes small. What a slice does leave out shows in the last two rows: the waves break in turn along the shore, not all at once (their crests lie at about 20° to the line they break along, so they peel), and their height changes by up to 2 m over 60 m of shore, so a crest is far from uniform along its length, which a slice assumes it is. Whether either makes a bigger tube needs a model that is three-dimensional at the break.
+
+**From another direction.** All the swells above come from 310°, square to the shore (the bed cut along 130°). The same 3.5 m, 16 s swell from 290°, 20° further west, ran on a bed cut along 110° (fetched 3 km offshore and 200 m inland, since the shore now crosses the box at 20°; the 2D run took 25 minutes on 3 threads):
+
+| | From 310° | From 290° |
+|---|---|---|
+| Height in 15 to 25 m of water | 3.7 to 4.1 m | 3.6 to 4.2 m |
+| Height in 8 m of water | 4.4 m | 6.5 m |
+| Where it breaks: depth, median | 5.4 m | 8.6 m |
+| Height at the break, median | 4.9 m | 6.8 m |
+| Surf similarity at the break (the 2D run's own, from the height there), median and 10th to 90th percentile | 0.36, 0.19 to 0.51 | 0.10, 0.00 to 0.33 |
+| Rows that plunge by it, of 200 | 88 | 1 |
+| Peel angle: median, middle half | 23°, 7° to 46° | 53°, 29° to 72° |
+
+Offshore the two are the same; the difference builds over the outer reef, 8 to 12 m deep, where the bed is uneven (on half its cells the slope faces between −54° and +66° of `+x`), and the 290° swell meets more of it head on and is focused: by 8 m deep it is half as tall again. It breaks there, further out and in deeper water, on the outer reef's gentle slope, and in the 2D run almost every row spills. Like the 5 m swell, then, a more westerly swell moves the break out rather than hollowing the inner reef. The side walls, which mirror a bed whose shore now crosses them at an angle, are not the cause: on a box twice as wide (70 minutes), over the same cells, the heights agree within 9% (median), the wide box's the taller, and its breaks are as deep (8.4 m) and as gentle (0.13). Only where along a row the tallest wave stands moves, by 50 m (median), because over the outer reef the waves stay near their tallest for a long way. No slice was run: handed over at 9 m the wave was already 0.39 of the total depth beneath it, part broken, and both slices refused it; at 12 m the fine grid would start 700 m further out and the 2D run take about two hours.
 
 Against the real place, the check can only be coarse. Published positions for Pipeline disagree with each other by up to 250 m along the shore: in this frame they fall at y = 326 m (Wikipedia), 410 m (Mondo Surf, Pipeline) and 576 m (Mondo Surf, Ehukai). The barrel line, 511.5, lies among them, as does the heavy break at 301.5, so the comparison neither confirms nor rules out that the model's barrel is the real one. Across the shore, the 3.5 m swell breaks on 511.5 about 115 m out from where the water is half a metre deep, in 3.9 m of water. Pipeline's First Reef is usually described as about 60 m out and 0.6 to 2.4 m deep. The 2.5 m swell on the same line breaks closer to that, 85 m out in 2.9 m of water. That fits bigger swells breaking further out, but the descriptions are secondary sources, not a survey.
 
