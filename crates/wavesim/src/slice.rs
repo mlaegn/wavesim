@@ -377,8 +377,8 @@ struct Handed {
     record: serde_json::Value,
 }
 
-/// Run one wave until its lip lands, it reaches the shallow wall, the time limit passes, or the
-/// computation fails, writing frames as it goes. A run its first steps say would take longer
+/// Run one wave until its lip lands, it reaches the shallow wall, its lip stays in the air too
+/// long to be falling, the time limit passes, or the computation fails, writing frames as it goes. A run its first steps say would take longer
 /// than the limit is refused before anything is written.
 pub fn run_slice(opts: &SliceOptions) -> Result<SliceSummary, Error> {
     let profile = opts.case.profile(opts.depth);
@@ -508,6 +508,18 @@ pub fn run_slice(opts: &SliceOptions) -> Result<SliceSummary, Error> {
         }
         if tank.tangled() {
             break "failed: neighbouring surface nodes crossed".to_string();
+        }
+        // A lip falls no further than from the crest to the seabed, so it lands within about the
+        // time a stone dropped from the crest takes to reach the bed: on every slice that landed,
+        // within 2.3 times it. One still in the air at three times it is no longer falling, and
+        // only shortens its steps until its nodes cross: on Pipeline 511.5 that went on for 12 s
+        // of the wave's time, for no landing, and stopping here cut the run from 19.5 minutes to 9.
+        if let Some(c) = curl
+            && tank.time - c.time > 3.0 * (2.0 * (c.crest + c.depth) / G).sqrt()
+        {
+            break "no landing: the lip was still in the air three times as long after it curled \
+                   as a fall from the crest to the seabed takes"
+                .to_string();
         }
         if let Some(limit) = opts.max_wall_seconds
             && clock.elapsed().as_secs_f64() > limit

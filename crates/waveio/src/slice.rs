@@ -34,7 +34,8 @@ pub struct SliceHeader {
     pub wave: serde_json::Value,
     /// Why the run ended: `landed` (the lip reached the water), `landed against the wall...`
     /// (it did, but next to the shallow wall, which shaped it), `wall` (the wave reached the
-    /// shallow wall without landing), `time limit`, or `failed: ...`.
+    /// shallow wall without landing), `no landing: ...` (the lip stayed in the air far longer
+    /// than a fall to the seabed takes), `time limit`, or `failed: ...`.
     pub ended: String,
     /// When and where the front face first passed vertical, if it did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
