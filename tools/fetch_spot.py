@@ -131,8 +131,11 @@ def main(argv=None) -> int:
     if args.cell:
         s["cell_m"] = args.cell
 
+    # A URL is read in ranges over HTTP; anything else is a local file, such as a seabed merged
+    # from several sources by hand.
+    source = "/vsicurl/" + s["url"] if "://" in s["url"] else s["url"]
     with rasterio.Env(GDAL_DISABLE_READDIR_ON_OPEN="EMPTY_DIR"):
-        with rasterio.open("/vsicurl/" + s["url"]) as ds:
+        with rasterio.open(source) as ds:
             z, info = sample_bed(
                 ds,
                 lat=s["lat"],
