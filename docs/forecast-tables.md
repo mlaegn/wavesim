@@ -334,6 +334,33 @@ That is the first number the labels can check, through the `size` faults. And a 
 for heavy, hollow waves comes out mostly spilling. On Pipeline's 3 m bed the cause was a reef
 smoother than the real one, and a 15 m bed is smoother still.
 
+**Checked on 2026-11-03, from the two runs' saved statistics and frames, with no new runs.**
+Most of the three oddities come from how a run reads its own break, not from the 15 m bed:
+
+- **The datum is right.** The LiDAR is heights above the lowest astronomical tide (its
+  `elevation` is `SDN:P01::HGHTALAT`), and the bed is that minus 2.0 m, which is mean sea level at
+  Cascais to within about 0.2 m. Its per-cell `value_count` and `stdev` layers are empty too, so
+  the file cannot say what a 15 m cell hides.
+- **The rocks reflect the swell.** Fitting incident and reflected first harmonics to the frames
+  gives a reflection of 0.25 (median) over the 90 m seaward of the break, against 0.08–0.12 on
+  Pipeline. The break point sits 63 m (median, 0.7 of a wavelength) in front of the shoreline,
+  where Pipeline's is 135 m. The tallest-wave rule therefore lands on an antinode of incident plus
+  reflected wave: the break height is 1.62 times linear shoaling of the incident 2.08 m, against
+  1.29 on Pipeline, and dividing out 1 + 0.25 leaves about 3.4 m, 1.1 times Komar & Gaughan.
+- **The six deep rows are near-ties.** On each, a hump 400 m out in 10–12 m beats the real break
+  in 3.4–4.3 m, which is 300–450 m further in, by 1–2% in height.
+- **The slope is measured on the wrong side.** wavesim takes the slope over the half wavelength
+  seaward of the break point, which here is the gentle approach (0.04). From the break point to
+  the shoreline the bed rises 0.079 (median). That gives ξ_b 0.62 and 123 plunging rows of 200
+  (125 at low tide), where Pipeline's two slopes agree (0.03 and 0.03).
+- **The model's waves don't break on a reef.** The breaking flag first reaches 0.2 in 0.7 m of
+  water (median), where the waves are still 2.7 m tall, and no breaking at all is flagged deeper
+  than 2 m. On Pipeline the flag also first comes on near the shore, but the waves have already
+  lost height on the reef flat before it (3.1 m down to 1.1 m). In this bed, 15 m off the coast,
+  Coxos is a ramp up to a steep rocky shore with no shelf in front, and the waves surge up the
+  rock and reflect. Whether the real reef has a shelf that 15 m cells miss is the one question
+  these files cannot answer, and it is the one the DGT 2 m data would settle.
+
 ## 5. How gogo would use it
 
 ### Where gogo is, and what that allows
@@ -432,12 +459,15 @@ absolute height, tube size, or anything finer than the bed, which is 15 m in Por
    Coxos and Ribeira, including `checked` rows on the same morning.
 2. Count the climatology: hours per table point from gogo's backfilled year at the Coxos and
    Ribeira cells (a read-only query). Fix the table's points and the run count from it.
-3. Make Coxos reproducible: a `[coxos]` table in `spots.toml`, the LiDAR + DTM merge as a tool,
-   and the datum checked against the Hidrográfico's mean sea level.
-4. wavesim changes, each with a test: wall time in `run.json`, the in-run first-harmonic
-   statistics so direction and peel need no frames, `--no-frames`, and the resumable
-   `wavesim table` batch driver with its reducer.
-5. Draw the Coxos lineup in the bed's frame, and decide on the six rows that break deep.
+3. Make Coxos reproducible: a `[coxos]` table in `spots.toml` and the LiDAR + DTM merge as a
+   tool (the datum is checked, section 4).
+4. wavesim changes, each with a test: how a run reads its break (the break point as the
+   shoreward-most height peak within a few per cent of the tallest, the slope over where the wave
+   then breaks, and the incident height with the reflected wave taken out), wall time in
+   `run.json`, the in-run first-harmonic statistics so direction and peel need no frames,
+   `--no-frames`, and the resumable `wavesim table` batch driver with its reducer.
+5. Draw the Coxos lineup in the bed's frame, and rerun the Coxos swell once with the break
+   reading fixed (step 4), against the check in section 4.
 6. The pilot, 40 runs at Coxos, about two nights on the efficiency cores. Before running it, set
    bounds for interpolating to the midpoints, for example break depth within 0.5 m, break
    height within 10%, ξ_b within 0.05. Then run the double-width wall check at the window's
