@@ -296,7 +296,7 @@ windswell).
 | Oahu | 2013 USACE NCMP lidar DEM | 1 m | No gaps in 1–10 m along the lines checked | none |
 | Lisbon–Peniche | EMODnet HR `590_HR_Lidar_Centro` (2011 DGT/APA coastal LiDAR) | ~15 m (0.00013°) | 38.50–40.43°N, 9.53–8.82°W; along each spot's facing it reaches 0.5–1 km out and 5–12 m deep | all 16, in the surf zone |
 | Lisbon–Peniche | EMODnet DTM 2024 | ~115 m | The shelf, out to where the wave-maker goes | all 16, offshore only |
-| Ericeira, Peniche, Cascais–Oeiras | DGT 2 m MDT, coastal zones, 2011 (600 m at sea, 400 m on land) | 2 m | By request only; a request is drafted in `data/dgt_pedido_mdt_2011.md` | would be reef-scale where it reaches |
+| Ericeira, Peniche, Cascais–Oeiras | DGT 2 m MDT, coastal zones, 2011 (600 m at sea, 400 m on land) | 2 m | By request only; requested from DGT on 2026-11-03 for Ericeira, Peniche and Cascais–Oeiras, no reply yet | would be reef-scale where it reaches |
 
 Hawaii has the best data and none of gogo's spots. gogo is Lisbon–Ericeira–Peniche only, by its
 frozen decisions. Pipeline stays useful for developing and verifying the method, not as a
