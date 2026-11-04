@@ -177,6 +177,46 @@ under the usual guard, a time limit plus thermal readings. One difference from w
 inside OrbStack's VM, a run cannot be pinned to the efficiency cores. The VM should be limited
 to 4 CPUs, and the thermal readings taken as before.
 
+### V1 result, 2026-11-04: the face passes, the tube does not
+
+`cases/v1-steep/`: `make_case.py` builds the case, `run.sh <dx> <limit>` runs it on one core under
+the guard, and `measure.py` measures it as `wavesim slice` does. Thermal state stayed nominal
+throughout all three runs. `interFoam` cost 1.7 µs per cell-step on one core in 2D.
+
+| | waveslice | 0.4 m | 0.2 m | 0.1 m |
+|---|---|---|---|---|
+| Cells, wall time | — | 22,575, 2 min | 90,300, 14 min | 361,200, 1 h 46 min |
+| Face vertical | 15.97 s, 222.26 m | 15.75 s, 220.56 m | 15.78 s, 220.55 m | 15.75 s, 220.42 m |
+| Crest then | 3.27 m | 3.03 m (−7%) | 3.13 m (−4%) | 3.14 m (−4%) |
+| Lip lands | 16.93 s | 16.80 s | 16.80 s | 16.62 s |
+| Lip thrown | 10.72 m | 11.13 m | 10.90 m | 8.93 m (−17%) |
+| Tube, height × width | 1.61 × 3.14 m | 0.98 × 3.25 m | 1.49 × 2.80 m | 1.75 × 1.85 m |
+| Tube area | 3.16 m² | 0.97 m² (−69%) | 1.60 m² (−49%) | 1.37 m² (−57%) |
+
+The face and the crest pass at 0.2 and 0.1 m, and the face has converged: 220.4–220.6 m at all
+three sizes, 1.8 m short of waveslice's. The tube fails at every size, and it has not converged
+either: the width and the throw still change from 0.2 to 0.1 m.
+
+Frame by frame, the two methods agree up to 15.6 s, and the 0.2 and 0.1 m surfaces lie on
+waveslice's. From 15.9 s they part. waveslice's crest keeps rising to 3.3 m and throws the lip
+from the top, with the face vertical below it. OpenFOAM's crest stops at about 3.15 m, and its
+jet leaves the face lower down, at about 2.2–2.5 m. The two lips reach about as far shoreward
+at the same moment, but OpenFOAM's falls more steeply and lands 2–4 m sooner, over a tube of
+about the same height and half the area.
+
+Which one is right is open. Potential-flow BEM is known to follow lab overturning closely up to
+touchdown. Algebraic VOF (MULES) smears a lip that is only 3–5 cells thick at 0.1 m. Two 2D
+checks could tell them apart, each one core for a few hours:
+
+- **Sharper interface:** the 0.1 m case with `interIsoFoam` (geometric isoAdvector) in place of
+  `interFoam`. If the lip moves towards waveslice, the smearing was the cause.
+- **Finer cells only at the break:** 0.05 m over x 210–240, z −1 to +4, and 0.1 m elsewhere.
+  If the tube still changes from 0.1 to 0.05 m, no fixed mesh that fits in 3D will measure it,
+  and Basilisk's adaptive octree becomes the route, not plan B.
+
+Until one of them passes, tier A's 0.5 m cells and tier B's 0.25 m cells are known to be too
+coarse for the tube. At 0.4 m the area came out at a third of waveslice's.
+
 ## Risks and open choices
 
 - **Reflection at the inflow.** `timeVaryingMappedFixedValue` imposes the 2D run's sea and does not
