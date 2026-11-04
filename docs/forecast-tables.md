@@ -346,20 +346,30 @@ Most of the three oddities come from how a run reads its own break, not from the
   Pipeline. The break point sits 63 m (median, 0.7 of a wavelength) in front of the shoreline,
   where Pipeline's is 135 m. The tallest-wave rule therefore lands on an antinode of incident plus
   reflected wave: the break height is 1.62 times linear shoaling of the incident 2.08 m, against
-  1.29 on Pipeline, and dividing out 1 + 0.25 leaves about 3.4 m, 1.1 times Komar & Gaughan.
+  1.29 on Pipeline. Dividing out 1 + 0.25 (an upper bound: it assumes the point sits exactly on
+  an antinode) leaves about 3.4 m, 1.1 times Komar & Gaughan; averaging the height over half a
+  local wavelength, which flattens the standing pattern, gives the same 3.4 m. Splitting incident
+  from reflected cell by cell at the break does not work: the waves there are too steep for a
+  first-harmonic fit, and it raised Pipeline's heights by a third.
 - **The six deep rows are near-ties.** On each, a hump 400 m out in 10–12 m beats the real break
-  in 3.4–4.3 m, which is 300–450 m further in, by 1–2% in height.
-- **The slope is measured on the wrong side.** wavesim takes the slope over the half wavelength
-  seaward of the break point, which here is the gentle approach (0.04). From the break point to
-  the shoreline the bed rises 0.079 (median). That gives ξ_b 0.62 and 123 plunging rows of 200
-  (125 at low tide), where Pipeline's two slopes agree (0.03 and 0.03).
+  in 3.4–4.3 m, which is 300–450 m further in, by 1–2% in height. Taking the shoreward-most cell
+  within 3% of the tallest removes them here and the four on Pipeline's 3.5 m, 16 s run, moves the
+  median break depth by 0.15–0.4 m on every run, and moves 10–20% of rows 30–50 m shoreward.
+- **"Mostly spilling" is not a reading error.** wavesim takes the slope over the half wavelength
+  seaward of the break point, the approach the wave climbs, which here is 0.04. From the break
+  point to the shoreline the bed rises 0.079 (median), which would give ξ_b 0.62 and 123 plunging
+  rows of 200. But that is the rock face the wave runs up, not a reef it breaks over (next point),
+  and measuring shoreward instead breaks Pipeline: its reef flat lies shoreward of the break, and
+  its plunging rows fall from 61 to 1. The seaward slope stays.
 - **The model's waves don't break on a reef.** The breaking flag first reaches 0.2 in 0.7 m of
   water (median), where the waves are still 2.7 m tall, and no breaking at all is flagged deeper
   than 2 m. On Pipeline the flag also first comes on near the shore, but the waves have already
   lost height on the reef flat before it (3.1 m down to 1.1 m). In this bed, 15 m off the coast,
   Coxos is a ramp up to a steep rocky shore with no shelf in front, and the waves surge up the
-  rock and reflect. Whether the real reef has a shelf that 15 m cells miss is the one question
-  these files cannot answer, and it is the one the DGT 2 m data would settle.
+  rock and reflect. Its breaker type in this bed is therefore unknown, not spilling: Battjes'
+  number assumes the wave breaks where it is tallest. Whether the real reef has a shelf that 15 m
+  cells miss is the one question these files cannot answer, and it is the one the DGT 2 m data
+  would settle.
 
 ## 5. How gogo would use it
 
@@ -462,8 +472,9 @@ absolute height, tube size, or anything finer than the bed, which is 15 m in Por
 3. Make Coxos reproducible: a `[coxos]` table in `spots.toml` and the LiDAR + DTM merge as a
    tool (the datum is checked, section 4).
 4. wavesim changes, each with a test: how a run reads its break (the break point as the
-   shoreward-most height peak within a few per cent of the tallest, the slope over where the wave
-   then breaks, and the incident height with the reflected wave taken out), wall time in
+   shoreward-most cell within 3% of the tallest; a reflection coefficient per row, fitted where
+   the waves are still gentle, reported beside the height; and rows whose wave reaches the
+   shoreline still tall flagged as unbroken rather than given a breaker type), wall time in
    `run.json`, the in-run first-harmonic statistics so direction and peel need no frames,
    `--no-frames`, and the resumable `wavesim table` batch driver with its reducer.
 5. Draw the Coxos lineup in the bed's frame, and rerun the Coxos swell once with the break
