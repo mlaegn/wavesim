@@ -20,8 +20,8 @@ real-world check of wavesim.
   whose bars have moved since 2011.
 - **Compute.** About 25 minutes per run on 3 efficiency-core threads. A 40-run pilot at Coxos
   takes about two nights on the laptop. A full table for one spot, cut down to the swells that
-  actually happen there, is roughly 350 runs: about 19 nights, or about half a day on a rented
-  16-vCPU machine for a few euros.
+  actually happen there, is about 600 runs at Coxos (counted, section 2): about 32 nights, or
+  about a day on a rented 16-vCPU machine for some ten euros.
 - **wavesim needs a few things first.** With today's side walls, one bed cannot serve every
   direction, so a direction needs its own bed (a re-crop). It also needs a mode that keeps only
   statistics, because one run's frames are 150 to 440 MB. It needs an in-run harmonic
@@ -44,7 +44,11 @@ and `sea_level_m`, read 32 minutes back (`tide.SEA_LEVEL_LEAD`). Like `rays.py`,
 treats the forecast cell as open sea. Section 3 covers how that open-sea swell gets to
 wavesim's wave-maker, which sits 1 to 3 km out in 23 to 35 m of water. Which period field feeds
 the table should be a candidate option tested by the backtest, not a choice made here: the two
-fields are a median 1.5 s apart on this coast (gogo S6).
+fields are a median 1.5 s apart on this coast (gogo S6), and 2.8 s in the reanalysis at the
+Coxos and Ribeira cells. Open-Meteo's sea level is not centred on mean sea level: from 2023 to
+2026 it averages −0.38 m at both cells (−0.37 to −0.40 in every year). The bed is on MSL, so the
+table is read with the sea level less its long-run mean, or every lookup is 0.38 m too low.
+gogo's tide phase reads the cycle, not the level, so it is unaffected.
 
 The axes for Coxos, the first spot (gogo's spec: swell from 270–340°, 1.2–3.5 m, at least 10 s,
 low and mid tide):
@@ -139,17 +143,42 @@ about 25 minutes per run** is the planning figure below.
 |---|---|---|---|---|
 | Pilot, Coxos | 3 directions (290, 310, 330°) × 3 periods (10, 13, 16 s) × 2 heights (1.5, 3 m) × 2 tides (±1.2 m), plus 4 midpoints | 40 | 2 nights | 1–2 h |
 | Coxos, full factorial | 10 × 6 × 6 × 3 | 1,080 | 57 nights | 1.5 days |
-| **Coxos, cut to its climatology** | the points this coast's swell actually reaches, plus a ring around them | **~350** | **~19 nights** | **~12 h** |
-| Five reef spots, each cut to its climatology | | ~1,750 | ~3 months | ~2.5 days |
+| **Coxos, cut to its climatology** | the points an interpolation reads for an hour in gogo's window, 2023–2026, either period field | **~600** | **~32 nights** | **~20 h** |
+| Ribeira, the same way | its window is wider (250–355°, from 0.8 m and 8 s) | ~960 | ~50 nights | ~32 h |
+| Five reef spots, each cut to its climatology | | ~3,000–4,500 | not on the laptop | ~4–6 days |
 
-**Cutting to the climatology.** gogo holds a year of ERA5 swell at Coxos's cell (`gogo
-backfill`). Counting those hours per table point shows which points never occur, and that is
-most of them: on this coast height and period correlate at 0.62 (swells under 1 m average 6.8 s,
-over 2.5 m average 10.3 s; gogo S13a), so 4.5 m at 8 s and 0.75 m at 18 s are empty, and the
-swell at the Ericeira cell is concentrated in the north-west (25% of it from 320–335°; S13c).
-Keep every point that has hours, plus one point either side on every axis, so an interpolation
-never reads a missing corner. The "about a third" in the table is a guess until those hours are
-counted, and counting them is the first next step.
+**Cutting to the climatology** (counted 2026-11-04). The hours are Open-Meteo's marine archive
+at the Coxos and Ribeira cells, the source, cells and fields `gogo backfill` uses, for 2023-01
+to 2026-10 (3.8 years, 33,000 hours each; tide exists from 2023), with the sea level read 32
+minutes back and re-centred as above. A point is needed if a multilinear lookup for some hour
+reads it with a weight above zero, with the top of the height and period axes and the tide
+beyond ±1.2 m held at the edge. The counts, for Coxos:
+
+| Hours counted | Mean period | Peak period | Either |
+|---|---|---|---|
+| In the table's box (260–350°, from 0.75 m and 8 s) | 821 | 1,006 | |
+| In gogo's window (270–340°, 1.2–3.5 m, from 10 s) | 462 | 597 | **597** |
+| In the window, points read by at least 5 hours | 403 | 577 | 582 |
+| In the window, gogo's one backfilled year only (2025-09 to 2026-08) | 392 | 551 | |
+
+The cut keeps 55% of the 1,080, not the guessed third, because the spot's window already is the cut:
+
+- **Inside the window, nearly every swell happens.** The window reaches 8 directions × 5
+  periods × 5 heights = 200 swells, and hours read 199 of them. Tide cuts nothing either:
+  every swell turns up at every tide, so 597 points are 199 swells × 3 tides. What the count
+  removes from the 1,080 is the margin outside the window (260° and 350°, 0.75 m, 8 s), which
+  a lookup never reads while the window vetoes those hours. If a candidate drops the veto, or
+  uses gogo's direction taper past the window's edge, the margin is back: 1,006 points.
+- **The period field moves the count by a quarter.** Peak periods run 2.8 s above mean periods
+  here, so 45% of Coxos's hours clear its 10 s minimum on the peak period and 13% on the mean.
+  Peak's set holds all of mean's (the union is 597), so a table built for peak serves either.
+- **One year is nearly enough.** gogo's backfilled year reads 551 of the 597; the other three
+  years add 8% (18% for the mean period). Count from the multi-year archive anyway.
+
+Dropping the points that fewer than 5 hours in four years read saves only 15 runs. The way to
+a smaller table is a coarser axis, if the pilot shows the outputs are smooth enough: 3 s
+periods (10, 13, 16, 19 inside Coxos's window) instead of 2 s would take a fifth off.
+The counting script and its output are kept with the hand-over note.
 
 ### Where to run them
 
@@ -162,13 +191,13 @@ counted, and counting them is the first next step.
   scales as about threads^0.8 and tops out around 6, so throughput comes from running several
   independent runs at once, each on 4 threads. The README puts a performance core at 3.5 times
   an efficiency core. If a server thread is about as fast, a run takes about 8 minutes and four
-  at once give about 30 runs an hour. That makes one spot's table half a day and a few euros.
+  at once give about 30 runs an hour. That makes Coxos's table about a day and some ten euros.
   First do one calibration run there: `estimate_seconds` is calibrated on an M5, and the budget
   guard would mis-estimate on another CPU.
 - **Not the gogo box.** It is a 2-vCPU product host, and its job is the hourly worker.
 
 **Two practical points.** Disk: one 2D run writes 150–440 MB of frames (`out/` is 5.1 GB
-today), so 350 runs would be about 90 GB. A table run must keep statistics only (section 3).
+today), so 600 runs would be about 155 GB. A table run must keep statistics only (section 3).
 Reproducibility: results are byte-identical across thread counts, but not necessarily across
 CPU architectures, because `sin` and `exp` come from the platform's libm. Record the platform in
 the provenance, and run a few points on both machines to bound the difference.
@@ -478,8 +507,8 @@ absolute height, tube size, or anything finer than the bed, which is 15 m in Por
 
 1. **Throughout, and the gate for everything on gogo's side:** keep logging real sessions at
    Coxos and Ribeira, including `checked` rows on the same morning.
-2. Count the climatology: hours per table point from gogo's backfilled year at the Coxos and
-   Ribeira cells (a read-only query). Fix the table's points and the run count from it.
+2. Done 2026-11-04: the climatology count (section 2). Coxos needs about 600 runs, Ribeira
+   about 960. Still open: which period field, and whether the pilot allows a coarser axis.
 3. Make Coxos reproducible: a `[coxos]` table in `spots.toml` and the LiDAR + DTM merge as a
    tool (the datum is checked, section 4).
 4. wavesim changes, each with a test. Done on 2026-11-04: how a run reads its break (the break
