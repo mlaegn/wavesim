@@ -54,7 +54,8 @@ Design rules:
 | [docs/bathymetry.md](docs/bathymetry.md) | Notes on real-world bed data: NOAA CUDEM for Hawaii, its provenance and caveats, and what was found for Portugal |
 | [docs/pipeline.md](docs/pipeline.md) | What the 2D run and the slices find on Pipeline: lines across and along the reef, swells heavy and mellow, plane beaches, direction, and the check against the real place |
 | [docs/3d-box.md](docs/3d-box.md) | A scope, not built: a 3D OpenFOAM box around the break, to see whether the peel makes a bigger tube |
-| [docs/forecast-tables.md](docs/forecast-tables.md) | A scope, not built: per-spot tables from offshore swell to the wave at the spot, for gogo's forecasts |
+| [docs/spot-sheets.md](docs/spot-sheets.md) | A plan, not built: per-spot sheets of how the wave changes with the swell's angle and the tide, shown on gogo's spot pages |
+| [docs/forecast-tables.md](docs/forecast-tables.md) | A scope, parked: per-spot tables from offshore swell to the wave at the spot, for gogo's score |
 
 ## Architecture
 

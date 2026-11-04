@@ -5,6 +5,13 @@ would cost to compute, what wavesim has to gain first, which spots have a seabed
 run it on, how gogo would use it, and how gogo's session ratings would become the first
 real-world check of wavesim.
 
+**Parked 2026-11-04.** The tables were for gogo's score, which cannot measure a change like this
+until it has far more labels, and they cost about 600 runs per spot. wavesim reaches gogo through
+[spot-sheets.md](spot-sheets.md) instead: a few runs per spot, shown as information on the spot
+page. The findings here still hold and that plan links to them: the Coxos check (section 4),
+the climatology count and the sea-level offset (section 2), direction and the side walls
+(section 3). The next steps at the end are kept as they were, for if the tables come back.
+
 ## In short
 
 - **The table.** For one spot it maps the offshore swell (height, period, direction) and the
@@ -504,6 +511,8 @@ across tides, before reading anything. Ties halve the usable pairs. The labels c
 absolute height, tube size, or anything finer than the bed, which is 15 m in Portugal.
 
 ## Next steps
+
+Parked with the rest of this doc; the live plan is [spot-sheets.md](spot-sheets.md).
 
 1. **Throughout, and the gate for everything on gogo's side:** keep logging real sessions at
    Coxos and Ribeira, including `checked` rows on the same morning.
