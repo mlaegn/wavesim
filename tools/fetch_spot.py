@@ -8,7 +8,8 @@ Reads only the window it needs (HTTP range requests on a tiled GeoTIFF), resampl
 onto a metric grid rotated so +x points along the wave direction, and writes
 `data/<name>.json` (header) and `data/<name>.f32` (float32 little-endian elevation in
 metres relative to mean sea level, row-major, y outer, x inner, y increasing).
-See docs/data-format.md.
+`--from 290` turns the bed for a swell from 290 degrees instead of the spot's bearing and
+writes `data/<name>_290.*`. See docs/data-format.md.
 """
 
 from __future__ import annotations
@@ -121,6 +122,12 @@ def main(argv=None) -> int:
     ap.add_argument("--spots", default="spots.toml", type=Path)
     ap.add_argument("--out", default="data", type=Path)
     ap.add_argument("--cell", type=float, help="override cell size in metres")
+    ap.add_argument(
+        "--from", dest="swell_from", type=float, metavar="DEG",
+        help="the swell's direction (compass, where it comes from) instead of the spot's bearing; "
+        "the side walls only suit a swell square to the wave-maker, so each direction needs its own bed",
+    )
+    ap.add_argument("--width", type=float, help="override the domain width in metres")
     args = ap.parse_args(argv)
 
     spots = tomllib.loads(args.spots.read_text())
@@ -130,6 +137,10 @@ def main(argv=None) -> int:
     s = dict(spots[args.name])
     if args.cell:
         s["cell_m"] = args.cell
+    if args.swell_from is not None:
+        s["bearing"] = (args.swell_from + 180.0) % 360.0
+    if args.width:
+        s["width_m"] = args.width
 
     # A URL is read in ranges over HTTP; anything else is a local file, such as a seabed merged
     # from several sources by hand.
@@ -150,7 +161,13 @@ def main(argv=None) -> int:
                 clip_below=s.get("clip_below", -math.inf),
             )
 
-    stem = args.name if not args.cell else f"{args.name}_{s['cell_m']:g}m"
+    stem = args.name
+    if args.swell_from is not None:
+        stem += f"_{args.swell_from:g}"
+    if args.width:
+        stem += f"_w{s['width_m']:g}"
+    if args.cell:
+        stem += f"_{s['cell_m']:g}m"
     args.out.mkdir(parents=True, exist_ok=True)
     data_path = args.out / f"{stem}.f32"
     data_path.write_bytes(z.astype("<f4").tobytes())

@@ -30,3 +30,29 @@ onshore_m = 50.0
 width_m = 1200.0     # the sides are walls: the middle 600 m is what to look at
 cell_m = 3.0
 clip_above = 6.0     # land higher than this is flattened; waves never reach it
+
+[coxos]
+description = "Coxos, Ericeira, Portugal"
+source = "2011 coastal LiDAR (DGT/APA via EMODnet HR, ~15 m) merged with the EMODnet DTM (~115 m), shifted to mean sea level"
+url = "data/coxos/coxos_seabed_msl.tif"  # written by tools/merge_bed.py coxos
+datum = "mean sea level (lowest astronomical tide + 2.0 m, approximate)"
+attribution = "EMODnet Bathymetry; DGT and APA (2011 coastal LiDAR)"
+lat = 39.002         # gogo's Coxos point (coast.yml)
+lon = -9.426
+utm_crs = "EPSG:32629"
+bearing = 120.0      # swell from 300 deg; the shore faces 265 deg. Other directions: fetch_spot.py --from
+offshore_m = 3500.0  # the wave-maker for a 2 m, 13 s swell needs about 25 m of water
+onshore_m = 500.0
+width_m = 1200.0
+cell_m = 3.0
+clip_above = 6.0
+
+# Neither source reaches from the surf zone to the wave-maker alone. Both are relative to lowest
+# astronomical tide; mean sea level is 2.0 m above it at Cascais (checked in
+# docs/forecast-tables.md, section 4). The LiDAR is EMODnet HR's 590_HR_Lidar_Centro (unzip
+# SDN_CPRD_590_HR_Lidar_Centro.zip); the DTM is EMODnet's 2024 mean depth, cut to
+# 9.56-9.36 W, 38.93-39.08 N.
+[coxos.merge]
+fine = "netcdf:data/emodnet_hr_centro/590_HR_Lidar_Centro.nc:elevation"
+coarse = "data/emodnet_dtm_coxos/emodnet_mean_coxos.tif"
+shift_m = -2.0

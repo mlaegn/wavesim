@@ -127,7 +127,7 @@ One line of a run's sea at one moment, written by `wavesim run --handoff-y` as `
 
 ## Spot registry (`spots.toml`)
 
-One table per spot, read by `tools/fetch_spot.py`:
+One table per spot, read by `tools/fetch_spot.py` (and by `tools/merge_bed.py` for its `merge` table):
 
 | Key | Meaning |
 |---|---|
@@ -140,3 +140,8 @@ One table per spot, read by `tools/fetch_spot.py`:
 | `cell_m` | Cell size |
 | `clip_above`, `clip_below` | Elevation limits, in metres (optional) |
 | `datum`, `source`, `attribution`, `description` | Recorded in the header |
+| `merge.fine`, `merge.coarse` | Optional. Two rasters for `tools/merge_bed.py` to merge into the file at `url`: the fine one where it has data, the coarse one interpolated bilinearly in its gaps, on the fine one's grid. Anything GDAL reads, such as `netcdf:<file>:elevation` |
+| `merge.shift_m` | Added to both, to bring them onto mean sea level (Coxos: −2.0, from lowest astronomical tide) |
+| `merge.bounds` | Optional `[west, south, east, north]` in degrees; the coarse raster's extent by default |
+
+`fetch_spot.py --from <deg>` overrides `bearing` with the swell's direction at the wave-maker (the bearing is that plus 180°) and adds `_<deg>` to the file name; `--width` overrides `width_m`, adding `_w<m>`.

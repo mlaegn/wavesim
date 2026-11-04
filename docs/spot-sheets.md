@@ -32,27 +32,38 @@ mid tide, Coxos's two tides in `coast.yml`.
 |---|---|---|
 | Size at the break compared with offshore | `break_line[].height_m` over the offshore height, median over the lineup rows | **Usable.** Shown with the reflection off the rock beside it (Coxos 0.26, section 4 of forecast-tables.md), since the reported height includes it |
 | How far out it breaks, and in how much water | `x_m` against the shoreline; `depth_m` | **Usable** |
-| How the tide moves it | low against mid at the same direction | **Usable.** At 300°, going from mid to low tide moved the break from 4.8 to 4.2 m deep |
-| Breaks onto the rock | the share of lineup rows with `shore_break` | **Usable.** 68 of 200 rows at 300° mid tide |
-| Which way it peels, and whether it closes out | `tools/direction.py` | **Rough.** The direction of the peel is usable; the angle (28° at 300°) is not, at 15 m |
+| How the tide moves it | low against mid at the same direction | **Usable.** On the existing runs (the 320° row), going from mid to low tide moved the break from 4.8 to 4.2 m deep |
+| Breaks onto the rock | the share of lineup rows with `shore_break` | **Usable.** 68 of 200 rows on the existing mid-tide run |
+| Which way it peels, and whether it closes out | `tools/direction.py` | **Rough.** The direction of the peel is usable; the angle (28° on the existing run) is not, at 15 m |
 | Pitches or crumbles | `surf_similarity` | **Not yet.** In the 15 m bed the wave reaches the rock unbroken, so the type is unknown, not "crumbling" |
 
 Every sheet carries the seabed it was run on, its resolution and date, and the words "model,
 not observation".
 
 **Which direction a row means.** The rows are labelled with the open-sea direction gogo
-forecasts. The shelf between the open sea and the wave-maker (1–3 km out, 23–35 m deep) has
-already bent the swell towards the shore. Over straight contours, a 13 s swell from 340°, 75°
-off Coxos's shore normal (265°), arrives at the maker about 46° off; one from 280° about 11°
-off. The runs use that bent direction. gogo's ray tracer could give it properly later
-(forecast-tables.md section 3); Snell's law is enough to start.
+forecasts. The shelf between the open sea and the wave-maker (about 25 m deep for this swell)
+has already bent the swell towards Coxos's shore normal (265°), and each run is driven square
+at the bent direction. By Snell's law over straight contours, for 13 s:
+
+| Open sea | 280° | 290° | 300° | 310° | 320° | 330° | 340° |
+|---|---|---|---|---|---|---|---|
+| At the wave-maker | 275° | 282° | 288° | 294° | 300° | 304° | 307° |
+
+So the existing Coxos runs, driven at 300° at the maker, are the **320° row**, not the 300° one.
+And the shelf squeezes the north end together: 330° and 340° arrive 3° apart, so those rows
+should look alike, which is itself something the sheet can say. gogo's ray tracer could give
+the bent direction properly later (forecast-tables.md section 3); Snell's law is enough to
+start.
 
 ## 2. The runs
 
-- **Coxos:** 7 directions × 2 tides = 14 runs. 300° at both tides exists already
-  (`out/coxos_2m13s_300`, `out/coxos_2m13s_300_low`), so 12 are new. The swell is 2 m, 13 s,
+- **Coxos:** 7 directions × 2 tides = 14 runs. The 320° row at both tides exists already
+  (`out/coxos_2m13s_300`, `out/coxos_2m13s_300_low`, named for their 300° at the maker), so 12
+  are new. The beds are `fetch_spot.py coxos --from <maker direction>`: `coxos_275` to
+  `coxos_307`, all seven built and checked on 2026-11-04 (shoreline inside the box on every row). The swell is 2 m, 13 s,
   the size those two runs used.
-- **One width check** at 340°, the most oblique: the same run on a box twice as wide. The walls
+- **One width check** at 340° (307° at the maker), the most oblique: the same run on a box
+  twice as wide (`--width 2400`). The walls
   mirror a shore that is not square to them, and beyond 20° off the shore normal that has not
   been tested (forecast-tables.md section 3). If it disagrees by more than 10%, the oblique rows
   get a wider box.
@@ -69,16 +80,18 @@ been checked.
 Little, because the break reading is done (2026-11-04: shoreward-most near-peak, `reflection`,
 `shore_break`):
 
-1. **The Coxos seabed as a script.** `data/coxos/coxos_seabed_msl.tif` was merged by hand: the
-   2011 LiDAR (`data/emodnet_hr_centro/`, ~15 m) over the EMODnet DTM (`data/emodnet_dtm_coxos/`,
-   ~115 m) for the deep water, shifted from chart datum to mean sea level (LiDAR − 2.0 m, checked
-   against Cascais). Nothing in `tools/` rebuilds it, and `data/` is not in git. Turn the merge
-   into a tool and add `[coxos]` to `spots.toml`. Done when it rebuilds today's
-   `data/coxos/coxos.json` bed, which faces 120° (swell from 300°), to the same numbers.
-2. **A bearing override in `tools/fetch_spot.py`**, so one spot gives a bed per direction
-   (`data/coxos_280/`, …). It already crops and turns a bed to any bearing from a local GeoTIFF;
-   today the bearing comes only from `spots.toml`. One bed per direction is needed because
-   `wavesim run` drives the swell square-on and the side walls only suit that.
+1. **The Coxos seabed as a script. Done 2026-11-04.** `tools/merge_bed.py coxos` lays the 2011
+   LiDAR (`data/emodnet_hr_centro/`, ~15 m) over the EMODnet DTM (`data/emodnet_dtm_coxos/`,
+   ~115 m, interpolated bilinearly in the LiDAR's gaps) and shifts both from chart datum to mean
+   sea level (−2.0 m, checked against Cascais). `[coxos]` in `spots.toml` holds the sources and
+   the frame. The bed cut from it matches the hand-made one the runs used to within 0.000002 m on
+   every cell, and `tools/tests/test_merge_bed.py` checks that when `data/` is present. Over the
+   whole merged file, 0.9% of pixels differ from the hand-made one, all outside the bed: some
+   inland land that had been set to 8 m, and a few centimetres in deep water.
+2. **A bed per direction. Done 2026-11-04.** `tools/fetch_spot.py coxos --from 288` turns the bed
+   for a swell from 288° at the wave-maker and writes `coxos_288`; `--width` widens the box. One
+   bed per direction is needed because `wavesim run` drives the swell square-on and the side
+   walls only suit that.
 3. **A reducer, `tools/spot_sheet.py`:** reads the runs of one spot and writes the sheet's rows
    as JSON, over the lineup rows.
 4. **The lineup:** the rows (`y` range) and stretch of `x` where people take off at Coxos, drawn
@@ -125,7 +138,7 @@ waits for the DGT 2 m data rather than going out wrong.
 1. Keep logging sessions. That is gogo's own gate and unrelated to the sheets, but it is still
    what improves the score.
 2. Max writes down what he knows about Coxos (section 6) and marks the lineup.
-3. Script the Coxos seabed and add the bearing override (section 3, items 1–2).
+3. Done 2026-11-04: the Coxos seabed as a script, and the bearing override (section 3).
 4. The 13 runs at Coxos, one night, after Max's OK.
 5. The reducer, and the sheet compared with step 2.
 6. If it holds: the section on gogo's spot page, then Ribeira. If not: wait for DGT.

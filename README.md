@@ -32,7 +32,7 @@ It is a depth-averaged model. It captures shoaling and breaking as a bore, not a
 | **Bathymetry** | Bed generators: flat, plane beach, rough bed |
 | **State** | Depth `h` and momentum `hu`, `hv`; reflective walls; volume and momentum diagnostics |
 | **Forcing** | Internal wave-maker (oblique incidence supported), absorbing sponge layers, Manning bottom friction, optional periodic boundaries in `y` |
-| **Bed files** | A documented format for a real seabed; `tools/fetch_spot.py` crops one from a remote GeoTIFF, rotated so `+x` is the wave direction |
+| **Bed files** | A documented format for a real seabed; `tools/fetch_spot.py` crops one from a remote GeoTIFF, rotated so `+x` is the wave direction, and `tools/merge_bed.py` first lays a fine seabed over a coarse one where no single source reaches from the surf zone to the wave-maker (Coxos) |
 | **Runs** | `wavesim run` sends a swell over a bed and writes frames (the surface and a breaking indicator) in a documented format a viewer can read. It carries the swell across the shelf on cells twice as large and runs the reef on the bed's own cells, and it refuses to start a run it estimates would take longer than its limit |
 | **Viewer** | `viewer/`: a browser replay of a run in 3D (Three.js and TypeScript): terrain from the bed, the surface animated from the frames, foam where the model says the wave breaks, a side view of one line across the break, and maps of where waves break and how steep they get |
 | **Solver** | Well-balanced finite-volume scheme: hydrostatic reconstruction, HLL flux, and first order, second order (MUSCL with an MC limiter), or fifth order (unlimited where the wave is smooth, blended back to the limiter near steep fronts), with SSP-RK2 |
@@ -173,7 +173,16 @@ That writes `out/pipeline/` (both `data/` and `out/` are git-ignored): the reef 
 - **Two grids.** The swell crosses the shelf on cells twice as large as the bed's, where the fifth-order scheme keeps its height (6 m cells across the Pipeline shelf come within 1.5% of 3 m ones). The reef runs on the bed's own cells, from where the water is shallower than 2.5 wave heights or the swell shorter than 20 coarse cells, whichever is deeper (8 m at Pipeline). Along its offshore edge, a relaxation zone a wavelength wide pulls the fine run towards the coarse one: the swell comes in, and what the reef sends back goes out. The fine run starts two periods before the swell reaches it. On a test beach the two grids together give the same waves as one fine grid to within 2.3% (8.3% at worst), and the run warns if the coarse run breaks inside the zone, in the middle half of the width, where it would hand the fine grid a broken wave. A swell too short for the coarse cells is refused, and `--single` runs everything on one grid.
 - **The sides are walls.** For a swell travelling along `+x` a wall is a mirror, so an alongshore-uniform bed gives an exactly uniform run. On a real bed refraction carries energy sideways, and the mirror image of the bed at a wall can focus it: over the Pipeline shelf, a 600 m wide domain gets wave heights in its middle wrong by 10% (median, up to 36%) against a 2 km wide one, and a 1.2 km wide one by 4% (up to 12%). So the bed is twice as wide as the part worth looking at, the runs record the outer quarter on each side as a margin, and the viewer trims it. Both grids have their walls in the same places; relaxing the fine grid's sides towards the coarse run instead imposed the coarse surf zone, which it cannot resolve, on the fine one (13–22% off near the break).
 
-The swell travels along `+x` of the bed's frame, so its direction is chosen when the bed is fetched (`bearing` in `spots.toml`). Add your own spot by adding a table to `spots.toml`.
+The swell travels along `+x` of the bed's frame, so its direction is chosen when the bed is fetched: `bearing` in `spots.toml`, or `--from 290` for a swell from 290° at the wave-maker, written as `data/<spot>_290.json`. Add your own spot by adding a table to `spots.toml`. Coxos is built in two steps, because its seabed is merged from two sources first:
+
+```bash
+uv run --python 3.12 --with rasterio --with numpy --with scipy tools/merge_bed.py coxos
+```
+
+```bash
+uv run --python 3.12 --with rasterio --with numpy --with scipy --with pyproj \
+    tools/fetch_spot.py coxos --from 300 --out data/coxos
+```
 
 **Running it on a laptop.**
 
@@ -391,9 +400,10 @@ wavesim/
 │       └── fixtures/tiny/      # written by waveio's golden test
 ├── tools/
 │   ├── fetch_spot.py           # crop, rotate and resample a remote GeoTIFF
+│   ├── merge_bed.py            # lay a fine seabed over a coarse one, onto mean sea level
 │   ├── fetch_line.py           # one cross-shore line of a bed's frame from a finer DEM
 │   ├── direction.py            # which way a run's waves travel where they break, and their peel
-│   └── tests/test_{fetch_spot,fetch_line,direction}.py
+│   └── tests/test_{fetch_spot,merge_bed,fetch_line,direction}.py
 └── crates/
     ├── wavecore/               # pure numerics, no dependencies
     │   ├── src/
