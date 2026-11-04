@@ -142,7 +142,8 @@ These are guesses, good to a factor of about three. Milestone 0 replaces them wi
      side patches: `alpha` is 1 below `eta`, and `U` comes from item 2.
    - `fixedFluxPressure` on those patches, and an atmosphere on top (`totalPressure`,
      `pressureInletOutletVelocity`, `inletOutlet` on `alpha`).
-   - `maxCo` and `maxAlphaCo` of 0.5. The model is laminar, because the comparison stops at
+   - `maxCo` and `maxAlphaCo` of 0.5, which V1 showed to be too large (0.05 is likely, see
+     the V1 result). The model is laminar, because the comparison stops at
      landing, and RANS models over-produce turbulence under waves that have not broken (Larsen &
      Fuhrman 2018).
    - Function objects that write the `alpha = 0.5` iso-surface every 0.1 s during the break, plus
@@ -177,7 +178,7 @@ under the usual guard, a time limit plus thermal readings. One difference from w
 inside OrbStack's VM, a run cannot be pinned to the efficiency cores. The VM should be limited
 to 4 CPUs, and the thermal readings taken as before.
 
-### V1 result, 2026-11-04: OpenFOAM converges, on a smaller tube than waveslice's
+### V1 result, 2026-11-04: OpenFOAM converges, but on the wrong tube
 
 `cases/v1-steep/`: `make_case.py` builds the case, `run.sh` runs it on one core under the guard,
 and `measure.py` measures it as `wavesim slice` does. The thermal state stayed nominal
@@ -205,27 +206,63 @@ passes from 0.2 m down: it is 4% low. The tube fails at every size. OpenFOAM's t
 as waveslice's, but half as wide, with a third of the area, and its lip is thrown 7.7 m rather
 than 10.7.
 
-**But OpenFOAM has converged.** From 0.1 to 0.05 m the area changes by 17%, the height by 12%
-and the throw by 7%. A sharper surface on the same 0.1 m cells moves it the same way, and by
-less than the cells do. Frame by frame, the three finest runs lie on one another until the lip
-lands, and differ only in the splash after that. The difference from waveslice is therefore not
-the smearing or the cell size. It lies between the two models: a viscous fluid with air above
-it, against potential flow. Both agree to 15.6 s. After that, waveslice's crest goes on rising,
-to 3.3 m, and throws the lip from the top. OpenFOAM's crest stops at 3.15 m, and its jet leaves
-the face lower down. The lips reach about as far shoreward at the same moment, but OpenFOAM's
-falls more steeply.
+**OpenFOAM has converged in cell size.** From 0.1 to 0.05 m the area changes by 17%, the
+height by 12% and the throw by 7%. A sharper surface on the same 0.1 m cells moves it the same
+way, and by less than the cells do. Frame by frame, the three finest runs lie on one another
+until the lip lands, and differ only in the splash after that. Both codes agree to 15.6 s.
+After that, waveslice's crest goes on rising, to 3.3 m, and throws the lip from the top.
+OpenFOAM's crest stops at 3.15 m, and its jet leaves the face lower down and falls more
+steeply.
 
-Which model is right needs a lab measurement. Potential-flow BEM is known to follow lab
-overturning closely up to touchdown, but that does not settle this case. The next check is
-both codes against a published lab case of a solitary wave plunging on a slope near 1 in 15,
-with surface profiles through the overturn (*to be found*; Li & Raichlen's 1 in 15 runs are a
-candidate to look at).
+**The measurements side with waveslice.** The overturn has been measured at field scale, on the
+wave in the video that started this: Feddersen, Fincham, Pieszka and others put lidar on 22
+Surf Ranch waves in 2019 (Feddersen et al. 2023). They measured the overturn area at the moment
+the jet lands, as A/H², with H the wave height just before breaking. It came out at 0.2 to 0.42,
+smaller with onshore wind and larger with offshore wind. Their 2-phase Basilisk model of the
+same wave with no wind (Feddersen et al. 2024) gives 0.35. Potential flow gives 0.38
+(Pick & Feddersen 2026). That model is on a slope of 0.0693, almost our 1 in 15. Its grid had
+converged at Δx/h₀ = 6 × 10⁻³, which for our 8 m depth is 0.05 m. Earlier, a VOF model without
+air had matched the BEM of Grilli et al. (1997) (Guignard et al. 2001).
 
-**For the 3D box:** the tube needs 0.1 m cells around the break. At 0.2 m the area is 40% above
-the converged one, and at 0.4 m the lip is lost. Tier A's 0.5 m cells can tell whether there is
-a barrel, but not its size. Tier B's 0.25 m is too coarse as well. At 0.1 m, tier B becomes
-about 100 M cells, beyond the laptop and expensive on a rented machine. That is where
-Basilisk's adaptive octree pays for itself: it puts fine cells only where the surface is.
+Ours, with H the crest height at the curl: waveslice 3.16 / 3.27² = **0.30**, inside the
+measured range. OpenFOAM at 0.05 m: 1.14 / 3.15² = **0.12**, below all of them.
+
+**Why OpenFOAM is low: its time step.** Every run here used `maxCo 0.5` with the damBreak
+tutorial's settings. Larsen, Fuhrman & Roenby (2019) showed that exactly this makes interFoam's
+crest velocities too high, and its air move fast just above the surface. Even at Co 0.15, the
+crest velocity is 17% too high after five periods, against 0.1% at Co 0.05, and they recommend
+Co ≈ 0.05. A finer cell does not cure it, because Co stays the same. Ours shows both effects:
+
+- the face goes vertical 0.2 s early and 1.8 m offshore, as a crest moving too fast would;
+- the air within 1 m above the crest moves onshore at 15–21 m/s, about twice the wave's speed
+  of 10 m/s and three times the water's, from as early as 10 s. Feddersen's measurements show
+  that an onshore wind of 0.7 times the wave speed shrinks the overturn to A/H² ≈ 0.2. A
+  spurious one of twice the wave speed, in the layer that shapes the lip, would do more.
+
+The next check is OpenFOAM at Co 0.05, from 0 s, at 0.2 m, where the run took 14 min at Co 0.5.
+It costs about ten times the steps, so 2 to 3 h on one core. If its tube moves to waveslice's,
+the cause is found, and the 3D box must budget Co 0.05. If it doesn't, Basilisk is the tool,
+since its setup is the one that matched the Surf Ranch.
+
+**For the 3D box:** the cell size stays at 0.1 m around the break, and the time step will be
+about ten times smaller than the cost table assumes. At 0.1 m, tier B would be about 100 M
+cells, and then about 10 times the steps. Fixed meshes stop making sense there. Basilisk's
+adaptive octree puts fine cells only where the surface is, and it is what the Surf Ranch study
+used.
+
+References for this section:
+
+- Feddersen, F., Fincham, A. M., Brodie, K. L., Young, A. P., Spydell, M. S., Grimes, D. J.,
+  Pieszka, M. & Hanson, K. (2023). Cross-shore wind-induced changes to field-scale overturning
+  wave shape. *J. Fluid Mech.* 958, A4. doi:10.1017/jfm.2023.40
+- Feddersen, F., Hanson, K., Mostert, W. & Fincham, A. (2024). Modelling wind-induced changes to
+  overturning wave shape. *J. Fluid Mech.* 1000, A48. doi:10.1017/jfm.2024.1012
+- Pick & Feddersen (2026). Scaling the shape of shoaling and overturning solitary waves.
+  *J. Fluid Mech.* 1040, A8.
+- Larsen, B. E., Fuhrman, D. R. & Roenby, J. (2019). Performance of interFoam on the simulation
+  of progressive waves. *Coastal Engineering Journal* 61(3), 380–400. arXiv:1804.01158
+- Grilli, S. T., Svendsen, I. A. & Subramanya, R. (1997). Breaking criterion and characteristics
+  for solitary waves on slopes. *J. Waterway, Port, Coastal, Ocean Eng.* 123(3), 102–112.
 
 ## Risks and open choices
 
