@@ -465,7 +465,9 @@ fn breaks(dir: &std::path::Path, stretch: f64) -> Result<(), Error> {
         .and_then(|v| v.as_u64())
         .unwrap_or(0) as usize;
     let rows = (stretch / dy).round().max(1.0) as usize;
-    println!("along the shore    breaks at x     depth   height   slope    surf similarity");
+    println!(
+        "along the shore    breaks at x     depth   height   slope    surf similarity      reflection"
+    );
     for first in (margin..ny - margin).step_by(rows) {
         let last = (first + rows).min(ny - margin);
         let Some(p) = points[first..last]
@@ -480,16 +482,21 @@ fn breaks(dir: &std::path::Path, stretch: f64) -> Result<(), Error> {
             );
             continue;
         };
+        let breaker = format!("{:.2} {:?}", p.surf_similarity, p.breaker);
+        let reflection = p.reflection.map_or("-".into(), |r| format!("{r:.2}"));
         println!(
-            "  y {:4.0}-{:4.0} m   {:7.0} m   {:5.1} m   {:4.1} m   1:{:<4.0}   {:.2} {:?}",
+            "  y {:4.0}-{:4.0} m   {:7.0} m   {:5.1} m   {:4.1} m   1:{:<4.0}   {breaker:<19}  {reflection:>4}{}",
             first as f64 * dy,
             last as f64 * dy,
             p.x_m,
             p.depth_m,
             p.height_m,
             1.0 / p.slope.max(1e-6),
-            p.surf_similarity,
-            p.breaker
+            if p.shore_break {
+                "   onto the shore"
+            } else {
+                ""
+            }
         );
     }
     println!("updated {}", dir.join("run.json").display());

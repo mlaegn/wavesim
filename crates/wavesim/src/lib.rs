@@ -713,6 +713,8 @@ struct Stats {
     wave_max: Vec<f64>,
     wave_min: Vec<f64>,
     waves: Vec<Vec<f64>>,
+    /// The swell's first harmonic, for how much of it the shore sends back.
+    harmonic: FirstHarmonic,
 }
 
 impl Stats {
@@ -731,12 +733,18 @@ impl Stats {
     }
 }
 
+/// Heights within this fraction of a row's tallest count as a tie, and the break line takes the
+/// shoreward one. On six rows of the Coxos run and four of Pipeline's 3.5 m, 16 s one, a hump
+/// 300 to 450 m further out, in 10 to 12 m of water, was 1 to 2% taller than the wave where it
+/// then broke.
+pub const NEAR_PEAK: f64 = 0.03;
+
 /// Where the waves break along each row of a grid of `nx` by `ny` cells: the cell where the
 /// per-wave height is greatest, between column `from` and the shore, in water at least 0.3 m
-/// deep at still-water level `tide` (`bed` in metres above mean sea level). That is the break
-/// point as laboratories define it, and on Ting & Kirby's beach it is where the model's wave
-/// is tallest within 0.4 m of where the laboratory saw it break, whatever the cell size. `None`
-/// for a row with no such water.
+/// deep at still-water level `tide` (`bed` in metres above mean sea level), or the shoreward-most
+/// cell within [`NEAR_PEAK`] of it. That is the break point as laboratories define it, and on
+/// Ting & Kirby's beach it is where the model's wave is tallest within 0.4 m of where the
+/// laboratory saw it break, whatever the cell size. `None` for a row with no such water.
 pub fn break_line(
     height: &[f64],
     bed: &[f32],
@@ -748,14 +756,21 @@ pub fn break_line(
     (0..ny)
         .map(|j| {
             let row = &bed[j * nx..(j + 1) * nx];
-            let shore = (from..nx)
-                .find(|&i| f64::from(row[i]) >= tide)
-                .unwrap_or(nx);
-            (from..shore)
-                .filter(|&i| tide - f64::from(row[i]) >= 0.3)
-                .max_by(|&a, &b| height[j * nx + a].total_cmp(&height[j * nx + b]))
+            let h = &height[j * nx..(j + 1) * nx];
+            let shore = shoreline(row, from, tide);
+            let wet = || (from..shore).filter(|&i| tide - f64::from(row[i]) >= 0.3);
+            let tallest = wet().map(|i| h[i]).max_by(f64::total_cmp)?;
+            wet().rfind(|&i| h[i] >= (1.0 - NEAR_PEAK) * tallest)
         })
         .collect()
+}
+
+/// The first column from `from` on whose bed is at or above still-water level `tide`, or the
+/// row's length if there is none.
+fn shoreline(row: &[f32], from: usize, tide: f64) -> usize {
+    (from..row.len())
+        .find(|&i| f64::from(row[i]) >= tide)
+        .unwrap_or(row.len())
 }
 
 /// How a wave breaks, from the surf-similarity number at breaking (Battjes 1974): spilling (the
@@ -804,12 +819,25 @@ pub struct BreakPoint {
     /// wave's, `T sqrt(g h)`, at the breaking depth): the slope the breaking wave meets.
     pub slope: f64,
     pub surf_similarity: f64,
+    /// Battjes' type from `surf_similarity`. It assumes the wave breaks where it is tallest, so
+    /// on a `shore_break` row it says little.
     pub breaker: Breaker,
+    /// The reflected swell's amplitude over the incident one, over the wavelength seaward of the
+    /// break point ([`reflection`]); `None` for a run without the first harmonic, or where that
+    /// stretch is too short or too shallow to fit. Where it is large the height includes the
+    /// reflected wave: on an antinode, up to `1 + reflection` times the incident one.
+    pub reflection: Option<f64>,
+    /// The shoreline is less than half a wavelength (the model's, at the breaking depth) beyond
+    /// the break point: the wave breaks onto the shore, not over a reef or a bar in front of it.
+    /// 68 of the 200 rows of the Coxos run against the rocks (48 at low tide), none of Pipeline's
+    /// 2.5 and 3.5 m swells.
+    pub shore_break: bool,
 }
 
 /// [`break_line`], with how each row's waves break: a grid of cells `dx` metres along x and a
-/// swell of period `period`. A row whose bed falls towards the shore where it breaks gets a slope
-/// of zero, and spills.
+/// swell of period `period`, and, if the run recorded it, the swell's first harmonic per cell
+/// (from [`FirstHarmonic::amplitudes`]) for the [`reflection`]. A row whose bed falls towards the
+/// shore where it breaks gets a slope of zero, and spills.
 #[allow(clippy::too_many_arguments)]
 pub fn break_points(
     height: &[f64],
@@ -820,7 +848,9 @@ pub fn break_points(
     from: usize,
     tide: f64,
     period: f64,
+    harmonic: Option<&[(f64, f64)]>,
 ) -> Vec<Option<BreakPoint>> {
+    let omega = std::f64::consts::TAU / period;
     break_line(height, bed, nx, ny, from, tide)
         .into_iter()
         .enumerate()
@@ -834,6 +864,21 @@ pub fn break_points(
             let slope = slope.max(0.0);
             let h = height[j * nx + i];
             let xi = surf_similarity(slope, h, period);
+            // The model's wavelength there; a break too deep for it to carry the swell (not one
+            // a run makes) takes the deep-water one.
+            let wavelength = if omega * omega * depth / G < 3.0 {
+                std::f64::consts::TAU / linear_wave(omega, depth, true).k
+            } else {
+                G * period * period / std::f64::consts::TAU
+            };
+            let shore = shoreline(row, i, tide);
+            let reflection = harmonic.and_then(|a| {
+                let start = i
+                    .saturating_sub((wavelength / dx).round() as usize)
+                    .max(from);
+                let depths: Vec<f64> = row[start..i].iter().map(|&b| tide - f64::from(b)).collect();
+                reflection(&a[j * nx + start..j * nx + i], &depths, dx, period)
+            });
             Some(BreakPoint {
                 column: i,
                 x_m: (i as f64 + 0.5) * dx,
@@ -842,9 +887,137 @@ pub fn break_points(
                 slope,
                 surf_similarity: xi,
                 breaker: Breaker::from_surf_similarity(xi),
+                reflection,
+                shore_break: shore < nx && ((shore - i) as f64) * dx < 0.5 * wavelength,
             })
         })
         .collect()
+}
+
+/// The swell's first harmonic in every cell: the least-squares fit of
+/// `eta = m + a cos(w t) + b sin(w t)` over the samples given, weighted by the time each stands
+/// for (a step's `dt`, or 1 for evenly spaced frames), as the complex amplitude `a - i b`. A wave
+/// travelling along +x, `cos(w t - k x)`, then reads `exp(-i k x)`.
+pub struct FirstHarmonic {
+    omega: f64,
+    /// Sums of `w`, `w cos`, `w sin`, `w cos^2`, `w cos sin` and `w sin^2` over the samples.
+    moments: [f64; 6],
+    /// Sums of `w eta`, `w eta cos` and `w eta sin`, per cell.
+    sums: Vec<[f64; 3]>,
+}
+
+impl FirstHarmonic {
+    pub fn new(period: f64, cells: usize) -> Self {
+        Self {
+            omega: std::f64::consts::TAU / period,
+            moments: [0.0; 6],
+            sums: vec![[0.0; 3]; cells],
+        }
+    }
+
+    /// Start a sample at time `t` of weight `w`; pass what it returns to [`FirstHarmonic::add`]
+    /// for each cell.
+    pub fn weights(&mut self, t: f64, w: f64) -> [f64; 3] {
+        let (s, c) = (self.omega * t).sin_cos();
+        for (m, v) in self
+            .moments
+            .iter_mut()
+            .zip([1.0, c, s, c * c, c * s, s * s])
+        {
+            *m += w * v;
+        }
+        [w, w * c, w * s]
+    }
+
+    pub fn add(&mut self, cell: usize, eta: f64, weights: [f64; 3]) {
+        for (sum, w) in self.sums[cell].iter_mut().zip(weights) {
+            *sum += w * eta;
+        }
+    }
+
+    /// `(a, -b)` per cell, or `None` if the samples cannot separate a mean, a cosine and a sine
+    /// (less than about half a period of them).
+    pub fn amplitudes(&self) -> Option<Vec<(f64, f64)>> {
+        let [s, c, n, cc, cs, ss] = self.moments;
+        let m = [[s, c, n], [c, cc, cs], [n, cs, ss]];
+        let cof = |r: usize, k: usize| {
+            let (r1, r2) = ((r + 1) % 3, (r + 2) % 3);
+            let (k1, k2) = ((k + 1) % 3, (k + 2) % 3);
+            m[r1][k1] * m[r2][k2] - m[r1][k2] * m[r2][k1]
+        };
+        let det = (0..3).map(|k| m[0][k] * cof(0, k)).sum::<f64>();
+        // The cosine and sine rows of the inverse; for whole periods `det` is `s^3 / 4`.
+        if det.is_nan() || det <= 1e-3 * s * s * s / 4.0 {
+            return None;
+        }
+        let inv = |r: usize, k: usize| cof(k, r) / det;
+        Some(
+            self.sums
+                .iter()
+                .map(|e| {
+                    let row = |r: usize| (0..3).map(|k| inv(r, k) * e[k]).sum::<f64>();
+                    (row(1), -row(2))
+                })
+                .collect(),
+        )
+    }
+}
+
+/// How much of the swell comes back: the amplitude of a wave travelling towards -x over that of
+/// one travelling towards +x, fitted by least squares to the first harmonic `amplitude` (as
+/// [`FirstHarmonic::amplitudes`] gives it) along consecutive cells `dx` apart with still-water
+/// `depth`. Both waves take the model's own linear phase `integral of k dx`, and both shoal as
+/// `1 / sqrt(c_g)`, as energy flux conserved along the row has them do. `None` if a cell is under
+/// 0.3 m deep or too deep for the model to carry the swell, or the stretch is too short to tell
+/// the two waves apart (under about a third of a wavelength).
+///
+/// Near the break the waves are too steep for this: a fit over 60 m around each cell of
+/// Pipeline's reef raised the heights there by a third. A wavelength seaward of the break point,
+/// where they are still smooth, it gives 0.26 (median) against the rocks at Coxos and 0.06 to
+/// 0.10 at Pipeline.
+pub fn reflection(amplitude: &[(f64, f64)], depth: &[f64], dx: f64, period: f64) -> Option<f64> {
+    let omega = std::f64::consts::TAU / period;
+    if amplitude.len() != depth.len() || depth.is_empty() {
+        return None;
+    }
+    let mut phase = 0.0;
+    // Sums of |u|^2 (= |v|^2), conj(u) v, conj(u) A and conj(v) A, where u = s exp(-i phase)
+    // is the incident wave's shape and v = s exp(i phase) the reflected one's.
+    let (mut uu, mut uv, mut ua, mut va) = (0.0, (0.0, 0.0), (0.0, 0.0), (0.0, 0.0));
+    for (&(re, im), &h) in amplitude.iter().zip(depth) {
+        if h.is_nan() || h < 0.3 || omega * omega * h / G >= 3.0 {
+            return None;
+        }
+        let wave = linear_wave(omega, h, true);
+        let mid = phase + 0.5 * wave.k * dx;
+        phase += wave.k * dx;
+        let s2 = 1.0 / wave.group_speed;
+        let s = s2.sqrt();
+        let (sin, cos) = mid.sin_cos();
+        uu += s2;
+        uv = (uv.0 + s2 * (2.0 * mid).cos(), uv.1 + s2 * (2.0 * mid).sin());
+        // conj(u) A = s exp(i phase) A, conj(v) A = s exp(-i phase) A.
+        ua = (
+            ua.0 + s * (cos * re - sin * im),
+            ua.1 + s * (cos * im + sin * re),
+        );
+        va = (
+            va.0 + s * (cos * re + sin * im),
+            va.1 + s * (cos * im - sin * re),
+        );
+    }
+    // [uu uv; conj(uv) uu] [incident; reflected] = [ua; va].
+    let det = uu * uu - (uv.0 * uv.0 + uv.1 * uv.1);
+    // Three-quarters for a third of a wavelength, near 1 for half of one or more.
+    if det.is_nan() || det <= 0.75 * uu * uu {
+        return None;
+    }
+    let mul = |a: (f64, f64), b: (f64, f64)| (a.0 * b.0 - a.1 * b.1, a.0 * b.1 + a.1 * b.0);
+    let (uv_va, conj_uv_ua) = (mul(uv, va), mul((uv.0, -uv.1), ua));
+    let incident = (uu * ua.0 - uv_va.0, uu * ua.1 - uv_va.1);
+    let reflected = (uu * va.0 - conj_uv_ua.0, uu * va.1 - conj_uv_ua.1);
+    let size = |z: (f64, f64)| z.0.hypot(z.1);
+    (size(incident) > 0.0).then(|| size(reflected) / size(incident))
 }
 
 /// A cell reads as breaking where the breaking field is at least this.
@@ -891,6 +1064,7 @@ impl Stage {
                 wave_max: vec![f64::NEG_INFINITY; cells],
                 wave_min: vec![f64::INFINITY; cells],
                 waves: Vec::new(),
+                harmonic: FirstHarmonic::new(opts.period, cells),
             },
         })
     }
@@ -909,8 +1083,10 @@ impl Stage {
             st.close_wave();
         }
         let grid = self.bed.grid();
+        let weights = st.harmonic.weights(self.state.time, inside);
         for (n, (i, j)) in grid.interior().enumerate() {
             let eta = self.state.h[grid.idx(i, j)] + f64::from(self.bed.elevation[n]);
+            st.harmonic.add(n, eta, weights);
             st.eta_max[n] = st.eta_max[n].max(eta);
             st.eta_min[n] = st.eta_min[n].min(eta);
             st.wave_max[n] = st.wave_max[n].max(eta);
@@ -1050,6 +1226,12 @@ impl Stage {
             let fraction = f32s(&self.breaking_fraction());
             let (high, low) = (f32s(&self.stats.eta_max), f32s(&self.stats.eta_min));
             let from = self.stats.from;
+            let harmonic = self.stats.harmonic.amplitudes();
+            let (re, im): (Vec<f32>, Vec<f32>) = harmonic
+                .iter()
+                .flatten()
+                .map(|&(a, b)| (a as f32, b as f32))
+                .unzip();
             match self.wave_height() {
                 Some(height) => {
                     let g = self.bed.grid();
@@ -1062,6 +1244,7 @@ impl Stage {
                         break_from,
                         self.tide,
                         self.stats.period,
+                        harmonic.as_deref(),
                     );
                     self.writer.note("break_line", serde_json::json!(points));
                     self.writer
@@ -1070,12 +1253,17 @@ impl Stage {
                         self.writer
                             .note("unsettled_per_period", serde_json::json!(u));
                     }
-                    self.writer.write_stats(
-                        &["break_fraction", "eta_max", "eta_min", "wave_height"],
-                        &[&fraction, &high, &low, &f32s(&height)],
-                        from,
-                        self.state.time,
-                    )?;
+                    let height = f32s(&height);
+                    let (mut names, mut blocks) = (
+                        vec!["break_fraction", "eta_max", "eta_min", "wave_height"],
+                        vec![&fraction[..], &high, &low, &height],
+                    );
+                    if harmonic.is_some() {
+                        names.extend(["harmonic_re", "harmonic_im"]);
+                        blocks.extend([&re[..], &im]);
+                    }
+                    self.writer
+                        .write_stats(&names, &blocks, from, self.state.time)?;
                 }
                 None => self.writer.write_stats(
                     &["break_fraction", "eta_max", "eta_min"],
@@ -1516,6 +1704,31 @@ pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<
     })
 }
 
+/// The first harmonic a finished run recorded at every step, or, for a run from before it did,
+/// one fitted to its frames over the statistics' window (a 13 s swell in frames 2 s apart is
+/// sampled six or seven times a period, enough for its first harmonic).
+fn run_harmonic(run: &waveio::Run, period: f64) -> Option<Vec<(f64, f64)>> {
+    if let (Some(re), Some(im)) = (run.stat("harmonic_re"), run.stat("harmonic_im")) {
+        return Some(
+            re.iter()
+                .zip(im)
+                .map(|(&a, &b)| (f64::from(a), f64::from(b)))
+                .collect(),
+        );
+    }
+    let window = run.header.stats.as_ref()?;
+    let mut harmonic = FirstHarmonic::new(period, run.header.nx * run.header.ny);
+    for (k, &t) in run.header.times.iter().enumerate() {
+        if t >= window.from_s - 1e-9 && t <= window.to_s + 1e-9 {
+            let weights = harmonic.weights(t, 1.0);
+            for (n, &eta) in run.frame(k).iter().enumerate() {
+                harmonic.add(n, f64::from(eta), weights);
+            }
+        }
+    }
+    harmonic.amplitudes()
+}
+
 /// Work out a finished run's break line and breaker types again from what it saved, write them
 /// into its `run.json`, and return them. Nothing is simulated: it reads the statistics, so it
 /// takes a moment, and it brings a run written before the types existed up to date.
@@ -1547,7 +1760,18 @@ pub fn update_breaks(dir: &std::path::Path) -> Result<Vec<Option<BreakPoint>>, E
         Some(z) => z as usize,
         None => (number("near_field_end_m").unwrap_or(0.0) / h.dx).ceil() as usize,
     };
-    let points = break_points(&height, &bed, h.nx, h.ny, h.dx, from, tide, period);
+    let harmonic = run_harmonic(&out, period);
+    let points = break_points(
+        &height,
+        &bed,
+        h.nx,
+        h.ny,
+        h.dx,
+        from,
+        tide,
+        period,
+        harmonic.as_deref(),
+    );
     out.header.waves["break_line"] = serde_json::json!(points);
     let path = dir.join("run.json");
     let text = serde_json::to_string_pretty(&out.header).map_err(|source| waveio::Error::Json {

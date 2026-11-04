@@ -371,6 +371,17 @@ Most of the three oddities come from how a run reads its own break, not from the
   cells miss is the one question these files cannot answer, and it is the one the DGT 2 m data
   would settle.
 
+wavesim now reads its breaks this way (2026-11-04), and `wavesim breaks` re-read both Coxos runs
+from what they saved. Mid tide, with low tide in brackets:
+- break depth 4.8 m (4.2), height 4.1 m (4.0);
+- no deep rows left;
+- reflection 0.26 (0.23);
+- 68 shore-break rows of 200 (48).
+
+On Pipeline's runs reflection is 0.06–0.10, and there are no shore breaks except 14 rows of the
+small 1.5 m swell, on the inner reef. Break depths there moved 0.15–0.6 m shallower and heights
+1–2% lower.
+
 ## 5. How gogo would use it
 
 ### Where gogo is, and what that allows
@@ -471,14 +482,12 @@ absolute height, tube size, or anything finer than the bed, which is 15 m in Por
    Ribeira cells (a read-only query). Fix the table's points and the run count from it.
 3. Make Coxos reproducible: a `[coxos]` table in `spots.toml` and the LiDAR + DTM merge as a
    tool (the datum is checked, section 4).
-4. wavesim changes, each with a test: how a run reads its break (the break point as the
-   shoreward-most cell within 3% of the tallest; a reflection coefficient per row, fitted where
-   the waves are still gentle, reported beside the height; and rows whose wave reaches the
-   shoreline still tall flagged as unbroken rather than given a breaker type), wall time in
-   `run.json`, the in-run first-harmonic statistics so direction and peel need no frames,
-   `--no-frames`, and the resumable `wavesim table` batch driver with its reducer.
-5. Draw the Coxos lineup in the bed's frame, and rerun the Coxos swell once with the break
-   reading fixed (step 4), against the check in section 4.
+4. wavesim changes, each with a test. Done on 2026-11-04: how a run reads its break (the break
+   point as the shoreward-most cell within 3% of the tallest, and `reflection` and `shore_break`
+   on every break point, see [data-format.md](data-format.md)). Still to do: wall time in
+   `run.json`, `tools/direction.py` reading the first harmonic a run now saves so direction and
+   peel need no frames, `--no-frames`, and the resumable `wavesim table` batch driver with its reducer.
+5. Draw the Coxos lineup in the bed's frame.
 6. The pilot, 40 runs at Coxos, about two nights on the efficiency cores. Before running it, set
    bounds for interpolating to the midpoints, for example break depth within 0.5 m, break
    height within 10%, ξ_b within 0.05. Then run the double-width wall check at the window's

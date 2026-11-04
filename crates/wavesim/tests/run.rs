@@ -633,6 +633,15 @@ fn breaking_and_the_surface_range_are_recorded_at_every_step() {
         "{p}"
     );
     assert_eq!(p["breaker"], "spilling");
+    // A gentle beach sends little of the swell back, and the wave breaks well out from the
+    // shoreline. The first harmonic is saved with the other statistics.
+    let reflection = p["reflection"]
+        .as_f64()
+        .expect("the run records the first harmonic");
+    println!("reflection {reflection:.3}");
+    assert!(reflection < 0.1, "{p}");
+    assert_eq!(p["shore_break"], false);
+    assert!(out.stat("harmonic_re").is_some() && out.stat("harmonic_im").is_some());
 }
 
 #[test]
@@ -681,10 +690,146 @@ fn a_break_point_on_a_plane_beach_meets_the_beach_slope() {
         .map(|i| (-10.0 + (i as f64 + 0.5) / 20.0) as f32)
         .collect();
     let height: Vec<f64> = (0..nx).map(|i| if i == 120 { 3.0 } else { 1.0 }).collect();
-    let p = wavesim::break_points(&height, &bed, nx, 1, dx, 0, 0.0, 12.0)[0].unwrap();
+    let p = wavesim::break_points(&height, &bed, nx, 1, dx, 0, 0.0, 12.0, None)[0].unwrap();
     assert_eq!(p.column, 120);
     assert!((p.slope * 20.0 - 1.0).abs() < 1e-5, "slope {}", p.slope);
     assert!((p.depth_m - (10.0 - 120.5 / 20.0)).abs() < 1e-4);
+    // Without the first harmonic there is no reflection; the shore is 80 m beyond the break, in
+    // 4 m of water, more than half of a 12 s wave's 74 m there.
+    assert_eq!(p.reflection, None);
+    assert!(!p.shore_break);
+}
+
+#[test]
+fn of_two_nearly_equal_peaks_the_break_line_takes_the_shoreward_one() {
+    // Two rows of eight cells on a bed rising to dry land in the last column. On row 0 the hump
+    // in column 1 is 2% taller than the peak in column 5, within NEAR_PEAK, so column 5 is the
+    // break; on row 1 it is 5% taller, so it is.
+    let bed: Vec<f32> = [[-12.0, -11.0, -10.0, -8.0, -6.0, -4.0, -2.0, 1.0]; 2].concat();
+    let height = [
+        [1.0, 3.06, 2.0, 2.5, 2.9, 3.0, 1.0, 0.0],
+        [1.0, 3.15, 2.0, 2.5, 2.9, 3.0, 1.0, 0.0],
+    ]
+    .concat();
+    assert_eq!(
+        wavesim::break_line(&height, &bed, 8, 2, 0, 0.0),
+        vec![Some(5), Some(1)]
+    );
+}
+
+/// The first harmonic along a row of `depth`s `dx` apart: an incident wave of amplitude 1 and a
+/// reflected one of amplitude `r`, `lag` radians behind, both shoaling as `1 / sqrt(c_g)`.
+fn standing(depth: &[f64], dx: f64, period: f64, r: f64, lag: f64) -> Vec<(f64, f64)> {
+    let omega = std::f64::consts::TAU / period;
+    let mut phase = 0.0;
+    depth
+        .iter()
+        .map(|&h| {
+            let w = linear_wave(omega, h, true);
+            let mid = phase + 0.5 * w.k * dx;
+            phase += w.k * dx;
+            let s = w.group_speed.powf(-0.5);
+            (
+                s * (mid.cos() + r * (mid + lag).cos()),
+                s * (-mid.sin() + r * (mid + lag).sin()),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn the_reflection_is_the_returning_waves_share_of_the_first_harmonic() {
+    use wavesim::reflection;
+    let (dx, period) = (3.0, 13.0);
+    // A wavelength of flat 5 m water (88 m: 30 cells), and of a 1:25 slope from 8 to 4.4 m.
+    let flat = vec![5.0; 30];
+    let slope: Vec<f64> = (0..30)
+        .map(|i| 8.0 - (i as f64 + 0.5) * dx / 25.0)
+        .collect();
+    for depth in [&flat, &slope] {
+        for (r, lag) in [(0.0, 0.0), (0.25, 0.7), (0.6, -2.0)] {
+            let got = reflection(&standing(depth, dx, period, r, lag), depth, dx, period).unwrap();
+            assert!((got - r).abs() < 1e-9, "{r} came back as {got}");
+        }
+    }
+    // A wave travelling the other way only is all reflection; so the incident one is the +x one.
+    let back: Vec<(f64, f64)> = standing(&flat, dx, period, 0.0, 0.0)
+        .into_iter()
+        .map(|(re, im)| (re, -im))
+        .collect();
+    assert!(reflection(&back, &flat, dx, period).is_none_or(|r| r > 1e6));
+    // Too short a stretch to tell the two apart, a cell too shallow, or nothing at all: no answer.
+    let short = &flat[..5];
+    assert_eq!(
+        reflection(&standing(short, dx, period, 0.25, 0.7), short, dx, period),
+        None
+    );
+    let mut dry = flat.clone();
+    dry[10] = 0.2;
+    assert_eq!(
+        reflection(&standing(&dry, dx, period, 0.25, 0.7), &dry, dx, period),
+        None
+    );
+    assert_eq!(reflection(&[], &[], dx, period), None);
+}
+
+#[test]
+fn the_first_harmonic_is_fitted_from_unevenly_spaced_samples() {
+    // eta = 0.4 + 1.5 cos(w t) - 0.8 sin(w t) in cell 0 and a still surface in cell 1, sampled
+    // over two periods at steps that lengthen and shorten.
+    let period = 10.0;
+    let omega = std::f64::consts::TAU / period;
+    let mut h = wavesim::FirstHarmonic::new(period, 2);
+    let mut t = 0.0;
+    let mut k = 0;
+    while t < 2.0 * period {
+        let dt = 0.05 + 0.04 * f64::from(k % 5);
+        t += dt;
+        k += 1;
+        let w = h.weights(t, dt);
+        h.add(
+            0,
+            0.4 + 1.5 * (omega * t).cos() - 0.8 * (omega * t).sin(),
+            w,
+        );
+        h.add(1, 0.0, w);
+    }
+    let a = h.amplitudes().unwrap();
+    assert!(
+        (a[0].0 - 1.5).abs() < 1e-9 && (a[0].1 - 0.8).abs() < 1e-9,
+        "{:?}",
+        a[0]
+    );
+    assert!(a[1].0.abs() < 1e-12 && a[1].1.abs() < 1e-12);
+    // A tenth of a period cannot tell a mean from a cosine.
+    let mut short = wavesim::FirstHarmonic::new(period, 1);
+    for i in 0..10 {
+        let w = short.weights(0.1 * f64::from(i), 0.1);
+        short.add(0, 1.0, w);
+    }
+    assert!(short.amplitudes().is_none());
+}
+
+#[test]
+fn a_wave_that_breaks_within_half_a_wavelength_of_the_shoreline_is_a_shore_break() {
+    // One row of 1 m cells: flat 6 m water, then a 1:2 rock face to dry land at x = 112 m. A 13 s
+    // swell is about 97 m long in 6 m: breaking at x = 70 m, 42 m out, is a shore break, and with
+    // the face 100 m further in (the shoreline 142 m beyond the break) it is not.
+    let face = |x0: f64| -> Vec<f32> {
+        (0..400)
+            .map(|i| {
+                let x = i as f64 + 0.5;
+                (-6.0f64).max(-6.0 + (x - x0) / 2.0).min(3.0) as f32
+            })
+            .collect()
+    };
+    let height: Vec<f64> = (0..400).map(|i| if i == 70 { 3.0 } else { 1.0 }).collect();
+    let near =
+        wavesim::break_points(&height, &face(100.0), 400, 1, 1.0, 0, 0.0, 13.0, None)[0].unwrap();
+    let far =
+        wavesim::break_points(&height, &face(200.0), 400, 1, 1.0, 0, 0.0, 13.0, None)[0].unwrap();
+    assert_eq!((near.column, far.column), (70, 70));
+    assert!(near.shore_break && !far.shore_break);
 }
 
 #[test]
