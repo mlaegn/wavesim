@@ -2,20 +2,33 @@
 # Run V1 (docs/3d-box.md) at one cell size, guarded so the laptop stays quiet:
 #
 #   cases/v1-steep/run.sh 0.4 1200     # cell size in metres, wall-clock limit in seconds
+#   cases/v1-steep/run.sh 0.1 5400 --iso --from 0.1@14.5        # interIsoFoam from that run
+#   cases/v1-steep/run.sh 0.05 10800 --x0 170 --from 0.1@14.5   # finer, the tank cut at 170 m
 #
 # OpenFOAM runs in Docker on one core. Every 30 s a watchdog reads macOS's thermal state and
 # stops the run at anything above nominal, or once the limit has passed; caffeinate keeps the
 # Mac awake only while this script runs. The case goes to out/foam-v1-steep-<dx>/, its log of
-# thermal readings to watchdog.log there. Exit status: 0 finished, 2 stopped by heat, 3 by time.
+# thermal readings to watchdog.log there; a variant's case is named after its flags too
+# (out/foam-v1-steep-0.1-iso/, out/foam-v1-steep-0.05-x170/). Exit status: 0 finished, 2 stopped by heat, 3 by time.
 set -euo pipefail
 
 dx=${1:?cell size in metres}
 limit=${2:?wall-clock limit in seconds}
+shift 2
+solver=interFoam suffix="" mesh_args=() from=""
+while [ $# -gt 0 ]; do
+    case $1 in
+        --iso) solver=interIsoFoam; suffix+="-iso"; shift ;;
+        --x0) mesh_args+=(--x0 "$2"); suffix+="-x$2"; shift 2 ;;
+        --from) from=$2; shift 2 ;;
+        *) echo "unknown option $1" >&2; exit 1 ;;
+    esac
+done
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
-case_dir="$root/out/foam-v1-steep-$dx"
+case_dir="$root/out/foam-v1-steep-$dx$suffix"
 image=opencfd/openfoam-default:2512
-name="v1-steep-${dx//./_}"
+name="v1-steep-${dx//./_}$suffix"
 thermal="$root/out/foam-tools/thermal"
 
 caffeinate -is -w $$ &
@@ -39,15 +52,20 @@ foam() { docker run --rm --cpus 1 -m 4g -v "$case_dir:/case" "$image" bash -lc "
 
 if [ ! -f "$case_dir/0/C" ]; then
     rm -rf "$case_dir"
-    py mesh --dx "$dx" --out "$case_dir"
+    py mesh --dx "$dx" --solver "$solver" ${mesh_args[@]+"${mesh_args[@]}"} --out "$case_dir"
     foam 'blockMesh > log.blockMesh 2>&1 && checkMesh > log.checkMesh 2>&1 &&
           postProcess -func writeCellCentres -time 0 > log.centres 2>&1'
-    py init --out "$case_dir" | tee "$case_dir/log.init"
+    if [ -n "$from" ]; then
+        py restart --from "$root/out/foam-v1-steep-${from%@*}" --time "${from#*@}" --out "$case_dir" \
+            | tee "$case_dir/log.init"
+    else
+        py init --out "$case_dir" | tee "$case_dir/log.init"
+    fi
 fi
 
 log="$case_dir/watchdog.log"
 docker run -d --rm --name "$name" --cpus 1 -m 4g -v "$case_dir:/case" "$image" \
-    bash -lc 'cd /case && interFoam > log.interFoam 2>&1' >/dev/null
+    bash -lc "cd /case && $solver > log.interFoam 2>&1" >/dev/null
 start=$(date +%s)
 echo "$(date '+%F %T') started $name, limit ${limit}s" | tee -a "$log"
 status=0

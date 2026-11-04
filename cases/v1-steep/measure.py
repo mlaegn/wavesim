@@ -3,12 +3,18 @@
 The surface is the `alpha.water = 0.5` contour of each saved frame. On it, as in waveslice:
 
 - **face vertical** (the slice's `curl`): the first frame in which the front face, followed from
-  the crest down to half its height, runs back on itself along x by more than a quarter of a
-  cell: the face has passed vertical. Its x is where the overhang starts, its crest the highest
-  point of the surface then, its depth the still water under it.
-- **landing**: the first frame with a pocket of air closed off by water, near and shoreward of
-  the face: the lip has reached the water ahead. Its x is the pocket's shoreward end, the throw
-  that less the face's x, and the tube the pocket's area, width and height.
+  the crest down to half its height, runs back on itself along x by at least 10 cm, and goes
+  on doing so for the next 0.1 s: the face has passed vertical. Its x is where the overhang
+  starts, its crest the highest point of the surface then, its depth the still water under it.
+- **landing**: the first frame with a pocket of air of at least 0.1 m² closed off by water,
+  near and shoreward of the face: the lip has reached the water ahead. Its x is the pocket's
+  shoreward end, the throw that less the face's x, and the tube the pocket's area, width and
+  height.
+
+The limits are in metres, the same at every cell size, so that finer cells do not lower them.
+waveslice's surface is smooth, and any fold-back there is the face. A VOF surface also has
+spray thrown off the crest, which folds back by up to 0.3 m for a frame or two, and bubbles of
+up to 0.03 m², and the finer the cells the more of both it resolves.
 
     measure.py out/foam-v1-steep-0.4 [--slice out/slice-steep]
 
@@ -90,11 +96,16 @@ def closed(p, tol):
     return np.hypot(*(p[0] - p[-1])) < tol
 
 
+FOLD = 0.1  # m, the least fold-back that counts as an overhang
+LASTING = 0.1  # s, for how long it must last
+POCKET = 0.1  # m², the least pocket of air that counts as a tube
+
+
 def air_pockets(lines, grid, a):
     """Closed contours with air inside: the cells whose centres fall inside are mostly air."""
     out = []
     for p in lines:
-        if not closed(p, 1e-6) or polygon_area(p) < 2 * grid.dx * grid.dx * 0.2:
+        if not closed(p, 1e-6) or polygon_area(p) < POCKET:
             continue
         inside = Polygon(p).contains_points(np.c_[grid.x.ravel(), grid.z.ravel()])
         if inside.any() and a.ravel()[inside].mean() < 0.5:
@@ -152,18 +163,26 @@ def main():
     p.add_argument("--slice", type=Path, default=Path("out/slice-steep"))
     a = p.parse_args()
     grid = Grid(a.case)
-    tol = 0.25 * grid.dx
     curl = landing = None
     kept = {}
-    for t, path in frames(a.case, grid.meta["frames_from"]):
-        lines, alpha = grid.surfaces(read_scalars(path))
-        surface = main_surface(lines)
-        back, at = overhang(surface)
-        if curl is None and back > tol:
+    all_frames = frames(a.case, grid.meta["frames_from"])
+    faces = []
+    for t, path in all_frames:
+        surface = main_surface(grid.surfaces(read_scalars(path))[0])
+        faces.append((t, surface, *overhang(surface)))
+    for i, (t, surface, back, at) in enumerate(faces):
+        ahead = [f for f in faces[i:] if f[0] <= t + LASTING + 1e-9]
+        if ahead[-1][0] >= t + LASTING - 1e-9 and all(f[2] >= FOLD for f in ahead):
             curl = {"time": t, "x": float(at[0]), "crest": float(surface[:, 1].max()),
                     "depth": grid.still_depth(at[0]), "overhang": float(back)}
             kept["curl"] = (t, surface, [])
-        if curl is not None and landing is None:
+            break
+    for t, path in all_frames if curl else []:
+        if t < curl["time"]:
+            continue
+        lines, alpha = grid.surfaces(read_scalars(path))
+        surface = main_surface(lines)
+        if landing is None:
             pockets = [q for q in air_pockets(lines, grid, alpha)
                        if q[:, 0].max() > curl["x"] - 2 * grid.dx and q[:, 0].min() < curl["x"] + 30]
             if pockets:

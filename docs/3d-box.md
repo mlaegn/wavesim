@@ -172,50 +172,60 @@ These are guesses, good to a factor of about three. Milestone 0 replaces them wi
 | **P1** | Pipeline box, tier A | the slices at 481.5, 511.5 (50 m strip) and 541.5: tubes 0.6 to 0.7 m | — this is the answer |
 | **P2** | Pipeline box, tier B | P1 | a tube the same size within 20% between tiers, or else the result is not converged and the report says so |
 
-V1 to V3 are cheap: 2D cases take minutes, and V3 can use a short box. They fit on the laptop
+V1 to V3 are cheap: 2D cases take minutes to two hours on one core, and V3 can use a short box. They fit on the laptop
 under the usual guard, a time limit plus thermal readings. One difference from wavesim's runs:
 inside OrbStack's VM, a run cannot be pinned to the efficiency cores. The VM should be limited
 to 4 CPUs, and the thermal readings taken as before.
 
-### V1 result, 2026-11-04: the face passes, the tube does not
+### V1 result, 2026-11-04: OpenFOAM converges, on a smaller tube than waveslice's
 
-`cases/v1-steep/`: `make_case.py` builds the case, `run.sh <dx> <limit>` runs it on one core under
-the guard, and `measure.py` measures it as `wavesim slice` does. Thermal state stayed nominal
-throughout all three runs. `interFoam` cost 1.7 µs per cell-step on one core in 2D.
+`cases/v1-steep/`: `make_case.py` builds the case, `run.sh` runs it on one core under the guard,
+and `measure.py` measures it as `wavesim slice` does. The thermal state stayed nominal
+throughout all five runs. `interFoam` cost 1.7 µs per cell-step on one core in 2D.
 
-| | waveslice | 0.4 m | 0.2 m | 0.1 m |
-|---|---|---|---|---|
-| Cells, wall time | — | 22,575, 2 min | 90,300, 14 min | 361,200, 1 h 46 min |
-| Face vertical | 15.97 s, 222.26 m | 15.75 s, 220.56 m | 15.78 s, 220.55 m | 15.75 s, 220.42 m |
-| Crest then | 3.27 m | 3.03 m (−7%) | 3.13 m (−4%) | 3.14 m (−4%) |
-| Lip lands | 16.93 s | 16.80 s | 16.80 s | 16.62 s |
-| Lip thrown | 10.72 m | 11.13 m | 10.90 m | 8.93 m (−17%) |
-| Tube, height × width | 1.61 × 3.14 m | 0.98 × 3.25 m | 1.49 × 2.80 m | 1.75 × 1.85 m |
-| Tube area | 3.16 m² | 0.97 m² (−69%) | 1.60 m² (−49%) | 1.37 m² (−57%) |
+The first three runs went from the solitary wave at 0 s. The last two started from the 0.1 m
+run at 14.5 s, when it still lay on waveslice's surface. One used `interIsoFoam` (isoAdvector,
+plicRDF), which keeps the surface within one cell where `interFoam`'s MULES spreads it over
+two. The other used 0.05 m cells, in a tank cut at x = 170 m. The cut keeps all the water
+(246.20 m² either way). What the new wall sends shoreward cannot reach the break before about
+21 s.
 
-The face and the crest pass at 0.2 and 0.1 m, and the face has converged: 220.4–220.6 m at all
-three sizes, 1.8 m short of waveslice's. The tube fails at every size, and it has not converged
-either: the width and the throw still change from 0.2 to 0.1 m.
+| | waveslice | 0.4 m | 0.2 m | 0.1 m | 0.1 m, isoAdvector | 0.05 m |
+|---|---|---|---|---|---|---|
+| Cells, wall time | — | 22,575, 2 min | 90,300, 14 min | 361,200, 1 h 46 min | from 14.5 s, 42 min | 492,800, from 14.5 s, 1 h 51 min |
+| Face vertical | 15.97 s, 222.26 m | 15.75 s, 220.56 m | 15.88 s, 221.48 m | 15.82 s, 221.14 m | 15.78 s, 220.70 m | 15.75 s, 220.46 m |
+| Crest then | 3.27 m | 3.03 m | 3.14 m | 3.14 m | 3.14 m | 3.15 m |
+| Lip lands | 16.93 s | 16.80 s | 16.80 s | 16.62 s | 16.55 s | 16.52 s |
+| Lip thrown | 10.72 m | 11.13 m | 9.97 m | 8.22 m | 7.77 m | 7.67 m |
+| Tube, height × width | 1.61 × 3.14 m | 0.98 × 3.25 m | 1.49 × 2.80 m | 1.75 × 1.85 m | 1.64 × 1.53 m | 1.54 × 1.41 m |
+| Tube area | 3.16 m² | 0.97 m² | 1.60 m² | 1.37 m² | 1.20 m² | 1.14 m² |
 
-Frame by frame, the two methods agree up to 15.6 s, and the 0.2 and 0.1 m surfaces lie on
-waveslice's. From 15.9 s they part. waveslice's crest keeps rising to 3.3 m and throws the lip
-from the top, with the face vertical below it. OpenFOAM's crest stops at about 3.15 m, and its
-jet leaves the face lower down, at about 2.2–2.5 m. The two lips reach about as far shoreward
-at the same moment, but OpenFOAM's falls more steeply and lands 2–4 m sooner, over a tube of
-about the same height and half the area.
+**Against the gate:** the face passes at every size, within 0.8–1.8 m of waveslice's. The crest
+passes from 0.2 m down: it is 4% low. The tube fails at every size. OpenFOAM's tube is as tall
+as waveslice's, but half as wide, with a third of the area, and its lip is thrown 7.7 m rather
+than 10.7.
 
-Which one is right is open. Potential-flow BEM is known to follow lab overturning closely up to
-touchdown. Algebraic VOF (MULES) smears a lip that is only 3–5 cells thick at 0.1 m. Two 2D
-checks could tell them apart, each one core for a few hours:
+**But OpenFOAM has converged.** From 0.1 to 0.05 m the area changes by 17%, the height by 12%
+and the throw by 7%. A sharper surface on the same 0.1 m cells moves it the same way, and by
+less than the cells do. Frame by frame, the three finest runs lie on one another until the lip
+lands, and differ only in the splash after that. The difference from waveslice is therefore not
+the smearing or the cell size. It lies between the two models: a viscous fluid with air above
+it, against potential flow. Both agree to 15.6 s. After that, waveslice's crest goes on rising,
+to 3.3 m, and throws the lip from the top. OpenFOAM's crest stops at 3.15 m, and its jet leaves
+the face lower down. The lips reach about as far shoreward at the same moment, but OpenFOAM's
+falls more steeply.
 
-- **Sharper interface:** the 0.1 m case with `interIsoFoam` (geometric isoAdvector) in place of
-  `interFoam`. If the lip moves towards waveslice, the smearing was the cause.
-- **Finer cells only at the break:** 0.05 m over x 210–240, z −1 to +4, and 0.1 m elsewhere.
-  If the tube still changes from 0.1 to 0.05 m, no fixed mesh that fits in 3D will measure it,
-  and Basilisk's adaptive octree becomes the route, not plan B.
+Which model is right needs a lab measurement. Potential-flow BEM is known to follow lab
+overturning closely up to touchdown, but that does not settle this case. The next check is
+both codes against a published lab case of a solitary wave plunging on a slope near 1 in 15,
+with surface profiles through the overturn (*to be found*; Li & Raichlen's 1 in 15 runs are a
+candidate to look at).
 
-Until one of them passes, tier A's 0.5 m cells and tier B's 0.25 m cells are known to be too
-coarse for the tube. At 0.4 m the area came out at a third of waveslice's.
+**For the 3D box:** the tube needs 0.1 m cells around the break. At 0.2 m the area is 40% above
+the converged one, and at 0.4 m the lip is lost. Tier A's 0.5 m cells can tell whether there is
+a barrel, but not its size. Tier B's 0.25 m is too coarse as well. At 0.1 m, tier B becomes
+about 100 M cells, beyond the laptop and expensive on a rented machine. That is where
+Basilisk's adaptive octree pays for itself: it puts fine cells only where the surface is.
 
 ## Risks and open choices
 
