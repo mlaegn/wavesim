@@ -40,19 +40,21 @@ The box is a third level of nesting, set up like the coarse-to-fine one that alr
 fine run already feeds a relaxation zone from the coarse one. Here, the fine run would record
 the sea along three edges of the box for the 3D solver to use as inflow.
 
-## Why OpenFOAM, and not something written here
+## Which solver, and not something written here
 
 | Option | What it would take | Verdict |
 |---|---|---|
 | Write a 3D two-phase Navier–Stokes VOF solver in Rust | Years of work, and a solver that has to be validated from scratch | No |
 | Extend `waveslice` to a 3D boundary element method (Grilli et al. 2001) | The 2D dense solve already takes 8 to 27 min per break and grows with the cube of the node count. In 3D the node count is roughly squared, so it would need a fast multipole method first | No: a research project in itself |
-| **OpenFOAM** (`interFoam`, VOF, ESI release v2512) | Glue code only: export inflow, mesh the bed, measure the result | **Yes.** It is the field's open standard for breaking waves, and arm64 Docker images run natively on the M5 |
-| Basilisk (octree VOF, Popinet) | Adaptive mesh, so cells only where the surface is, which is far cheaper for a lip. Real seabeds are less well supported, and the community is smaller | Plan B, if the fixed mesh is too slow |
+| OpenFOAM (`interFoam`, VOF, ESI release v2512) | Glue code only: export inflow, mesh the bed, measure the result | The first choice, dropped after V1: its tube stayed at a third to a half of waveslice's and the measured ones at every cell size, solver and time step tried |
+| Basilisk (octree VOF, Popinet) | Adaptive mesh, so cells only where the surface is, which is far cheaper for a lip. Real seabeds are less well supported, and the community is smaller | **Yes, after V1** (2026-11-05): it gives waveslice's tube, which OpenFOAM did not, at a seventh of the cells. See the V1 results |
 | SPH (DualSPHysics) | Fast on a CUDA GPU, which this machine does not have | No |
 
 This keeps to the project's rule of verification first. The new code is the coupling, and the
 coupling is what gets tested. OpenFOAM's VOF has been validated against breaking waves by
-others. What has to be shown here is that it agrees with `waveslice` where both apply.
+others. What has to be shown here is that it agrees with `waveslice` where both apply. OpenFOAM
+did not (V1, below), and Basilisk did, so the box is now planned in Basilisk. The build plan
+below still names OpenFOAM's pieces, and is to be redone for Basilisk.
 
 **Physics the box adds that a slice lacks:** the second horizontal direction (peel, the crest
 varying along its length, flow along the shore), air, viscosity, and life after the lip lands
@@ -248,14 +250,61 @@ sign of that, but V1 has not shown that it is the cause. Basilisk can carry mome
 volume fraction itself (`navier-stokes/conserving.h`), which is made for large density ratios,
 and Feddersen et al. (2024) reproduced the Surf Ranch with it as a code.
 
-**Next: V1 in Basilisk**, on the same seabed and solitary wave, measured the same way. If it
-gives waveslice's tube, Basilisk is the tool for the box. If it gives OpenFOAM's, waveslice is
-the one to question, despite the measurements.
+### V1 in Basilisk, 2026-11-05: it passes, and it gives waveslice's tube
 
-**For the 3D box:** the time step can stay at Co 0.5, since 0.05 changed nothing. The cell size
-stays at 0.1 m around the break, which at tier B is about 100 M cells on a fixed mesh. Basilisk's
-adaptive octree puts fine cells only where the surface is, so it is the better choice there in any
-case.
+`cases/v1-basilisk/`: `v1.c` is the case, `run.sh` compiles and runs it on one core under the
+same guard, and `measure.py` reads its frames. Basilisk is built from its source tarball in
+`out/basilisk/`, inside the OpenFOAM image, which has the compiler. The set-up follows
+Feddersen et al. (2024):
+- two-phase Navier-Stokes with momentum-conserving VOF (`navier-stokes/conserving.h`);
+- reduced gravity;
+- the bed as an embedded boundary;
+- a quadtree refined on the surface, the bed and the velocity, with no cell larger than 0.5 m.
+
+Same tank, wave, fluids and free-slip walls as the OpenFOAM case. The top is at +8.1 m rather
+than +6 m, because Basilisk cuts the square domain only along cell edges. Water is conserved to
+0.01%, and to 14.5 s the wave lies on OpenFOAM's and waveslice's (crest 3.0 m at 206.5 m). The
+thermal state stayed nominal throughout.
+
+| | waveslice | Basilisk 0.25 m | 0.126 m | 0.063 m | OpenFOAM 0.05 m |
+|---|---|---|---|---|---|
+| Cells (most at once), wall time | — | 23,845, 1.5 min | 40,129, 4 min | 76,261, 18 min | 492,800, from 14.5 s, 1 h 51 min |
+| Face vertical | 15.97 s, 222.26 m | 16.23 s, 224.56 m | 16.10 s, 223.48 m | 16.10 s, 223.51 m | 15.75 s, 220.46 m |
+| Crest then | 3.27 m | 3.31 m | 3.23 m | 3.22 m | 3.15 m |
+| Lip lands | 16.93 s | 17.07 s | 16.98 s | 16.95 s | 16.52 s |
+| Lip thrown | 10.72 m | 9.25 m | 9.75 m | 9.35 m | 7.67 m |
+| Tube, height × width | 1.61 × 3.14 m | 1.21 × 2.84 m | 1.42 × 3.00 m | 1.49 × 2.83 m | 1.54 × 1.41 m |
+| Tube area | 3.16 m² | 1.89 m² | 2.42 m² | 2.55 m² | 1.14 m² |
+| A/H² | 0.30 | 0.17 | 0.23 | 0.25 | 0.12 |
+
+**Against the gate, at 0.063 m:** the face goes vertical 1.25 m shoreward of waveslice's (within
+2 m), the crest is 1.7% low (within 5%), and the tube is 19% small (within 20%). V1 passes. At
+0.126 m the tube is 23% small, just outside the gate.
+
+**It has converged.** From 0.126 to 0.063 m the area grows by 5%, after 28% the step before, so
+finer cells would add about 0.05 m² more (*Richardson estimate*). Frame by frame, the two finest
+runs lie on each other, and both lie on waveslice until the lip lands, the overturn included. The
+only visible difference is the last metre of the lip, which in Basilisk is thinner and falls a
+little sooner, 9.35 m out where waveslice's goes 10.72 m. That is where most of the 19% is. A
+VOF lip a few cells thick can break up or fall, while a potential-flow lip has no thickness
+limit, so some of the gap is expected.
+
+**The air stays calm.** Within 1 m above the crest, Basilisk's air moves onshore at -0.5 to
++1.2 m/s on average from 14.5 to 16 s, with 95% of it below 4-9 m/s. OpenFOAM's moved at
+7-11 m/s on average, at either Courant number. The same air-water coupling that Basilisk's
+conserving scheme is built for is the likeliest reason for OpenFOAM's small tube: an onshore
+layer of air that fast acts as a strong onshore wind, and Feddersen measured that onshore wind
+shrinks the overturn.
+
+**Cost:** 4.5 µs per cell-step on one core, against interFoam's 1.7. But the quadtree needed a
+seventh of OpenFOAM's cells at a finer size, so the whole tank from 0 s took 18 min, where
+OpenFOAM's last 4 s at 0.05 m took 1 h 51 min.
+
+**For the 3D box:** Basilisk replaces OpenFOAM, at 0.063 m on the surface (258 m / 2^12, the
+level V1 passed at). The time step stays at Basilisk's own CFL 0.5. The box needs one thing V1
+did not: the inflow and the sides fed from a 2D run, in place of a solitary wave in a closed
+tank. This, the octree's cost in 3D, and the open choices in the build plan above, which was
+written for OpenFOAM, are the next things to work out.
 
 References for this section:
 

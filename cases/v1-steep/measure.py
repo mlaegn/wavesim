@@ -17,6 +17,10 @@ spray thrown off the crest, which folds back by up to 0.3 m for a frame or two, 
 up to 0.03 m², and the finer the cells the more of both it resolves.
 
     measure.py out/foam-v1-steep-0.4 [--slice out/slice-steep]
+    measure.py out/basilisk-v1-L12          # a Basilisk run of cases/v1-basilisk/
+
+A Basilisk run writes f on a uniform grid over the break (its `case.json` says where), with the
+bed counted as water, and is contoured the same way.
 
 Writes `measure.json` and `compare.png` into the case.
 """
@@ -62,6 +66,7 @@ class Grid:
     fastest, then z, block after block along x."""
 
     def __init__(self, case: Path):
+        self.case = case
         self.meta = json.loads((case / "case.json").read_text())
         self.nz = self.meta["nz"]
         self.order = []
@@ -77,14 +82,45 @@ class Grid:
             "cells are not in the expected order"
         self.dx = self.meta["dx"]
 
+    def read(self, path):
+        return read_scalars(path)[self.order]
+
+    def frames(self, start):
+        return frames(self.case, start)
+
     def still_depth(self, x):
         xs, ds = zip(*self.meta["profile"])
         return float(np.interp(x, xs, ds))
 
-    def surfaces(self, alpha):
-        a = alpha[self.order]
+    def surfaces(self, a):
         lines = contourpy.contour_generator(self.x, self.z, a, line_type="Separate").lines(0.5)
         return [ln for ln in lines if len(ln) >= 3], a
+
+
+class BasiliskGrid(Grid):
+    """A Basilisk run's samples: f at the centres of a uniform grid of the finest cells over
+    the window x0-x1, z0-z1, as float32 rows of constant z from the bottom up."""
+
+    def __init__(self, case: Path):
+        self.case = case
+        self.meta = json.loads((case / "case.json").read_text())
+        self.dx = self.meta["dx"]
+        x0, _, z0, _ = self.meta["window"]
+        nx, nz = self.meta["nx"], self.meta["nz"]
+        self.x, self.z = np.meshgrid(x0 + (np.arange(nx) + 0.5) * self.dx,
+                                     z0 + (np.arange(nz) + 0.5) * self.dx)
+
+    def read(self, path):
+        return np.fromfile(path, dtype="<f4").reshape(self.x.shape).astype(float)
+
+    def frames(self, start):
+        out = [(float(p.stem[2:]), p) for p in (self.case / "frames").glob("f-*.bin")]
+        return sorted(f for f in out if f[0] >= start - 1e-9)
+
+
+def load_grid(case: Path):
+    meta = json.loads((case / "case.json").read_text())
+    return BasiliskGrid(case) if meta.get("code") == "basilisk" else Grid(case)
 
 
 def polygon_area(p):
@@ -162,13 +198,13 @@ def main():
     p.add_argument("case", type=Path)
     p.add_argument("--slice", type=Path, default=Path("out/slice-steep"))
     a = p.parse_args()
-    grid = Grid(a.case)
+    grid = load_grid(a.case)
     curl = landing = None
     kept = {}
-    all_frames = frames(a.case, grid.meta["frames_from"])
+    all_frames = grid.frames(grid.meta["frames_from"])
     faces = []
     for t, path in all_frames:
-        surface = main_surface(grid.surfaces(read_scalars(path))[0])
+        surface = main_surface(grid.surfaces(grid.read(path))[0])
         faces.append((t, surface, *overhang(surface)))
     for i, (t, surface, back, at) in enumerate(faces):
         ahead = [f for f in faces[i:] if f[0] <= t + LASTING + 1e-9]
@@ -180,7 +216,7 @@ def main():
     for t, path in all_frames if curl else []:
         if t < curl["time"]:
             continue
-        lines, alpha = grid.surfaces(read_scalars(path))
+        lines, alpha = grid.surfaces(grid.read(path))
         surface = main_surface(lines)
         if landing is None:
             pockets = [q for q in air_pockets(lines, grid, alpha)
@@ -208,7 +244,7 @@ def main():
         ("tube width (m)", landing and landing["tube_width"], s["landing"]["tube_width"]),
         ("tube area (m²)", landing and landing["tube_area"], s["landing"]["tube_area"]),
     ]
-    print(f"{a.case.name}: {grid.x.size} cells, {grid.dx} m")
+    print(f"{a.case.name}: {grid.x.size} cells, {grid.dx:.3g} m")
     print(f"{'':32} {'OpenFOAM':>10} {'waveslice':>10} {'diff':>8}")
     for name, f, w in rows:
         fs = f"{f:10.2f}" if f is not None else f"{'—':>10}"
