@@ -74,7 +74,7 @@ def blocks(dx: float, x0: float = 0.0):
     return xs, nx, nz
 
 
-def mesh(case: Path, dx: float, x0: float = 0.0, solver: str = "interFoam") -> None:
+def mesh(case: Path, dx: float, x0: float = 0.0, solver: str = "interFoam", co: float = 0.5) -> None:
     xs, nx, nz = blocks(dx, x0)
     t = dx
     vertices = []
@@ -134,8 +134,8 @@ timeFormat      general;
 timePrecision   8;
 runTimeModifiable no;
 adjustTimeStep  yes;
-maxCo           0.5;
-maxAlphaCo      0.5;
+maxCo           {co};
+maxAlphaCo      {co};
 maxDeltaT       0.05;
 
 functions
@@ -235,7 +235,7 @@ sigma 0.07;
     field("volScalarField", "alpha.water", "[0 0 0 0 0 0 0]", "uniform 0",
           {"wall": "type zeroGradient;", "atmosphere": "type inletOutlet; inletValue uniform 0; value uniform 0;"})
     (case / "case.json").write_text(json.dumps({
-        "case": "v1-steep", "dx": dx, "solver": solver, "blocks_x": xs, "blocks_nx": nx, "nz": nz, "top": TOP,
+        "case": "v1-steep", "dx": dx, "solver": solver, "max_co": co, "blocks_x": xs, "blocks_nx": nx, "nz": nz, "top": TOP,
         "profile": PROFILE, "depth": DEPTH, "height": HEIGHT, "crest": CREST, "g": G,
         "end_time": END_TIME, "frames_from": FRAMES_FROM, "frame_every": FRAME_EVERY,
     }, indent=1))
@@ -372,12 +372,15 @@ def main() -> None:
     p.add_argument("--dx", type=float, default=0.4)
     p.add_argument("--x0", type=float, default=0.0, help="cut the tank here (mesh)")
     p.add_argument("--solver", choices=["interFoam", "interIsoFoam"], default="interFoam")
+    # Larsen, Fuhrman & Roenby (2019): at 0.5, interFoam's crests run too fast and the air above
+    # them faster still; they recommend about 0.05.
+    p.add_argument("--co", type=float, default=0.5, help="largest Courant number (mesh)")
     p.add_argument("--from", dest="src", type=Path, help="the finished case to start from (restart)")
     p.add_argument("--time", type=float, help="its time to start from (restart)")
     p.add_argument("--out", type=Path, required=True)
     a = p.parse_args()
     if a.step == "mesh":
-        mesh(a.out, a.dx, a.x0, a.solver)
+        mesh(a.out, a.dx, a.x0, a.solver, a.co)
     elif a.step == "init":
         init(a.out)
     else:

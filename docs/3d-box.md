@@ -142,8 +142,7 @@ These are guesses, good to a factor of about three. Milestone 0 replaces them wi
      side patches: `alpha` is 1 below `eta`, and `U` comes from item 2.
    - `fixedFluxPressure` on those patches, and an atmosphere on top (`totalPressure`,
      `pressureInletOutletVelocity`, `inletOutlet` on `alpha`).
-   - `maxCo` and `maxAlphaCo` of 0.5, which V1 showed to be too large (0.05 is likely, see
-     the V1 result). The model is laminar, because the comparison stops at
+   - `maxCo` and `maxAlphaCo` of 0.5: V1 at 0.05 gave the same tube. The model is laminar, because the comparison stops at
      landing, and RANS models over-produce turbulence under waves that have not broken (Larsen &
      Fuhrman 2018).
    - Function objects that write the `alpha = 0.5` iso-surface every 0.1 s during the break, plus
@@ -182,24 +181,24 @@ to 4 CPUs, and the thermal readings taken as before.
 
 `cases/v1-steep/`: `make_case.py` builds the case, `run.sh` runs it on one core under the guard,
 and `measure.py` measures it as `wavesim slice` does. The thermal state stayed nominal
-throughout all five runs. `interFoam` cost 1.7 µs per cell-step on one core in 2D.
+throughout all six runs. `interFoam` cost 1.7 µs per cell-step on one core in 2D.
 
-The first three runs went from the solitary wave at 0 s. The last two started from the 0.1 m
+Four runs went from the solitary wave at 0 s. Two started from the 0.1 m
 run at 14.5 s, when it still lay on waveslice's surface. One used `interIsoFoam` (isoAdvector,
 plicRDF), which keeps the surface within one cell where `interFoam`'s MULES spreads it over
 two. The other used 0.05 m cells, in a tank cut at x = 170 m. The cut keeps all the water
 (246.20 m² either way). What the new wall sends shoreward cannot reach the break before about
 21 s.
 
-| | waveslice | 0.4 m | 0.2 m | 0.1 m | 0.1 m, isoAdvector | 0.05 m |
-|---|---|---|---|---|---|---|
-| Cells, wall time | — | 22,575, 2 min | 90,300, 14 min | 361,200, 1 h 46 min | from 14.5 s, 42 min | 492,800, from 14.5 s, 1 h 51 min |
-| Face vertical | 15.97 s, 222.26 m | 15.75 s, 220.56 m | 15.88 s, 221.48 m | 15.82 s, 221.14 m | 15.78 s, 220.70 m | 15.75 s, 220.46 m |
-| Crest then | 3.27 m | 3.03 m | 3.14 m | 3.14 m | 3.14 m | 3.15 m |
-| Lip lands | 16.93 s | 16.80 s | 16.80 s | 16.62 s | 16.55 s | 16.52 s |
-| Lip thrown | 10.72 m | 11.13 m | 9.97 m | 8.22 m | 7.77 m | 7.67 m |
-| Tube, height × width | 1.61 × 3.14 m | 0.98 × 3.25 m | 1.49 × 2.80 m | 1.75 × 1.85 m | 1.64 × 1.53 m | 1.54 × 1.41 m |
-| Tube area | 3.16 m² | 0.97 m² | 1.60 m² | 1.37 m² | 1.20 m² | 1.14 m² |
+| | waveslice | 0.4 m | 0.2 m | 0.2 m, Co 0.05 | 0.1 m | 0.1 m, isoAdvector | 0.05 m |
+|---|---|---|---|---|---|---|---|
+| Cells, wall time | — | 22,575, 2 min | 90,300, 14 min | 90,300, 1 h 59 min | 361,200, 1 h 46 min | from 14.5 s, 42 min | 492,800, from 14.5 s, 1 h 51 min |
+| Face vertical | 15.97 s, 222.26 m | 15.75 s, 220.56 m | 15.88 s, 221.48 m | 15.90 s, 221.56 m | 15.82 s, 221.14 m | 15.78 s, 220.70 m | 15.75 s, 220.46 m |
+| Crest then | 3.27 m | 3.03 m | 3.14 m | 3.17 m | 3.14 m | 3.14 m | 3.15 m |
+| Lip lands | 16.93 s | 16.80 s | 16.80 s | 16.77 s | 16.62 s | 16.55 s | 16.52 s |
+| Lip thrown | 10.72 m | 11.13 m | 9.97 m | 9.27 m | 8.22 m | 7.77 m | 7.67 m |
+| Tube, height × width | 1.61 × 3.14 m | 0.98 × 3.25 m | 1.49 × 2.80 m | 1.50 × 2.42 m | 1.75 × 1.85 m | 1.64 × 1.53 m | 1.54 × 1.41 m |
+| Tube area | 3.16 m² | 0.97 m² | 1.60 m² | 1.68 m² | 1.37 m² | 1.20 m² | 1.14 m² |
 
 **Against the gate:** the face passes at every size, within 0.8–1.8 m of waveslice's. The crest
 passes from 0.2 m down: it is 4% low. The tube fails at every size. OpenFOAM's tube is as tall
@@ -227,28 +226,36 @@ air had matched the BEM of Grilli et al. (1997) (Guignard et al. 2001).
 Ours, with H the crest height at the curl: waveslice 3.16 / 3.27² = **0.30**, inside the
 measured range. OpenFOAM at 0.05 m: 1.14 / 3.15² = **0.12**, below all of them.
 
-**Why OpenFOAM is low: its time step.** Every run here used `maxCo 0.5` with the damBreak
-tutorial's settings. Larsen, Fuhrman & Roenby (2019) showed that exactly this makes interFoam's
-crest velocities too high, and its air move fast just above the surface. Even at Co 0.15, the
-crest velocity is 17% too high after five periods, against 0.1% at Co 0.05, and they recommend
-Co ≈ 0.05. A finer cell does not cure it, because Co stays the same. Ours shows both effects:
+**Not the time step.** Every run above but one used `maxCo 0.5` with the damBreak tutorial's
+settings. Larsen, Fuhrman & Roenby (2019) showed that this makes interFoam's crest velocities too
+high, and its air move fast just above the surface. They recommend Co ≈ 0.05. Ours showed both
+signs: the face went vertical 0.2 s early and up to 1.8 m offshore, and the air within 1 m above
+the crest moved onshore at 15–21 m/s, about twice the wave's speed of 10 m/s, from as early as
+10 s. Feddersen's measurements show that an onshore wind shrinks the overturn.
 
-- the face goes vertical 0.2 s early and 1.8 m offshore, as a crest moving too fast would;
-- the air within 1 m above the crest moves onshore at 15–21 m/s, about twice the wave's speed
-  of 10 m/s and three times the water's, from as early as 10 s. Feddersen's measurements show
-  that an onshore wind of 0.7 times the wave speed shrinks the overturn to A/H² ≈ 0.2. A
-  spurious one of twice the wave speed, in the layer that shapes the lip, would do more.
+So the 0.2 m case was run again from 0 s at Co 0.05 (2026-11-05, 1 h 59 min on one core). The tube
+did not move: 1.68 m² against 1.60 m² at Co 0.5, so A/H² 0.17 against 0.16, and waveslice's 0.30.
+The face goes vertical at the same time and place, within 0.1 m, and the jet is thrown 0.7 m
+shorter. Frame by frame, the two runs and the 0.05 m run lie on one another until the lip lands.
+The fast air stays too: its mean onshore speed within 1 m of the crest falls from 7–11 m/s to
+6–9 m/s, and it still peaks at 16–22 m/s.
 
-The next check is OpenFOAM at Co 0.05, from 0 s, at 0.2 m, where the run took 14 min at Co 0.5.
-It costs about ten times the steps, so 2 to 3 h on one core. If its tube moves to waveslice's,
-the cause is found, and the 3D box must budget Co 0.05. If it doesn't, Basilisk is the tool,
-since its setup is the one that matched the Surf Ranch.
+Six OpenFOAM runs now agree with one another: cells from 0.4 to 0.05 m, MULES and isoAdvector,
+Co 0.5 and 0.05. None of them comes near waveslice or the measurements. Whatever lowers the
+tube is in the method itself. The likeliest candidate is how interFoam couples the air and the
+water across the surface, where the density jumps by a factor of 1000: the fast air layer is a
+sign of that, but V1 has not shown that it is the cause. Basilisk can carry momentum with the
+volume fraction itself (`navier-stokes/conserving.h`), which is made for large density ratios,
+and Feddersen et al. (2024) reproduced the Surf Ranch with it as a code.
 
-**For the 3D box:** the cell size stays at 0.1 m around the break, and the time step will be
-about ten times smaller than the cost table assumes. At 0.1 m, tier B would be about 100 M
-cells, and then about 10 times the steps. Fixed meshes stop making sense there. Basilisk's
-adaptive octree puts fine cells only where the surface is, and it is what the Surf Ranch study
-used.
+**Next: V1 in Basilisk**, on the same seabed and solitary wave, measured the same way. If it
+gives waveslice's tube, Basilisk is the tool for the box. If it gives OpenFOAM's, waveslice is
+the one to question, despite the measurements.
+
+**For the 3D box:** the time step can stay at Co 0.5, since 0.05 changed nothing. The cell size
+stays at 0.1 m around the break, which at tier B is about 100 M cells on a fixed mesh. Basilisk's
+adaptive octree puts fine cells only where the surface is, so it is the better choice there in any
+case.
 
 References for this section:
 

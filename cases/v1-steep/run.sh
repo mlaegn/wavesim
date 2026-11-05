@@ -4,6 +4,7 @@
 #   cases/v1-steep/run.sh 0.4 1200     # cell size in metres, wall-clock limit in seconds
 #   cases/v1-steep/run.sh 0.1 5400 --iso --from 0.1@14.5        # interIsoFoam from that run
 #   cases/v1-steep/run.sh 0.05 10800 --x0 170 --from 0.1@14.5   # finer, the tank cut at 170 m
+#   cases/v1-steep/run.sh 0.2 18000 --co 0.05                   # a smaller time step
 #
 # OpenFOAM runs in Docker on one core. Every 30 s a watchdog reads macOS's thermal state and
 # stops the run at anything above nominal, or once the limit has passed; caffeinate keeps the
@@ -20,6 +21,7 @@ while [ $# -gt 0 ]; do
     case $1 in
         --iso) solver=interIsoFoam; suffix+="-iso"; shift ;;
         --x0) mesh_args+=(--x0 "$2"); suffix+="-x$2"; shift 2 ;;
+        --co) mesh_args+=(--co "$2"); suffix+="-co$2"; shift 2 ;;
         --from) from=$2; shift 2 ;;
         *) echo "unknown option $1" >&2; exit 1 ;;
     esac
