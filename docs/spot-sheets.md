@@ -160,7 +160,13 @@ in the score is untouched, and nothing waits on labels.
 Later, cheaply: mark the row nearest today's forecast direction, so the sheet answers "what
 does today's swell do here" without any new physics.
 
-Whether the section goes on the page at all is Max's call, after he has seen Coxos's sheet.
+Built 2026-11-06 in gogo: `web/src/SpotSheet.tsx` (the section, on Leaflet), `web/src/sheets.ts`
+(the types and the loader) and `web/src/sheets/coxos.json` (copied from `out/sheets/coxos.json`).
+Leaflet and a sheet load only on a spot that has one. The photo is DGT's OrtoSat2023 (30 cm, 2023,
+whole mainland; its WMS states no fees and no access constraints, though no licence is named),
+with Esri to switch to; the 2023 image happens to show waves breaking along the Coxos reef. The
+page does not yet open on today's forecast direction: the spot API does not return the swell's
+direction or the tide per hour.
 
 ## 5. Which spots
 
@@ -191,7 +197,7 @@ waits for the DGT 2 m data rather than going out wrong.
 2. Done 2026-11-04: the Coxos seabed as a script, and the bearing override (section 3).
 3. Done 2026-11-05: the 13 runs at Coxos.
 4. Done 2026-11-06: the reducer, the width check and the preview map.
-5. Max checks the Coxos map: the breaking zone, the four peaks, low against mid tide.
+5. Done 2026-11-06: Max checked the Coxos map, clipped to the spot: "fine enough for now".
 6. If it holds: the image source (DGT or Esri), then the map section on gogo's spot page, then
    Ribeira. If not: wait for DGT.
 7. When the DGT 2 m data arrives: rebuild the beds, rerun, and add the peel and pitch lines.

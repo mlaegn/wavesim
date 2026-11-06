@@ -4,8 +4,9 @@
     uv run --python 3.12 --with numpy --with scipy --with pyproj --with contourpy \
         tools/spot_sheet.py coxos
 
-The spot's `[name.sheet]` table in spots.toml lists the runs, one per open-sea direction and
-tide, and the band of rows to trust. For each run the sheet gives, in latitude and longitude:
+The spot's `[name.sheet]` table in spots.toml lists the runs, by swell (`[[name.sheet.swells]]`,
+each a height and period) and within a swell one per open-sea direction and tide, and the band of
+rows to trust. For each run the sheet gives, in latitude and longitude:
 
 - the breaking zone: cells where the surface is breaking in at least `zone_fraction` of the
   saved frames of the settled sea (every wave breaks there, roughly);
@@ -297,15 +298,17 @@ def tide_shift(mid: dict, low: dict) -> float | None:
     return round(float(np.median(d)), 1) if d else None
 
 
-def recurring_peaks(rows: list, min_s: float = 5.0, radius_m: float = 50.0) -> list:
-    """Takeoffs that recur across the runs: the bed's own peaks, which the swell's direction and
-    the tide only switch on and off. Greedy clusters of every takeoff standing out by `min_s`."""
+def recurring_peaks(swells: list, min_s: float = 5.0, radius_m: float = 50.0) -> list:
+    """Takeoffs that recur across the runs: the bed's own peaks, which the swell's size and
+    direction and the tide only switch on and off. Greedy clusters of every takeoff standing out
+    by `min_s`, over every swell."""
     hits = []
-    for r in rows:
-        for tide_name, t in r["tides"].items():
-            for p in t["takeoffs"]:
-                if p["stands_out_s"] >= min_s:
-                    hits.append((p["lat"], p["lon"], p["stands_out_s"], r["from_deg"], tide_name))
+    for sw in swells:
+        for r in sw["rows"]:
+            for tide_name, t in r["tides"].items():
+                for p in t["takeoffs"]:
+                    if p["stands_out_s"] >= min_s:
+                        hits.append((p["lat"], p["lon"], p["stands_out_s"], f"{sw['name']} {r['from_deg']}", tide_name))
     hits.sort(key=lambda h: -h[2])
     clusters = []
     for lat, lon, s, deg, tide_name in hits:
@@ -317,10 +320,41 @@ def recurring_peaks(rows: list, min_s: float = 5.0, radius_m: float = 50.0) -> l
                 break
         else:
             clusters.append({"lat": lat, "lon": lon, "runs": [[deg, tide_name]]})
-    runs = sum(len(r["tides"]) for r in rows)
+    runs = sum(len(r["tides"]) for sw in swells for r in sw["rows"])
     for c in clusters:
         c["share"] = round(len({tuple(x) for x in c["runs"]}) / runs, 2)
     return sorted(clusters, key=lambda c: -c["share"])
+
+
+def read_swell(cfg: dict, trust, level: float, area) -> dict:
+    """One swell's rows: a direction each, with its runs at each tide. Every run must have been
+    made with the swell this table names."""
+    rows = []
+    for entry in cfg["rows"]:
+        tides = {}
+        for tide_name in ("mid", "low"):
+            if tide_name not in entry:
+                continue
+            run = load_run(Path(entry[tide_name]))
+            w = run["header"]["waves"]
+            if (w["wave_height_m"], w["wave_period_s"]) != (cfg["height_m"], cfg["period_s"]):
+                raise ValueError(
+                    f"{entry[tide_name]} is a {w['wave_height_m']} m, {w['wave_period_s']} s run, "
+                    f"listed under the {cfg['height_m']} m, {cfg['period_s']} s swell"
+                )
+            tides[tide_name] = read_run(run, trust, level, area)
+            tides[tide_name]["run"] = entry[tide_name]
+        shift = tide_shift(tides["mid"], tides["low"]) if {"mid", "low"} <= tides.keys() else None
+        for v in tides.values():
+            v.pop("_rows")
+        rows.append({"from_deg": entry["from"], "at_maker_deg": entry["maker"], "low_tide_seaward_m": shift, "tides": tides})
+        mid = tides.get("mid") or {}
+        print(
+            f"{cfg['height_m']} m {cfg['period_s']} s from {entry['from']:3d} (maker {entry['maker']}): "
+            f"takeoff {mid.get('takeoff')} low tide moves it {shift} m seaward"
+        )
+    name = f"{cfg['height_m']:g} m, {cfg['period_s']:g} s"
+    return {"name": name, "height_m": cfg["height_m"], "period_s": cfg["period_s"], "rows": rows}
 
 
 def main(argv=None) -> int:
@@ -339,26 +373,7 @@ def main(argv=None) -> int:
     level = cfg.get("zone_fraction", 0.08)
     area = cfg.get("area")
 
-    rows, swell = [], None
-    for entry in cfg["rows"]:
-        tides = {}
-        for tide_name in ("mid", "low"):
-            if tide_name not in entry:
-                continue
-            run = load_run(Path(entry[tide_name]))
-            w = run["header"]["waves"]
-            swell = swell or {"height_m": w["wave_height_m"], "period_s": w["wave_period_s"]}
-            tides[tide_name] = read_run(run, trust, level, area)
-            tides[tide_name]["run"] = entry[tide_name]
-        shift = tide_shift(tides["mid"], tides["low"]) if {"mid", "low"} <= tides.keys() else None
-        for v in tides.values():
-            v.pop("_rows")
-        rows.append({"from_deg": entry["from"], "at_maker_deg": entry["maker"], "low_tide_seaward_m": shift, "tides": tides})
-        mid = tides.get("mid", {})
-        print(
-            f"{entry['from']:3d} (maker {entry['maker']}): takeoff {mid.get('takeoff')} "
-            f"near {mid.get('near_takeoff')} low tide moves it {shift} m seaward"
-        )
+    swells = [read_swell(s, trust, level, area) for s in cfg["swells"]]
 
     sheet = {
         "format": "wavesim-spot-sheet",
@@ -367,13 +382,12 @@ def main(argv=None) -> int:
         "description": spot.get("description"),
         "note": "model, not observation",
         "seabed": {"source": spot.get("source"), "cell_m": spot.get("cell_m"), "attribution": spot.get("attribution")},
-        "swell": swell,
         "zone_fraction": level,
         "trust_y_m": list(trust),
         "area": area,
         "generated": datetime.date.today().isoformat(),
-        "peaks": recurring_peaks(rows),
-        "rows": rows,
+        "peaks": recurring_peaks(swells),
+        "swells": swells,
     }
     for p in sheet["peaks"]:
         print(f"peak at {p['lat']:.5f}, {p['lon']:.5f}: in {p['share']:.0%} of the runs")
@@ -381,7 +395,7 @@ def main(argv=None) -> int:
     out.parent.mkdir(parents=True, exist_ok=True)
     text = json.dumps(sheet, separators=(",", ":"))
     out.write_text(text)
-    print(f"{out}: {len(rows)} directions, {out.stat().st_size / 1024:.0f} KB")
+    print(f"{out}: {len(swells)} swell(s), {sum(len(s['rows']) for s in swells)} directions, {out.stat().st_size / 1024:.0f} KB")
     page = (Path(__file__).parent / "sheet_preview.html").read_text().replace("/*SHEET*/null", text.replace("</", "<\\/"))
     out.with_suffix(".html").write_text(page)
     print(f"{out.with_suffix('.html')}: the preview map")

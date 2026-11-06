@@ -32,6 +32,8 @@
 <aside>
   <h1 id="title"></h1>
   <div class="muted" id="sub"></div>
+  <div class="label">Swell</div>
+  <div class="chips" id="swells"></div>
   <div class="label">Swell from (open sea)</div>
   <div class="chips" id="dirs"></div>
   <div class="label">Tide</div>
@@ -52,17 +54,24 @@
 <script>
 const SHEET = /*SHEET*/null;
 const map = L.map("map", { zoomControl: true });
-L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+// Portugal's 2023 satellite mosaic (DGT, 30 cm; its service states no fees and no access
+// constraints), with Esri's world imagery to switch to.
+const dgt = L.tileLayer.wms("https://ortos.dgterritorio.gov.pt/wms/ortosat2023", {
+  layers: "ortoSat2023-CorVerdadeira", format: "image/jpeg", version: "1.3.0", maxZoom: 20,
+  attribution: "OrtoSat2023 &copy; DGT",
+}).addTo(map);
+const esri = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
   maxNativeZoom: 19, maxZoom: 20,
   attribution: "Imagery &copy; Esri, Maxar, Earthstar Geographics",
-}).addTo(map);
+});
+L.control.layers({ "DGT 2023 (Portugal)": dgt, "Esri satellite": esri }, null, { position: "topright" }).addTo(map);
 let layer = L.layerGroup().addTo(map);
-let dirIdx = SHEET.rows.findIndex(r => r.from_deg === 320); if (dirIdx < 0) dirIdx = 0;
+let swellIdx = 0;
+let dirIdx = SHEET.swells[0].rows.findIndex(r => r.from_deg === 320); if (dirIdx < 0) dirIdx = 0;
 let tide = "mid";
 
 document.getElementById("title").textContent = SHEET.description || SHEET.spot;
-document.getElementById("sub").textContent =
-  `${SHEET.swell.height_m} m, ${SHEET.swell.period_s} s swell · model, not observation`;
+document.getElementById("sub").textContent = "model, not observation";
 document.getElementById("warn").textContent =
   `Seabed: ${SHEET.seabed.source}, on ${SHEET.seabed.cell_m} m cells. The bottom's fine shape at the ` +
   `break is blurred at this resolution, so whether it barrels and which way and how fast it peels are left out for now. ` +
@@ -73,9 +82,18 @@ function chip(parent, text, on, click) {
   b.onclick = click; parent.appendChild(b);
 }
 function draw(fit) {
-  const row = SHEET.rows[dirIdx], t = row.tides[tide];
+  const swell = SHEET.swells[swellIdx];
+  dirIdx = Math.min(dirIdx, swell.rows.length - 1);
+  const row = swell.rows[dirIdx];
+  if (!row.tides[tide]) tide = Object.keys(row.tides)[0];
+  const t = row.tides[tide];
+  const sw = document.getElementById("swells"); sw.innerHTML = "";
+  SHEET.swells.forEach((s, i) => chip(sw, s.name, i === swellIdx, () => {
+    const deg = swell.rows[dirIdx].from_deg; swellIdx = i;
+    const k = SHEET.swells[i].rows.findIndex(r => r.from_deg === deg); dirIdx = k < 0 ? 0 : k; draw(false);
+  }));
   const dirs = document.getElementById("dirs"); dirs.innerHTML = "";
-  SHEET.rows.forEach((r, i) => chip(dirs, `${r.from_deg}°`, i === dirIdx, () => { dirIdx = i; draw(false); }));
+  swell.rows.forEach((r, i) => chip(dirs, `${r.from_deg}°`, i === dirIdx, () => { dirIdx = i; draw(false); }));
   const tides = document.getElementById("tides"); tides.innerHTML = "";
   Object.keys(row.tides).forEach(k => chip(tides, `${k} (${row.tides[k].tide_m >= 0 ? "+" : ""}${row.tides[k].tide_m} m)`, k === tide, () => { tide = k; draw(false); }));
 
@@ -88,14 +106,14 @@ function draw(fit) {
       color: "#ff7a1a", weight: 1, fillColor: "#ff7a1a", fillOpacity: 0.4,
     }).addTo(layer);
   }
-  const h0 = SHEET.swell.height_m;
+  const h0 = swell.height_m;
   t.breaks.forEach(([lon, lat, h, d, rock], i) => {
     if (i % 2) return;  // every other row is plenty at this zoom
     L.circleMarker([lat, lon], {
       radius: 1.5 + 1.5 * h / h0, weight: 0, fillOpacity: 0.9, fillColor: rock ? "#e11d48" : "#3b82f6",
     }).bindTooltip(`${h.toFixed(1)} m in ${d.toFixed(1)} m of water${rock ? ", reaches the rock" : ""}`).addTo(layer);
   });
-  const runs = SHEET.rows.reduce((n, r) => n + Object.keys(r.tides).length, 0);
+  const runs = SHEET.swells.reduce((n, s) => n + s.rows.reduce((m, r) => m + Object.keys(r.tides).length, 0), 0);
   for (const p of SHEET.peaks.filter(p => p.share >= 0.25)) {
     L.circleMarker([p.lat, p.lon], { radius: 11, color: "#fff", weight: 2, dashArray: "3 3", fill: false })
       .bindTooltip(`a peak of the reef: breaks first here in ${Math.round(p.share * runs)} of ${runs} runs`).addTo(layer);
