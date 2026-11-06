@@ -47,7 +47,7 @@ from pathlib import Path
 import numpy as np
 from contourpy import FillType, contour_generator
 from pyproj import Transformer
-from scipy.ndimage import gaussian_filter, map_coordinates, median_filter, uniform_filter
+from scipy.ndimage import distance_transform_edt, gaussian_filter, map_coordinates, median_filter, uniform_filter
 
 G = 9.81
 RIDE_M = 150.0  # how far along the shore from the takeoff the numbers are read
@@ -56,6 +56,7 @@ HEIGHT_TOP = 3.0  # the height map's grey levels span 0 to this many times the o
 HEIGHT_SMOOTH_M = 15.0  # Gaussian sigma: the swell reflected off the rock stripes the raw height
 LOOP_FRAMES, LOOP_PIXEL_M, LOOP_HARMONICS = 24, 4.0, 6  # the moving wave: frames per period, pixel, most harmonics
 LOOP_ETA_TOP = 1.5  # its surface levels span +-this many times the swell height
+LOOP_FADE_M = 30.0  # the loop fades out over this far from its edges in open water (not at the shore)
 
 
 def phase_speed(depth: np.ndarray, period: float) -> np.ndarray:
@@ -329,14 +330,15 @@ def area_grid(run: dict, frame: Frame, j0: int, j1: int, area=None, pixel_m: flo
     LON, LAT = np.meshgrid(lon, lat)
     x, y = frame.xy(LON, LAT)
     i, j = x / dx - 0.5, y / dy - 0.5
-    ok = (i >= 0) & (i <= nx - 1) & (j >= j0) & (j <= j1 - 1)
-    ok &= map_coordinates(run["bed"], [j, i], order=1, mode="nearest") < tide
+    geom = (i >= 0) & (i <= nx - 1) & (j >= j0) & (j <= j1 - 1)
     if area:
-        ok &= inside(LON, LAT, area)
+        geom &= inside(LON, LAT, area)
+    ok = geom & (map_coordinates(run["bed"], [j, i], order=1, mode="nearest") < tide)
     if not ok.any():
         return None
     bounds = [[round(south, 6), round(west, 6)], [round(south + rows * dlat, 6), round(west + cols * dlon, 6)]]
-    return {"bounds": bounds, "i": i, "j": j, "ok": ok, "shape": (rows, cols)}
+    # `geom`: inside the area and the trusted rows, wet or dry; its edges are open water or land
+    return {"bounds": bounds, "i": i, "j": j, "ok": ok, "geom": geom, "shape": (rows, cols)}
 
 
 def height_map(run: dict, frame: Frame, j0: int, j1: int, area=None) -> dict | None:
@@ -386,7 +388,8 @@ def at_phase(coef: np.ndarray, k: int, phase: float) -> np.ndarray:
 def wave_loop(run_dir: Path, run: dict, frame: Frame, j0: int, j1: int, area, out_png: Path) -> dict | None:
     """One period of the settled sea as LOOP_FRAMES frames, rebuilt from the saved frames by
     fitting the mean and the first harmonics of the swell's period at every cell, resampled
-    onto the area's grid and written as one grey PNG, the frames stacked top to bottom. Each
+    onto the area's grid, faded over LOOP_FADE_M towards the edges in open water, and written
+    as one grey PNG, the frames stacked top to bottom. Each
     pixel: 0 = no data; the surface level quantised over +-LOOP_ETA_TOP x the swell height to
     1..127; plus 128 where it is breaking."""
     h = run["header"]
@@ -407,11 +410,14 @@ def wave_loop(run_dir: Path, run: dict, frame: Frame, j0: int, j1: int, area, ou
     if g is None:
         return None
     top = LOOP_ETA_TOP * h0
+    # Fade towards the edges of the area and of the trusted rows, so crests do not stop at a
+    # line in open water; the shoreline is not an edge here, so the breaking there stays.
+    fade = np.clip(distance_transform_edt(g["geom"]) * LOOP_PIXEL_M / LOOP_FADE_M, 0.0, 1.0)
     tiles = []
     for n in range(LOOP_FRAMES):
         ph = n / LOOP_FRAMES
-        e = map_coordinates(at_phase(ce, k, ph).reshape(ny, nx), [g["j"], g["i"]], order=1, mode="nearest")
-        b = map_coordinates(at_phase(cb, k, ph).reshape(ny, nx), [g["j"], g["i"]], order=1, mode="nearest") > 0.5
+        e = map_coordinates(at_phase(ce, k, ph).reshape(ny, nx), [g["j"], g["i"]], order=1, mode="nearest") * fade
+        b = (map_coordinates(at_phase(cb, k, ph).reshape(ny, nx), [g["j"], g["i"]], order=1, mode="nearest") > 0.5) & (fade > 0.5)
         level = 1 + np.round((np.clip(e, -top, top) + top) / (2 * top) * 126)
         tiles.append(np.where(g["ok"], level + 128 * b, 0))
     out_png.parent.mkdir(parents=True, exist_ok=True)
