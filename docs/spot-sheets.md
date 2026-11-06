@@ -145,6 +145,16 @@ throughout (701 readings).
   The raw height is striped half a wavelength apart by the swell reflected off the rock, so it is
   smoothed over the wet cells first (Gaussian, sigma 15 m). At Coxos it peaks at about 1.9× just
   inside the takeoff; the break-point heights read about 2× because they include the reflection.
+- **The moving wave (2026-11-06).** The settled sea repeats every period, so each run's saved
+  frames (the last four waves) are fitted, cell by cell, with the mean and the first harmonics of
+  the swell's period, and one period is rebuilt as 24 frames on a 4 m latitude-longitude grid:
+  one grey PNG per run (about 120 KB), the surface level and where it breaks. gogo blends between
+  frames, so it plays smoothly in real time or at half speed. The fit leaves 5% of the wave height
+  (rms) on the 2 m, 13 s runs. How many harmonics a run allows depends on its frame spacing
+  against the period: frames 2 s apart land on 13 phases of a 13 s sea (6 harmonics), but on only
+  6 or 7 of a 12 s or 14 s one (2 or 3). With 2 or 3 harmonics the rebuilt crests at Coxos come out
+  13 to 21% low (1.70 and 1.87 m against 2.15 m saved; 2.11 m with 6). **So the next runs save a
+  frame every second** (`--frame-interval 1`).
 - **Stray break points.** A break point more than 40 m off the median of its 10 neighbours each
   side is a single row misread on the 15 m bed, and is left out of the map and the numbers.
 - **What is left out.** The peel (which way and how fast) came out inconsistent between

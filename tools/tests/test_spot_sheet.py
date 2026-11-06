@@ -90,3 +90,20 @@ def test_png_grey_round_trips():
     n = int.from_bytes(png[idat - 4 : idat], "big")
     raw = zlib.decompress(png[idat + 4 : idat + 4 + n])
     assert [raw[i * 5 + 1 : i * 5 + 5] for i in range(3)] == [bytes(img[i]) for i in range(3)]
+
+
+def test_harmonics_are_as_many_as_the_frames_phases_allow():
+    # 2 s frames in a 13 s sea land on 13 phases; in a 12 s sea on 6; 1 s frames on 12.
+    assert spot_sheet.harmonics(np.arange(0, 52, 2.0), 13.0)[1] == 6
+    assert spot_sheet.harmonics(np.arange(0, 52, 2.0), 12.0)[1] == 2
+    assert spot_sheet.harmonics(np.arange(0, 52, 1.0), 12.0)[1] == 5
+
+
+def test_a_periodic_sea_is_rebuilt_at_any_phase():
+    t = 220.0 + np.arange(26) * 2.0
+    w = 2 * np.pi / 13.0
+    sea = lambda tt: 0.1 + np.cos(w * tt) + 0.4 * np.sin(2 * w * tt) - 0.2 * np.cos(5 * w * tt)  # noqa: E731
+    pinv, k = spot_sheet.harmonics(t, 13.0)
+    coef = pinv @ sea(t)[:, None]
+    for ph in (0.0, 0.13, 0.5, 0.77):
+        assert spot_sheet.at_phase(coef, k, ph)[0] == pytest.approx(sea(ph * 13.0), abs=1e-9)

@@ -54,6 +54,8 @@ RIDE_M = 150.0  # how far along the shore from the takeoff the numbers are read
 STRAY_M, STRAY_ROWS = 40.0, 10  # a break point this far off its neighbours' median is dropped
 HEIGHT_TOP = 3.0  # the height map's grey levels span 0 to this many times the offshore height
 HEIGHT_SMOOTH_M = 15.0  # Gaussian sigma: the swell reflected off the rock stripes the raw height
+LOOP_FRAMES, LOOP_PIXEL_M, LOOP_HARMONICS = 24, 4.0, 6  # the moving wave: frames per period, pixel, most harmonics
+LOOP_ETA_TOP = 1.5  # its surface levels span +-this many times the swell height
 
 
 def phase_speed(depth: np.ndarray, period: float) -> np.ndarray:
@@ -73,7 +75,7 @@ def load_run(run: Path) -> dict:
     breaking = np.asarray(frames[use, h["fields"].index("breaking")]) > 0
     stats = np.fromfile(run / h["stats"]["file"], dtype="<f4").reshape(len(h["stats"]["fields"]), ny, nx)
     height = stats[h["stats"]["fields"].index("wave_height")].astype("float64")
-    out = {"header": h, "bed": bed, "break_share": breaking.mean(axis=0), "height": height, "coarse": None}
+    out = {"dir": run, "header": h, "bed": bed, "break_share": breaking.mean(axis=0), "height": height, "coarse": None}
     if (run / "coarse" / "run.json").exists():
         c = json.loads((run / "coarse" / "run.json").read_text())
         cbed = np.fromfile(run / "coarse" / c["bed"], dtype="<f4").reshape(c["ny"], c["nx"]).astype("float64")
@@ -190,7 +192,7 @@ def inside(lon, lat, area) -> np.ndarray:
     return out
 
 
-def read_run(run: dict, trust_y: tuple[float, float], zone_fraction: float, area=None) -> dict:
+def read_run(run: dict, trust_y: tuple[float, float], zone_fraction: float, area=None, loop_png: Path | None = None) -> dict:
     """One run's entry in the sheet. Takeoffs are found over all the trusted rows, so the
     spot's `area` does not make edges of its own; then only what lies inside it is kept."""
     h = run["header"]
@@ -237,6 +239,7 @@ def read_run(run: dict, trust_y: tuple[float, float], zone_fraction: float, area
     ts = median_filter(np.array([r["t"] for r in rows]), size=max(3, int(30 / dy) | 1), mode="nearest")
     peaks = [p for p in takeoffs(rows, ts, dy) if rows[p["k"]]["in_area"]]
     shared = common(run, rows, frame, j0, j1, zone_fraction, area)
+    shared["loop"] = wave_loop(run["dir"], run, frame, j0, j1, area, loop_png) if loop_png else None
     if not peaks:
         return {"tide_m": tide, "takeoff": None, "takeoffs": [], "near_takeoff": None, "_rows": rows, **shared}
     k0 = peaks[0]["k"]
@@ -299,13 +302,15 @@ def png_grey(img: np.ndarray) -> bytes:
     return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b"")
 
 
-def height_map(run: dict, frame: Frame, j0: int, j1: int, area=None, pad_m: float = 30.0) -> dict | None:
-    """The wave height over the offshore height on a latitude-longitude grid of about one cell,
-    over the area (or the trusted rows), wet cells only: {bounds: [[s, w], [n, e]], png: base64}.
-    """
+def area_grid(run: dict, frame: Frame, j0: int, j1: int, area=None, pixel_m: float | None = None,
+              pad_m: float = 30.0) -> dict | None:
+    """A latitude-longitude grid over the area (or the trusted rows), `pixel_m` apart (a cell by
+    default), row 0 at the top: where each pixel falls on the run's grid, and which pixels count
+    (on the grid, in the trusted rows, wet, inside the area)."""
     h = run["header"]
     dx, dy, ny, nx = h["dx"], h["dy"], h["ny"], h["nx"]
-    tide, h0 = h["waves"]["tide_m"], h["waves"]["wave_height_m"]
+    tide = h["waves"]["tide_m"]
+    pixel_m = pixel_m or dx
     if area:
         lats, lons = [a for a, _ in area], [o for _, o in area]
     else:
@@ -313,33 +318,112 @@ def height_map(run: dict, frame: Frame, j0: int, j1: int, area=None, pad_m: floa
         lons, lats = frame.lonlat(xs, ys)
         lons, lats = list(np.ravel(lons)), list(np.ravel(lats))
     lat0 = (min(lats) + max(lats)) / 2
-    dlat = dx / 111_320.0
-    dlon = dx / (111_320.0 * math.cos(math.radians(lat0)))
+    dlat = pixel_m / 111_320.0
+    dlon = pixel_m / (111_320.0 * math.cos(math.radians(lat0)))
     pad_lat, pad_lon = pad_m / 111_320.0, pad_m / (111_320.0 * math.cos(math.radians(lat0)))
     south, north = min(lats) - pad_lat, max(lats) + pad_lat
     west, east = min(lons) - pad_lon, max(lons) + pad_lon
     rows, cols = int(math.ceil((north - south) / dlat)), int(math.ceil((east - west) / dlon))
-    lat = north - (np.arange(rows) + 0.5) * dlat  # row 0 at the top
+    lat = north - (np.arange(rows) + 0.5) * dlat
     lon = west + (np.arange(cols) + 0.5) * dlon
     LON, LAT = np.meshgrid(lon, lat)
     x, y = frame.xy(LON, LAT)
     i, j = x / dx - 0.5, y / dy - 0.5
     ok = (i >= 0) & (i <= nx - 1) & (j >= j0) & (j <= j1 - 1)
-    wet_cells = (run["bed"] < tide).astype("float64")
-    s = HEIGHT_SMOOTH_M / dx
-    smooth = gaussian_filter(run["height"] * wet_cells, s) / np.maximum(gaussian_filter(wet_cells, s), 1e-9)
-    ratio = map_coordinates(smooth, [j, i], order=1, mode="nearest") / h0
-    wet = map_coordinates(run["bed"], [j, i], order=1, mode="nearest") < tide
-    ok &= wet & np.isfinite(ratio)
+    ok &= map_coordinates(run["bed"], [j, i], order=1, mode="nearest") < tide
     if area:
         ok &= inside(LON, LAT, area)
     if not ok.any():
         return None
+    bounds = [[round(south, 6), round(west, 6)], [round(south + rows * dlat, 6), round(west + cols * dlon, 6)]]
+    return {"bounds": bounds, "i": i, "j": j, "ok": ok, "shape": (rows, cols)}
+
+
+def height_map(run: dict, frame: Frame, j0: int, j1: int, area=None) -> dict | None:
+    """The wave height over the offshore height on a latitude-longitude grid of about one cell,
+    over the area (or the trusted rows), wet cells only: {bounds: [[s, w], [n, e]], png: base64}.
+    """
+    g = area_grid(run, frame, j0, j1, area)
+    if g is None:
+        return None
+    h = run["header"]
+    tide, h0 = h["waves"]["tide_m"], h["waves"]["wave_height_m"]
+    wet_cells = (run["bed"] < tide).astype("float64")
+    s = HEIGHT_SMOOTH_M / h["dx"]
+    smooth = gaussian_filter(run["height"] * wet_cells, s) / np.maximum(gaussian_filter(wet_cells, s), 1e-9)
+    ratio = map_coordinates(smooth, [g["j"], g["i"]], order=1, mode="nearest") / h0
+    ok = g["ok"] & np.isfinite(ratio)
     grey = np.where(ok, 1 + np.round(np.clip(ratio, 0, HEIGHT_TOP) / HEIGHT_TOP * 254), 0)
+    return {"bounds": g["bounds"], "top": HEIGHT_TOP, "png": base64.b64encode(png_grey(grey)).decode()}
+
+
+def harmonics(times: np.ndarray, period: float, most: int = LOOP_HARMONICS) -> tuple[np.ndarray, int]:
+    """The least-squares map from frames saved at `times` to the mean and the first K harmonics
+    of a sea repeating every `period` (rows: mean, cos 1, sin 1, ... cos K, sin K), and K.
+
+    K is as many as the frames' distinct phases within a period can tell apart: frames 2 s apart
+    in a 13 s sea land on 13 phases (K = 6), in a 12 s or 14 s sea on only 6 or 7 (K = 2 or 3),
+    which rounds every crest off.
+    """
+    phases = np.unique(np.round((times % period) / period * 1000).astype(int) % 1000)
+    k = int(max(1, min(most, (len(phases) - 1) // 2)))
+    w = 2 * math.pi / period
+    cols = [np.ones_like(times)]
+    for n in range(1, k + 1):
+        cols += [np.cos(n * w * times), np.sin(n * w * times)]
+    return np.linalg.pinv(np.stack(cols, axis=1)), k
+
+
+def at_phase(coef: np.ndarray, k: int, phase: float) -> np.ndarray:
+    """The fitted field at `phase` (0 to 1) of the period, from `harmonics`' coefficients."""
+    out = coef[0].copy()
+    for n in range(1, k + 1):
+        a = 2 * math.pi * n * phase
+        out += coef[2 * n - 1] * math.cos(a) + coef[2 * n] * math.sin(a)
+    return out
+
+
+def wave_loop(run_dir: Path, run: dict, frame: Frame, j0: int, j1: int, area, out_png: Path) -> dict | None:
+    """One period of the settled sea as LOOP_FRAMES frames, rebuilt from the saved frames by
+    fitting the mean and the first harmonics of the swell's period at every cell, resampled
+    onto the area's grid and written as one grey PNG, the frames stacked top to bottom. Each
+    pixel: 0 = no data; the surface level quantised over +-LOOP_ETA_TOP x the swell height to
+    1..127; plus 128 where it is breaking."""
+    h = run["header"]
+    nx, ny, w = h["nx"], h["ny"], h["waves"]
+    period, h0 = w["wave_period_s"], w["wave_height_m"]
+    times = np.array(h["times"])
+    use = times >= h["stats"]["from_s"] - 1e-9
+    frames = np.memmap(run_dir / h["frames"], dtype="<f4", mode="r", shape=(len(times), len(h["fields"]), ny, nx))
+    eta = np.asarray(frames[use, h["fields"].index("eta")], dtype="float64").reshape(use.sum(), -1)
+    brk = (np.asarray(frames[use, h["fields"].index("breaking")]) > 0).astype("float64").reshape(use.sum(), -1)
+    pinv, k = harmonics(times[use], period)
+    ce, cb = pinv @ eta, pinv @ brk
+    resid = eta - np.stack([at_phase(ce, k, (t % period) / period) for t in times[use]])
+    wet = (run["bed"] < w["tide_m"]).ravel()
+    fit_rms = float(np.sqrt(np.mean(resid[:, wet] ** 2)) / h0)
+
+    g = area_grid(run, frame, j0, j1, area, pixel_m=LOOP_PIXEL_M)
+    if g is None:
+        return None
+    top = LOOP_ETA_TOP * h0
+    tiles = []
+    for n in range(LOOP_FRAMES):
+        ph = n / LOOP_FRAMES
+        e = map_coordinates(at_phase(ce, k, ph).reshape(ny, nx), [g["j"], g["i"]], order=1, mode="nearest")
+        b = map_coordinates(at_phase(cb, k, ph).reshape(ny, nx), [g["j"], g["i"]], order=1, mode="nearest") > 0.5
+        level = 1 + np.round((np.clip(e, -top, top) + top) / (2 * top) * 126)
+        tiles.append(np.where(g["ok"], level + 128 * b, 0))
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+    out_png.write_bytes(png_grey(np.concatenate(tiles, axis=0)))
     return {
-        "bounds": [[round(south, 6), round(west, 6)], [round(south + rows * dlat, 6), round(west + cols * dlon, 6)]],
-        "top": HEIGHT_TOP,
-        "png": base64.b64encode(png_grey(grey)).decode(),
+        "file": f"{out_png.parent.name}/{out_png.name}",
+        "frames": LOOP_FRAMES,
+        "period_s": period,
+        "eta_top_m": top,
+        "harmonics": k,
+        "fit_rms": round(fit_rms, 3),
+        "bounds": g["bounds"],
     }
 
 
@@ -408,7 +492,7 @@ def recurring_peaks(swells: list, min_s: float = 5.0, radius_m: float = 50.0) ->
     return sorted(clusters, key=lambda c: -c["share"])
 
 
-def read_swell(cfg: dict, trust, level: float, area) -> dict:
+def read_swell(cfg: dict, trust, level: float, area, loops: Path | None = None) -> dict:
     """One swell's rows: a direction each, with its runs at each tide. Every run must have been
     made with the swell this table names."""
     rows = []
@@ -424,7 +508,8 @@ def read_swell(cfg: dict, trust, level: float, area) -> dict:
                     f"{entry[tide_name]} is a {w['wave_height_m']} m, {w['wave_period_s']} s run, "
                     f"listed under the {cfg['height_m']} m, {cfg['period_s']} s swell"
                 )
-            tides[tide_name] = read_run(run, trust, level, area)
+            key = f"{cfg['height_m']:g}m{cfg['period_s']:g}s_{entry['from']}_{tide_name}"
+            tides[tide_name] = read_run(run, trust, level, area, loops / f"{key}.png" if loops else None)
             tides[tide_name]["run"] = entry[tide_name]
         shift = tide_shift(tides["mid"], tides["low"]) if {"mid", "low"} <= tides.keys() else None
         for v in tides.values():
@@ -433,7 +518,8 @@ def read_swell(cfg: dict, trust, level: float, area) -> dict:
         mid = tides.get("mid") or {}
         print(
             f"{cfg['height_m']} m {cfg['period_s']} s from {entry['from']:3d} (maker {entry['maker']}): "
-            f"takeoff {mid.get('takeoff')} low tide moves it {shift} m seaward"
+            f"takeoff {mid.get('takeoff')} low tide moves it {shift} m seaward; "
+            f"loop {(mid.get('loop') or {}).get('harmonics')} harmonics, fit rms {(mid.get('loop') or {}).get('fit_rms')} x H"
         )
     name = f"{cfg['height_m']:g} m, {cfg['period_s']:g} s"
     return {"name": name, "height_m": cfg["height_m"], "period_s": cfg["period_s"], "rows": rows}
@@ -455,7 +541,8 @@ def main(argv=None) -> int:
     level = cfg.get("zone_fraction", 0.08)
     area = cfg.get("area")
 
-    swells = [read_swell(s, trust, level, area) for s in cfg["swells"]]
+    out = args.out or Path("out/sheets") / f"{args.name}.json"
+    swells = [read_swell(s, trust, level, area, out.parent / args.name) for s in cfg["swells"]]
 
     sheet = {
         "format": "wavesim-spot-sheet",
@@ -473,7 +560,6 @@ def main(argv=None) -> int:
     }
     for p in sheet["peaks"]:
         print(f"peak at {p['lat']:.5f}, {p['lon']:.5f}: in {p['share']:.0%} of the runs")
-    out = args.out or Path("out/sheets") / f"{args.name}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     text = json.dumps(sheet, separators=(",", ":"))
     out.write_text(text)
