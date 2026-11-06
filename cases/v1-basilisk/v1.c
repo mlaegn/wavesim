@@ -16,6 +16,7 @@ cell is larger than 0.5 m (level 9): with larger ones, the water column under th
 single cell deep, the bed's kink at the slope's toe added 20 m² of water, and the wave slowed.
 
     v1 LEVEL     # 10: 0.25 m, 11: 0.126 m, 12: 0.063 m, 13: 0.031 m
+    v1 LEVEL 8   # no cell larger than 1 m rather than 0.5 m
 
 Writes, in the current folder:
 
@@ -24,6 +25,8 @@ Writes, in the current folder:
   x 150-258 m, z -2-6 m, float32, z-major, every 0.025 s from 13 s; the bed counts as water there,
   so that the only 0.5 contour is the free surface;
 - `frames/u-<t>.bin`: u and w on the same grid at a few times, for the air-speed check;
+- `state-14.500.bin`: f, u and w over the whole tank at 14.5 s, on the same kind of grid (x 0-258 m,
+  z -8 m to the top), from which `v1-3d.c` starts its strip;
 - `log`: one line every 0.05 s (time, step, cells, water area, highest surface).
 */
 
@@ -92,7 +95,7 @@ int main (int argc, char * argv[])
 {
   if (argc > 1)
     LEVEL = atoi (argv[1]);
-  MINLEVEL = min (LEVEL, 9);
+  MINLEVEL = min (LEVEL, argc > 2 ? atoi (argv[2]) : 9);
   size (LENGTH);
   origin (0., - DEPTH);
   rho1 = 1000., rho2 = 1.;
@@ -170,21 +173,19 @@ event logfile (t += 0.05; t <= END_TIME)
   fclose (fp);
 }
 
-/** Samples on the window's uniform grid, at cell centres of the finest level. The bed counts
-as water. */
-void sample (const char * name, scalar * list, double t)
+/** Samples on a uniform grid over x0-x1, z0-z1, at cell centres of the finest level. The bed
+counts as water at rest. */
+void sample_box (const char * path, scalar * list, double x0, double x1, double z0, double z1)
 {
   double dx = LENGTH/(1 << LEVEL);
-  int nx = round ((WX1 - WX0)/dx), nz = round ((WZ1 - WZ0)/dx);
-  char path[80];
-  sprintf (path, "frames/%s-%.3f.bin", name, t);
+  int nx = round ((x1 - x0)/dx), nz = round ((z1 - z0)/dx);
   FILE * fp = fopen (path, "wb");
   float * row = malloc (nx*sizeof (float));
   for (scalar s in list)
     for (int k = 0; k < nz; k++) {
-      double zp = WZ0 + (k + 0.5)*dx;
+      double zp = z0 + (k + 0.5)*dx;
       for (int j = 0; j < nx; j++) {
-	double xp = WX0 + (j + 0.5)*dx;
+	double xp = x0 + (j + 0.5)*dx;
 	if (zp < bed_z (xp))
 	  row[j] = s.i == f.i ? 1. : 0.;
 	else {
@@ -198,6 +199,13 @@ void sample (const char * name, scalar * list, double t)
   fclose (fp);
 }
 
+void sample (const char * name, scalar * list, double t)
+{
+  char path[80];
+  sprintf (path, "frames/%s-%.3f.bin", name, t);
+  sample_box (path, list, WX0, WX1, WZ0, WZ1);
+}
+
 event frames (t = FRAMES_FROM; t <= END_TIME + 1e-6; t += FRAME_EVERY)
 {
   sample ("f", {f}, t);
@@ -206,4 +214,10 @@ event frames (t = FRAMES_FROM; t <= END_TIME + 1e-6; t += FRAME_EVERY)
 event velocities (t = {10., 14.5, 15.5, 16.})
 {
   sample ("u", {u.x, u.y}, t);
+}
+
+/** The whole tank at 14.5 s; the bed counts as water at rest. */
+event state (t = 14.5)
+{
+  sample_box ("state-14.500.bin", {f, u.x, u.y}, 0., LENGTH, - DEPTH, TOP);
 }

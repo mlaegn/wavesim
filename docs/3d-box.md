@@ -29,7 +29,7 @@ it is not, explanation 2 is ruled out and the answer lies in the bed.
 graph LR
     C[coarse 2D run<br/>6 m cells, shelf] --> F[fine 2D run<br/>3 m cells, reef]
     F -->|hand-off line| S[waveslice<br/>2DV, one line]
-    F -->|box edges, every step| B[3D box<br/>OpenFOAM, VOF]
+    F -->|box edges, every step| B[3D box<br/>Basilisk, VOF on an octree]
     L[1 m lidar patch] --> B
     L --> S
     B --> M[tube per metre of shore<br/>same measure as a slice]
@@ -53,8 +53,9 @@ the sea along three edges of the box for the 3D solver to use as inflow.
 This keeps to the project's rule of verification first. The new code is the coupling, and the
 coupling is what gets tested. OpenFOAM's VOF has been validated against breaking waves by
 others. What has to be shown here is that it agrees with `waveslice` where both apply. OpenFOAM
-did not (V1, below), and Basilisk did, so the box is now planned in Basilisk. The build plan
-below still names OpenFOAM's pieces, and is to be redone for Basilisk.
+did not (V1, below), and Basilisk did, so the box is planned in Basilisk. The build plan below
+was rewritten for it on 2026-11-06. The mesh and cost sections still hold the OpenFOAM
+estimates until the 3D strip test replaces them.
 
 **Physics the box adds that a slice lacks:** the second horizontal direction (peel, the crest
 varying along its length, flow along the shore), air, viscosity, and life after the lip lands
@@ -86,29 +87,34 @@ At 16 s, the wavelength is 147 m in 9 m of water and 101 m in 4 m.
 - **`z`:** −11 to +9 m above still water. That covers the 10.5 m deep inflow and a 5.5 m crest,
   plus room for the splash.
 
-**Mesh** (*estimate*, using snappyHexMesh on an STL of the bed):
+**Cells and cost** (*estimate*, from V0's 3D strip, 2026-11-06; the OpenFOAM tiers this
+replaces assumed 0.5 m and 0.25 m cells, which V1 showed are far too coarse):
 
-| Tier | Cells | Where they are fine | Tube it can measure | Runs on |
-|---|---|---|---|---|
-| A | about 4 M | 1 m background, 0.5 m from −3 to +7 m over the whole box | about 2 m or more | the laptop, overnight |
-| B | about 13 M | as A, plus 0.25 m over the 100 m around the break (x 2140–2240) | about 1 m or more | a rented machine with many cores |
+The strip needed 165 cells per m² of sea surface at 0.25 m on the surface. The finer levels are
+assumed to scale with the surface's cell count, so 660 per m² at 0.126 m and 2,650 at 0.063 m.
+That assumption is untested in 3D; a strip at 0.126 m (2 to 3 h) would test it. A step costs
+16.6 µs per cell on one core, and the time step halves with the cell size: about 0.0025 s at
+0.126 m and 0.001 s at 0.063 m during a break. Only the 100 m of the box around the break
+(x 2140–2240 m, 16,000 m²) needs the fine cells; the other 28,800 m² stays at 0.25 m.
 
-Tier A answers the yes-or-no question: the slices' tubes are 0.7 m across, and a 2 m tube would
-be news. Tier B puts a size on the answer. It starts from tier A mapped onto the finer mesh
-(`mapFields`), shortly before the wave being measured reaches the break, so it only needs about
-20 s of the wave's time.
+| Tier | Surface cells at the break | Cells | Tube it can measure | Core-hours for one wave (15 s) | 48 cores |
+|---|---|---|---|---|---|
+| A | 0.126 m | about 15 M | about 1 m or more (V1: 23% small on a 3 m tube) | about 400 | about 10 h |
+| B | 0.063 m | about 47 M | about 0.5 m or more (V1: 19% small) | about 3,200 | about 3 days |
 
-**Cost** (*estimate*). The time step is held to Courant 0.5 with velocities up to about 10 m/s in
-the lip, so the step is 0.025 s on 0.5 m cells. Tier A runs 80 s of the wave's time: about 18 s
-for the first crest to reach the break, then four waves. That is 3,200 steps. The cost per
-cell-step for `interFoam` is assumed to be 3 to 10 µs on one core.
+Both are beyond the laptop: one core would take weeks even for tier A, and its memory (about
+3 KB per cell in 3D) would need 45 GB. Both need a rented many-core machine. Basilisk runs
+there with MPI from the same source. The 18 s before the first crest reaches the break can run
+at 0.25 m, about 120 core-hours. Tier A answers the yes-or-no question: the slices' tubes are
+0.7 m across, and a 2 m tube would be news. Tier B puts a size on the answer.
 
-| Tier | Steps | Core-hours | Laptop (4 cores) | 48-core machine |
-|---|---|---|---|---|
-| A | 3,200 | 11 to 36 | 3 to 9 h | under 1 h |
-| B | 1,600 | 17 to 58 | not sensible: needs about 25 GB inside the VM | 0.5 to 1.5 h |
+Three ways to bring this down, each testable in 2D first, in minutes:
+- refine only where the surface is steep or overturning, not along all of it: at any moment
+  most of the 100 m is not breaking. This is likely the biggest saving, a factor of 3 or more;
+- stop refining the bed to the finest level, which the 2D and strip runs did;
+- a box narrower along the shore, if V4 shows the peel settles in less than 160 m.
 
-These are guesses, good to a factor of about three. Milestone 0 replaces them with a measurement.
+These are guesses, good to a factor of about three.
 
 ## What has to be built
 
@@ -126,48 +132,62 @@ These are guesses, good to a factor of about three. Milestone 0 replaces them wi
    surface (`u = ubar − H²/3 ubar_xx`). The box needs it at every height `ζ` above the bed:
    `u(ζ) = ū + (H²/6 − ζ²/2) ∇(∇·ū)` and `w(ζ) = −ζ ∇·ū − ū·∇h`. This belongs in `wavecore` as a
    pure function and is tested against the surface rule (`ζ = H`) and against linear theory.
-3. **`wavesim measure`** takes a cross-section's surface (from the box) and returns face-vertical,
-   curl, landing and tube, using the same code as `waveslice::Tank::tube`. Keeping one definition
-   in one place means the 3D tube and the slice tube are measured the same way.
+3. **One measure for slices and box.** `cases/v1-steep/measure.py` measures face vertical,
+   landing and tube from a VOF surface in the way `waveslice::Tank::tube` does. For V1 it was
+   checked against waveslice's own numbers only on the cases it compared. Before P1, either it
+   is made to measure waveslice's surfaces too and agree with `Tank::tube` on them, or
+   `wavesim measure` takes a surface and runs `Tank::tube` itself. Either way, the 3D tube and
+   the slice tube are measured the same way.
 
 ### In tools (Python, uv)
 
 4. **`tools/fetch_patch.py`** crops the 2013 USACE 1 m lidar over the box in the bed's frame. It
-   reuses `fetch_spot.py` with the box's limits and 1 m cells, and writes a bed file plus an STL
-   for snappyHexMesh. Outside the lidar's coverage it falls back to the 3 m bed and records where
+   reuses `fetch_spot.py` with the box's limits and 1 m cells, and writes the bed as a grid of
+   heights (`patch.json` plus `patch.f32`), which the case reads and interpolates bilinearly.
+   Basilisk needs no STL or bed-following mesh: the bed is an embedded boundary cut through the
+   octree's cells. Outside the lidar's coverage it falls back to the 3 m bed and records where
    it did so.
-5. **`tools/foam_case.py`** writes an OpenFOAM case from the patch and the boundary record:
-   - `blockMeshDict` and `snappyHexMeshDict` for the box, with the refinement band and zone of
-     the chosen tier.
-   - Still water through `setFields`.
-   - `boundaryData/` for `timeVaryingMappedFixedValue` on `U` and `alpha.water` at the inflow and
-     side patches: `alpha` is 1 below `eta`, and `U` comes from item 2.
-   - `fixedFluxPressure` on those patches, and an atmosphere on top (`totalPressure`,
-     `pressureInletOutletVelocity`, `inletOutlet` on `alpha`).
-   - `maxCo` and `maxAlphaCo` of 0.5: V1 at 0.05 gave the same tube. The model is laminar, because the comparison stops at
-     landing, and RANS models over-produce turbulence under waves that have not broken (Larsen &
-     Fuhrman 2018).
-   - Function objects that write the `alpha = 0.5` iso-surface every 0.1 s during the break, plus
-     cross-sections every 2 m along `y`.
-6. **`tools/foam_tubes.py`** reads each cross-section's `alpha = 0.5` contour, keeps the free
-   surface and any air it encloses, and passes it to `wavesim measure`. The output is the tube
-   per metre of shore, plus two measures only 3D has: **the peel speed**, how fast the landing
-   point moves along the shore, and **the tube's length**, how far along the shore it stays
-   closed at once.
+5. **`cases/box/box.c`**, a Basilisk case grown from `cases/v1-basilisk/v1.c`, plus
+   **`tools/box_case.py`**, which writes its inputs from the patch and the boundary record:
+   - The set-up V1 passed with: two-phase Navier–Stokes, momentum-conserving VOF, reduced
+     gravity, surface tension, the bed embedded (`solid (cs, fs, y - zb(x, z))`, with `y` up
+     in Basilisk), laminar, CFL 0.5. The octree refines on the surface, the bed and the
+     velocity, down to the cell size V1 passed at on the surface (0.063 m; 258 m / 2^12 there),
+     with no cell larger than 0.5 m in the water.
+   - The inflow as a **relaxation zone** along the offshore edge, about half a wavelength wide:
+     every step, inside the zone, `f` and `u` are blended toward the 2D run's sea (`f` from
+     `eta`, `u` from item 2), with a weight rising from 0 at the zone's inner edge to 1 at the
+     wall. Basilisk has nothing like OpenFOAM's `timeVaryingMappedFixedValue`, and a zone is
+     the better choice anyway: it also absorbs what the beach reflects, which a fixed inflow
+     does not (see the risks below). The zone is one event of a few dozen lines that reads the
+     boundary record and interpolates it in time and along the edge.
+   - The sides: either the same zones, fed from the 2D run, or free-slip walls. V3 and V4
+     decide.
+   - An open top (`u.n` Neumann, `p` zero), at a cell edge of the octree's coarse levels.
+   - Outputs: `f` sampled on cross-sections every 2 m along the shore, every 0.025 s during the
+     break, in the format `measure.py` already reads (`case.json` plus one `.bin` per frame);
+     and the surface's facets (`output_facets`) every 0.1 s for the viewer.
+   - One core on the laptop under the usual guard. Basilisk runs on many cores with MPI and the
+     same source (`qcc -D_MPI=1`), for a rented machine if tier B needs one.
+6. **`tools/box_tubes.py`** reads each cross-section's frames, keeps the free surface and any
+   air it encloses, and measures them as `cases/v1-steep/measure.py` does (the same code, moved
+   to `tools/`). The output is the tube per metre of shore, plus two measures only 3D has:
+   **the peel speed**, how fast the landing point moves along the shore, and **the tube's
+   length**, how far along the shore it stays closed at once.
 
 ### In the viewer
 
-7. **`viewer/box.html`** plays the iso-surface frames over the terrain, using the same camera and
+7. **`viewer/box.html`** plays the surface frames over the terrain, using the same camera and
    colouring as the side view. This needs a compact mesh format, `wavesim-surface` version 1,
-   with indexed triangles per frame and decimated: at 0.5 m an undecimated frame is about 200k
-   triangles. This is last in the list. The numbers come first.
+   with indexed triangles per frame and decimated: Basilisk's facets are one polygon per surface
+   cell, so a frame is hundreds of thousands of them. This is last in the list. The numbers come first.
 
 ## Validation, in order: each step must pass before the next
 
 | Step | Case | Compare with | Passes when |
 |---|---|---|---|
-| **V0** | OpenFOAM `damBreak` tutorial, then a 1 M-cell box | — | it runs in Docker (`opencfd/openfoam-default:2512`, arm64), and the cost per cell-step is measured. That sets the cost table above |
-| **V1** | 2D (one cell thick): solitary wave on the `steep` seabed | `waveslice`: face vertical 15.97 s at 222.3 m, crest 3.27 m, lip 10.72 m, tube 1.61 × 3.14 m | the face goes vertical within 2 m, and the crest is within 5%. The tube is within 20% at some cell size, run at 0.4, 0.2 and 0.1 m. **That cell size becomes the 3D box's cell size.** |
+| **V0** | Basilisk built from source in Docker, then a 3D strip of V1 | — | it runs on one core, and the 3D cost per cell-step and the cells a break needs are measured. That sets the cost table above. (For OpenFOAM, V0 was `damBreak`: 1.7 µs per cell-step in 2D.) |
+| **V1** | 2D (one cell thick): solitary wave on the `steep` seabed | `waveslice`: face vertical 15.97 s at 222.3 m, crest 3.27 m, lip 10.72 m, tube 1.61 × 3.14 m | the face goes vertical within 2 m, and the crest is within 5%. The tube is within 20% at some cell size. **That cell size becomes the 3D box's cell size.** Passed in Basilisk at 0.063 m; OpenFOAM failed at every size |
 | **V2** | 2D: plane beach 1 in 10, 2 m and 12 s, inflow from a `wavesim run --box` on that beach | the slice table: tube 1.8 × 2.8 m | the same tolerances. This tests the export and the velocity profile |
 | **V3** | 3D box over the same plane beach, uniform along the shore | V2 | the tube is the same on every cross-section, and the same as V2 within 10%. This tests the sides and the 3D mesh |
 | **V4** | 3D, the same beach with the swell 20° oblique | the 2D run's own peel angle | the peel measured from landing points matches the angle the 2D run gives where waves break, within a few degrees |
@@ -303,8 +323,32 @@ OpenFOAM's last 4 s at 0.05 m took 1 h 51 min.
 **For the 3D box:** Basilisk replaces OpenFOAM, at 0.063 m on the surface (258 m / 2^12, the
 level V1 passed at). The time step stays at Basilisk's own CFL 0.5. The box needs one thing V1
 did not: the inflow and the sides fed from a 2D run, in place of a solitary wave in a closed
-tank. This, the octree's cost in 3D, and the open choices in the build plan above, which was
-written for OpenFOAM, are the next things to work out.
+tank (V2).
+
+### V0 in Basilisk, 2026-11-06: a 3D strip of V1
+
+`cases/v1-basilisk/v1-3d.c`, run by `run.sh 10 3600 --3d`: the V1 tank 4.03 m wide between
+free-slip walls, started at 14.5 s from the 2D run's state extruded across, and run through the
+break to 17.2 s. It took 46 min on one core, 406 steps, at most 419,000 cells and 1.2 GB. The
+thermal state stayed nominal.
+
+**It breaks as the 2D run does.** On the middle cross-section, at 0.25 m: the face goes
+vertical at 16.23 s and 224.55 m (2D: 16.23 s, 224.56 m), the crest is 3.30 m (3.31), and the lip
+lands at 17.07 s (17.07). The tube is 2.14 m² against 1.89 m², 13% larger. The 1 m cells in the
+water (below) account for a few per cent of that in 2D. The rest is within what 0.25 m resolves
+of a lip: there the 2D tube was still changing by 28% per level.
+
+**What it costs:** 16.6 µs per cell-step, against 4.5 in 2D. Of the 419,000 cells, 172,000 lay
+below +8.125 m, the top of the 2D tank: 165 per m² of sea surface. The cost table above is built
+from these numbers.
+
+**A Basilisk limitation found on the way:** the embedded bed crashes (a floating-point
+exception in the first mesh adaptation) when the domain is masked in two directions, here the
+top and the strip's width. Either mask alone works. So the strip has the air up to the octree's
+top at +250 m, and no cell larger than 1 m, rather than 0.5 m, to keep that air affordable. In
+2D at 0.126 m that change moved the tube from 2.42 to 2.48 m². The real box needs a top and two
+sides, so this has to be solved first: report it upstream, find which of Basilisk's restriction
+steps fails, or bound the box by the embedded solid instead of masks.
 
 References for this section:
 
@@ -322,18 +366,20 @@ References for this section:
 
 ## Risks and open choices
 
-- **Reflection at the inflow.** `timeVaryingMappedFixedValue` imposes the 2D run's sea and does not
-  absorb what comes back from the beach. The surf zone absorbs most of it, but the reflected
-  fraction should be measured in V2. If it matters, the fix is a relaxation zone inside the box
-  (waves2Foam-style), at the cost of some extra length along `x`.
+- **Reflection at the inflow.** The plan already uses a relaxation zone, which absorbs what the
+  beach sends back. The reflected fraction should still be measured in V2, and the zone made
+  longer along `x` if it matters.
+- **Masks and the embedded bed.** Basilisk's embedded bed fails in a domain masked in two
+  directions (V0). The box needs that, or another way to bound it.
 - **The sides.** Feeding the sides from the 2D run is consistent seaward of the break. Shoreward,
   the 2D run's bores will differ from the 3D overturning. The plan keeps 40 m between each side
   and the lines measured. An alternative is slip walls on the sides, which mirror the bed as the
   2D run's walls do. V3 and V4 should decide.
 - **The bed outside the lidar.** If the lidar has gaps inside the box, the patch mixes 1 m and 3 m
   data. `fetch_patch.py` records where, and the measurements report it per cross-section.
-- **The resolution needed for the tube.** It is unknown until V1. If V1 says 0.1 m, tier B
-  becomes about 100 M cells, and the move to Basilisk's adaptive octree is worth making there.
+- **The resolution needed for the tube.** V1 passed at 0.063 m. That puts even tier A beyond the
+  laptop (see the cost table), so the box is a rented-machine job unless the refinement can be
+  limited to where the wave breaks.
 - **Time to first answer.** V0 to P1 is roughly three weeks of evenings, most of it in items 1, 5
   and 6 (*estimate*). The viewer can wait.
 
