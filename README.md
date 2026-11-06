@@ -184,6 +184,12 @@ uv run --python 3.12 --with rasterio --with numpy --with scipy --with pyproj \
     tools/fetch_spot.py coxos --from 300 --out data/coxos
 ```
 
+Once a spot's runs are done, one per direction and tide, `tools/spot_sheet.py` boils them down to its spot sheet ([docs/spot-sheets.md](docs/spot-sheets.md)): for each run, the breaking zone, the break points and the takeoffs, in latitude and longitude, written to `out/sheets/<spot>.json` with a preview map beside it (`out/sheets/<spot>.html`, on satellite imagery). The runs it reads are listed under `[<spot>.sheet]` in `spots.toml`.
+
+```bash
+uv run --python 3.12 --with numpy --with scipy --with pyproj --with contourpy tools/spot_sheet.py coxos
+```
+
 **Running it on a laptop.**
 
 - A 2.5 m, 14 s swell at Pipeline crosses the shelf on 319 × 200 cells of 6 m and runs the reef on 179 × 400 cells of 3 m, for 328 simulated seconds (so that the surf zone settles before the four waves recorded): **11.7 minutes on three threads on the efficiency cores**, cool and quiet, about 9 on four, within the default limit of 12 minutes. With `--priority normal` it takes about a third as long, on the performance cores, and heats the laptop.
@@ -403,7 +409,9 @@ wavesim/
 │   ├── merge_bed.py            # lay a fine seabed over a coarse one, onto mean sea level
 │   ├── fetch_line.py           # one cross-shore line of a bed's frame from a finer DEM
 │   ├── direction.py            # which way a run's waves travel where they break, and their peel
-│   └── tests/test_{fetch_spot,merge_bed,fetch_line,direction}.py
+│   ├── spot_sheet.py           # a spot's runs boiled down to its sheet: breaking zone, takeoffs, map
+│   ├── sheet_preview.html      # the sheet's preview map (Leaflet on satellite imagery)
+│   └── tests/test_{fetch_spot,merge_bed,fetch_line,direction,spot_sheet}.py
 └── crates/
     ├── wavecore/               # pure numerics, no dependencies
     │   ├── src/

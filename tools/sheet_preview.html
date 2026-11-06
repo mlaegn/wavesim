@@ -1,0 +1,128 @@
+<!doctype html>
+<!-- The spot-sheet preview: tools/spot_sheet.py fills in the sheet and writes out/sheets/<name>.html. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spot sheet preview</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  :root { --bg: #f6f5f1; --fg: #1d1d1b; --muted: #6b6a64; --line: #d9d7cf; --accent: #ff7a1a; --chip: #fff; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #17181a; --fg: #ecebe6; --muted: #a09f99; --line: #34353a; --chip: #222326; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 system-ui, sans-serif; background: var(--bg); color: var(--fg); display: grid; grid-template-columns: 1fr 340px; height: 100vh; }
+  #map { height: 100vh; }
+  aside { padding: 16px; overflow-y: auto; border-left: 1px solid var(--line); }
+  h1 { font-size: 18px; margin: 0 0 2px; }
+  .muted { color: var(--muted); font-size: 12px; }
+  .label { font-size: 12px; color: var(--muted); margin: 14px 0 6px; text-transform: uppercase; letter-spacing: .04em; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  button { font: inherit; padding: 5px 10px; border: 1px solid var(--line); background: var(--chip); color: var(--fg); border-radius: 999px; cursor: pointer; }
+  button.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+  dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; }
+  dt { color: var(--muted); } dd { margin: 0; }
+  .legend span { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -2px; margin-right: 6px; }
+  .warn { margin-top: 16px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; color: var(--muted); }
+  @media (max-width: 760px) { body { grid-template-columns: 1fr; grid-template-rows: 60vh auto; height: auto; } #map { height: 60vh; } aside { border-left: 0; border-top: 1px solid var(--line); } }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<aside>
+  <h1 id="title"></h1>
+  <div class="muted" id="sub"></div>
+  <div class="label">Swell from (open sea)</div>
+  <div class="chips" id="dirs"></div>
+  <div class="label">Tide</div>
+  <div class="chips" id="tides"></div>
+  <div class="label">At this direction</div>
+  <dl id="facts"></dl>
+  <div class="label">On the map</div>
+  <div class="legend">
+    <div><span style="background:var(--accent);opacity:.6"></span>breaks on most waves</div>
+    <div><span style="background:#fff;border:2px solid #111"></span>takeoff at this swell: breaks before the reef either side</div>
+    <div><span style="border:2px dashed #888"></span>a peak of the reef: a takeoff at many swells</div>
+    <div><span style="background:#3b82f6"></span>break points, larger = bigger</div>
+    <div><span style="background:#e11d48"></span>reaches the rock unbroken</div>
+  </div>
+  <div class="warn" id="warn"></div>
+</aside>
+<script>
+const SHEET = /*SHEET*/null;
+const map = L.map("map", { zoomControl: true });
+L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+  maxNativeZoom: 19, maxZoom: 20,
+  attribution: "Imagery &copy; Esri, Maxar, Earthstar Geographics",
+}).addTo(map);
+let layer = L.layerGroup().addTo(map);
+let dirIdx = SHEET.rows.findIndex(r => r.from_deg === 320); if (dirIdx < 0) dirIdx = 0;
+let tide = "mid";
+
+document.getElementById("title").textContent = SHEET.description || SHEET.spot;
+document.getElementById("sub").textContent =
+  `${SHEET.swell.height_m} m, ${SHEET.swell.period_s} s swell · model, not observation`;
+document.getElementById("warn").textContent =
+  `Seabed: ${SHEET.seabed.source}, on ${SHEET.seabed.cell_m} m cells. The bottom's fine shape at the ` +
+  `break is blurred at this resolution, so whether it barrels and which way and how fast it peels are left out for now. ` +
+  `Generated ${SHEET.generated}. ${SHEET.seabed.attribution}.`;
+
+function chip(parent, text, on, click) {
+  const b = document.createElement("button"); b.textContent = text; if (on) b.className = "on";
+  b.onclick = click; parent.appendChild(b);
+}
+function draw(fit) {
+  const row = SHEET.rows[dirIdx], t = row.tides[tide];
+  const dirs = document.getElementById("dirs"); dirs.innerHTML = "";
+  SHEET.rows.forEach((r, i) => chip(dirs, `${r.from_deg}°`, i === dirIdx, () => { dirIdx = i; draw(false); }));
+  const tides = document.getElementById("tides"); tides.innerHTML = "";
+  Object.keys(row.tides).forEach(k => chip(tides, `${k} (${row.tides[k].tide_m >= 0 ? "+" : ""}${row.tides[k].tide_m} m)`, k === tide, () => { tide = k; draw(false); }));
+
+  layer.clearLayers();
+  for (const poly of t.zone) {
+    L.polygon(poly.map(ring => ring.map(([lon, lat]) => [lat, lon])), {
+      color: "#ff7a1a", weight: 1, fillColor: "#ff7a1a", fillOpacity: 0.4,
+    }).addTo(layer);
+  }
+  const h0 = SHEET.swell.height_m;
+  t.breaks.forEach(([lon, lat, h, d, rock], i) => {
+    if (i % 2) return;  // every other row is plenty at this zoom
+    L.circleMarker([lat, lon], {
+      radius: 1.5 + 1.5 * h / h0, weight: 0, fillOpacity: 0.9, fillColor: rock ? "#e11d48" : "#3b82f6",
+    }).bindTooltip(`${h.toFixed(1)} m in ${d.toFixed(1)} m of water${rock ? ", reaches the rock" : ""}`).addTo(layer);
+  });
+  const runs = SHEET.rows.reduce((n, r) => n + Object.keys(r.tides).length, 0);
+  for (const p of SHEET.peaks.filter(p => p.share >= 0.25)) {
+    L.circleMarker([p.lat, p.lon], { radius: 11, color: "#fff", weight: 2, dashArray: "3 3", fill: false })
+      .bindTooltip(`a peak of the reef: breaks first here in ${Math.round(p.share * runs)} of ${runs} runs`).addTo(layer);
+  }
+  t.takeoffs.filter(p => p.stands_out_s >= 5).forEach((p, i) => {
+    L.circleMarker([p.lat, p.lon], { radius: i ? 6 : 9, color: "#111", weight: 2, fillColor: "#fff", fillOpacity: 1 })
+      .bindTooltip(`takeoff at this swell: breaks ${p.stands_out_s} s before the reef either side, in ${p.depth_m} m of water`).addTo(layer);
+  });
+  if (fit) {
+    // Leaflet needs the map's size first; on a fresh page it may not have it yet.
+    const bounds = L.featureGroup(layer.getLayers()).getBounds().pad(0.15);
+    map.fitBounds(bounds);
+    window.addEventListener("load", () => { map.invalidateSize(); map.fitBounds(bounds); });
+  }
+
+  const n = t.near_takeoff, f = document.getElementById("facts");
+  const shift = row.low_tide_seaward_m;
+  f.innerHTML = "";
+  const facts = [
+    ["At the wave-maker", `${row.at_maker_deg}° (the shelf bends it)`],
+    ["Takeoffs", `${t.takeoffs.filter(p => p.stands_out_s >= 5).length} (white dots; the biggest breaks first by the most)`],
+    ["Size at the break", n && n.height_over_offshore ? `${n.height_over_offshore}× the offshore height` : "—"],
+    ["Depth there", n && n.depth_m != null ? `${n.depth_m} m` : "—"],
+    ["From the shoreline", n && n.from_shore_m != null ? `${Math.round(n.from_shore_m)} m` : "—"],
+    ["Reaches the rock", `${Math.round(100 * t.rock_share)}% of the spot` + (n ? `, ${Math.round(100 * n.rock_share)}% near the main takeoff` : "")],
+    ["Low tide vs mid", shift == null ? "—" : Math.abs(shift) < 5 ? "about the same place" :
+      `${Math.abs(Math.round(shift))} m further ${shift > 0 ? "out" : "in"}`],
+  ];
+  for (const [k, v] of facts) { const dt = document.createElement("dt"); dt.textContent = k; const dd = document.createElement("dd"); dd.textContent = v; f.append(dt, dd); }
+}
+draw(true);
+</script>
+</body>
+</html>

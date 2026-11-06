@@ -56,3 +56,20 @@ clip_above = 6.0
 fine = "netcdf:data/emodnet_hr_centro/590_HR_Lidar_Centro.nc:elevation"
 coarse = "data/emodnet_dtm_coxos/emodnet_mean_coxos.tif"
 shift_m = -2.0
+
+[coxos.sheet]
+# tools/spot_sheet.py. One row per open-sea direction; `maker` is that swell's direction at the
+# wave-maker after the shelf has bent it (Snell, 13 s; docs/spot-sheets.md section 1). The trusted
+# rows reach past the run's north margin to take in the point: there the 2400 m box agrees with
+# the 1200 m one within 16 m and 1% (340 deg, 2026-11-06).
+trust_y_m = [300.0, 1050.0]
+zone_fraction = 0.08
+rows = [
+  { from = 280, maker = 275, mid = "out/coxos_2m13s_275", low = "out/coxos_2m13s_275_low" },
+  { from = 290, maker = 282, mid = "out/coxos_2m13s_282", low = "out/coxos_2m13s_282_low" },
+  { from = 300, maker = 288, mid = "out/coxos_2m13s_288", low = "out/coxos_2m13s_288_low" },
+  { from = 310, maker = 294, mid = "out/coxos_2m13s_294", low = "out/coxos_2m13s_294_low" },
+  { from = 320, maker = 300, mid = "out/coxos_2m13s_300", low = "out/coxos_2m13s_300_low" },
+  { from = 330, maker = 304, mid = "out/coxos_2m13s_304", low = "out/coxos_2m13s_304_low" },
+  { from = 340, maker = 307, mid = "out/coxos_2m13s_307", low = "out/coxos_2m13s_307_low" },
+]

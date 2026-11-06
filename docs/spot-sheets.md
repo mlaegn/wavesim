@@ -1,6 +1,7 @@
 # Spot sheets: how each spot's wave changes with the swell's angle
 
-A plan, written 2026-11-04. Nothing here is built yet. It replaces
+A plan, written 2026-11-04; the Coxos runs and the reducer are done (2026-11-06, "Coxos, first
+results" below). It replaces
 [forecast-tables.md](forecast-tables.md) as the way wavesim reaches gogo. That doc is parked;
 its findings still hold, and this one links to them rather than repeating them.
 
@@ -19,8 +20,12 @@ its findings still hold, and this one links to them rather than repeating them.
   moves it and whether it hits the rock are usable. Whether it pitches or crumbles (barrels) and
   how fast it peels depend on the bottom's exact shape at the break, which 15 m blurs. Those
   lines wait for the DGT 2 m data.
-- **The check is Max.** He writes down what he knows about Coxos before seeing the runs, and
-  the sheet goes into gogo only if it agrees.
+- **It is a map.** The sheet shows on a satellite or aerial photo where the swell breaks at each
+  direction and tide, and where it breaks first (the takeoffs), with a few lines of text beside
+  it. Max asked for that on 2026-11-06, over a table of text.
+- **The check is Max.** He looks at the Coxos map, and it goes into gogo only if it matches what
+  he knows. He chose not to write his notes down first (2026-11-06), so the check is made after
+  seeing the map, not before.
 
 ## 1. What a sheet says
 
@@ -92,19 +97,56 @@ Little, because the break reading is done (2026-11-04: shoreward-most near-peak,
    for a swell from 288° at the wave-maker and writes `coxos_288`; `--width` widens the box. One
    bed per direction is needed because `wavesim run` drives the swell square-on and the side
    walls only suit that.
-3. **A reducer, `tools/spot_sheet.py`:** reads the runs of one spot and writes the sheet's rows
-   as JSON, over the lineup rows.
-4. **The lineup:** the rows (`y` range) and stretch of `x` where people take off at Coxos, drawn
-   once on the bed. Max knows where that is; the reducer needs it as numbers.
+3. **A reducer. Done 2026-11-06.** `tools/spot_sheet.py coxos` reads the runs listed under
+   `[coxos.sheet]` in `spots.toml` and writes `out/sheets/coxos.json` (240 KB) and a preview map
+   beside it. Per run: the breaking zone (cells breaking in at least 8% of the saved frames, about
+   every wave), the break points, the takeoffs and a few numbers near the main one.
+4. **The lineup: not needed.** The reducer finds the takeoffs itself (below), so Max does not have
+   to mark one; he checks the ones it finds.
 
 No batch driver, wall time or `--no-frames` is needed for 14 runs.
+
+## Coxos, first results (2026-11-06)
+
+All 13 runs finished in 5 h 50 min on 3 efficiency-core threads; the thermal state stayed nominal
+throughout (701 readings).
+
+- **The width check passes.** At 340° the 1200 m box and the 2400 m one put the break in the
+  same place over the trusted rows (median 0 m apart) with heights 4–8% apart, inside the 10%
+  limit. Past the north margin line, over the point (rows 900–1050 m), they agree within 16 m and
+  1%, so the trusted band is 300–1050 m, not 300–900. Only the last 150 m by the north wall
+  differ (19%).
+- **It lines up with the photo.** The seabed's 0 m line follows the shoreline in the Esri imagery
+  along the cliffs; in the sandy coves it sits up to about 50 m inland, which is the beach between
+  the tide lines.
+- **Low tide moves the break out** 9 to 39 m depending on direction (median over the rows both
+  tides share). Runs crop the bed's offshore end differently, so this compares positions on the
+  bed, not in each run's own frame; a first version that did not read 6 to 42 m the wrong way.
+- **Takeoffs.** A takeoff is where the crest breaks before the reef on both sides: the crest leaves
+  the wave-maker straight, its travel time to each row's break point is summed at the local phase
+  speed, and a row is a takeoff if it is the earliest within 60 m and at least 2 s ahead of the
+  latest within 150 m on both sides (rows onto the rock and the band's last 30 m never count). A
+  coast that simply runs seaward to one end breaks first at that end, which is not a takeoff;
+  an earlier version that took the single earliest row picked the band's end that way.
+- **The reef's peaks.** Each run has two to five takeoffs, and which one is strongest changes from
+  direction to direction. But they cluster: four places are a takeoff in half or more of the 14
+  runs (39.0056 −9.4285, 39.0016 −9.4288, 39.0064 −9.4275, 39.0031 −9.4286). Those are features of
+  the bed; the swell's direction switches them on and off. The map shows them as dashed rings.
+- **What is left out.** The peel (which way and how fast) came out inconsistent between
+  neighbouring directions and tides, sometimes negative, so the map does not show it; nor
+  whether it barrels. Both wait for the 2 m seabed.
 
 ## 4. How it shows in gogo
 
 A section on the spot page (`web/src/screens/SpotScreen.tsx`), "How Coxos changes with the
-swell's angle": the sheet's rows, the tide difference beside each, and the "model" label. The
-data is a static file in gogo, the way `src/gogo/data/rays.json` is, copied from the reducer's
-output. Nothing in the score reads it, so the 2026-10-14 decision against break-scale physics
+swell's angle": a map with a direction picker and a tide switch, the breaking zone, the break
+points and the takeoffs drawn on it, a few lines of text beside it, and the "model" label.
+`tools/sheet_preview.html` is that section as a standalone page. In gogo it needs Leaflet (about
+40 KB) and an image source: Esri World Imagery in the preview; Portugal's DGT aerial photos
+(25 cm, 2018; 10 cm along the coast, 2014–15) would be sharper, but no working tile service for
+them was found on 2026-11-06, and their licence is still to be confirmed. The tile provider sees
+which tiles a viewer loads. The data is a static file in gogo, the way `src/gogo/data/rays.json`
+is, copied from the reducer's output. Nothing in the score reads it, so the 2026-10-14 decision against break-scale physics
 in the score is untouched, and nothing waits on labels.
 
 Later, cheaply: mark the row nearest today's forecast direction, so the sheet answers "what
@@ -122,9 +164,10 @@ describe sand that is no longer there.
 
 ## 6. The check
 
-Before the runs, Max writes down three things he knows about Coxos, so the comparison is not
-made after the fact:
+Max looks at the Coxos map against what he knows (he chose on 2026-11-06 not to write it down
+first, so this is a check made after seeing it):
 
+- whether the takeoffs and the four peaks sit where people actually take off;
 - which direction works best, and which is too north or too west;
 - where it breaks at low tide against mid tide;
 - at what size or tide it starts hitting the rock.
@@ -137,9 +180,10 @@ waits for the DGT 2 m data rather than going out wrong.
 
 1. Keep logging sessions. That is gogo's own gate and unrelated to the sheets, but it is still
    what improves the score.
-2. Max writes down what he knows about Coxos (section 6) and marks the lineup.
-3. Done 2026-11-04: the Coxos seabed as a script, and the bearing override (section 3).
-4. The 13 runs at Coxos, one night, after Max's OK.
-5. The reducer, and the sheet compared with step 2.
-6. If it holds: the section on gogo's spot page, then Ribeira. If not: wait for DGT.
-7. When the DGT 2 m data arrives: rebuild the beds, rerun, and add the pitch and peel lines.
+2. Done 2026-11-04: the Coxos seabed as a script, and the bearing override (section 3).
+3. Done 2026-11-05: the 13 runs at Coxos.
+4. Done 2026-11-06: the reducer, the width check and the preview map.
+5. Max checks the Coxos map: the breaking zone, the four peaks, low against mid tide.
+6. If it holds: the image source (DGT or Esri), then the map section on gogo's spot page, then
+   Ribeira. If not: wait for DGT.
+7. When the DGT 2 m data arrives: rebuild the beds, rerun, and add the peel and pitch lines.
