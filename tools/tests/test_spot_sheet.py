@@ -64,3 +64,10 @@ def test_simplify_keeps_a_squares_corners_only():
     ])
     r = spot_sheet.simplify(ring, 3.0)
     assert {tuple(p) for p in r} == {(0.0, 0.0), (30.0, 0.0), (30.0, 30.0), (0.0, 30.0)}
+
+
+def test_inside_reads_the_area_as_lat_lon_corners():
+    area = [[39.0, -9.43], [39.0, -9.42], [39.01, -9.42], [39.01, -9.43]]
+    lon = np.array([-9.425, -9.435, -9.425])
+    lat = np.array([39.005, 39.005, 39.02])
+    assert spot_sheet.inside(lon, lat, area).tolist() == [True, False, False]

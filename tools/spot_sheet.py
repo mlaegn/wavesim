@@ -11,15 +11,16 @@ tide, and the band of rows to trust. For each run the sheet gives, in latitude a
   saved frames of the settled sea (every wave breaks there, roughly);
 - the break points: the run's own break line (one point per row: where the wave stops growing
   and breaks, or reaches the rock unbroken), with the height and depth there;
-- the takeoff: where the crest breaks first. The crest leaves the wave-maker straight, so the
-  time it takes to reach each row's break point, summed cell by cell at the local phase speed,
-  says which row breaks first and which way the break runs from there: the peel. Towards -y is
-  to a surfer's right as they face the shore, so a peel that way is a right-hander;
+- the takeoffs: where the crest breaks before the reef on both sides. The crest leaves the
+  wave-maker straight, so the time it takes to reach each row's break point, summed cell by cell
+  at the local phase speed, says which rows break first. (Which way it then peels is left out:
+  on the 15 m bed it is not consistent from one direction to the next.)
 - a few numbers near the takeoff: height at the break over the offshore height, depth, how far
   from the shoreline, and the share of rows where the wave reaches the rock unbroken.
 
 Only the rows inside `trust_y_m` count: the rest is the run's side margins (README, "side
-walls"). Writes `out/sheets/<name>.json`, small enough to ship with gogo.
+walls"). An optional `area`, a polygon of [lat, lon] corners, keeps only what lies inside it: the
+surf spot itself, where the runs show the whole coast. Writes `out/sheets/<name>.json`, small enough to ship with gogo.
 """
 
 from __future__ import annotations
@@ -152,7 +153,23 @@ def zone_polygons(share: np.ndarray, rows: slice, level: float, dx: float, frame
     return polys
 
 
-def read_run(run: dict, trust_y: tuple[float, float], zone_fraction: float) -> dict:
+def inside(lon, lat, area) -> np.ndarray:
+    """Whether each point lies inside the polygon `area` ([lat, lon] corners), by ray casting."""
+    lon, lat = np.asarray(lon, float), np.asarray(lat, float)
+    out = np.zeros(lon.shape, bool)
+    n = len(area)
+    for k in range(n):
+        (a_lat, a_lon), (b_lat, b_lon) = area[k], area[(k + 1) % n]
+        crosses = (a_lat > lat) != (b_lat > lat)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            at = a_lon + (lat - a_lat) * (b_lon - a_lon) / (b_lat - a_lat)
+        out ^= crosses & (lon < at)
+    return out
+
+
+def read_run(run: dict, trust_y: tuple[float, float], zone_fraction: float, area=None) -> dict:
+    """One run's entry in the sheet. Takeoffs are found over all the trusted rows, so the
+    spot's `area` does not make edges of its own; then only what lies inside it is kept."""
     h = run["header"]
     w = h["waves"]
     ny, dx, dy = h["ny"], h["dx"], h["dy"]
@@ -187,32 +204,18 @@ def read_run(run: dict, trust_y: tuple[float, float], zone_fraction: float) -> d
         )
     if not rows:
         raise ValueError("no break points inside the trusted rows")
+    lon, lat = frame.lonlat([r["x"] for r in rows], [r["y"] for r in rows])
+    for r, o, a, ok in zip(rows, lon, lat, inside(lon, lat, area) if area else [True] * len(rows)):
+        r["lon"], r["lat"], r["in_area"] = float(o), float(a), bool(ok)
 
     ts = median_filter(np.array([r["t"] for r in rows]), size=max(3, int(30 / dy) | 1), mode="nearest")
-    peaks = takeoffs(rows, ts, dy)
+    peaks = [p for p in takeoffs(rows, ts, dy) if rows[p["k"]]["in_area"]]
+    shared = common(run, rows, frame, j0, j1, zone_fraction, area)
     if not peaks:
-        return {"tide_m": tide, "takeoff": None, "takeoffs": [], "peel": None, "near_takeoff": None,
-                "_rows": rows, **common(run, rows, frame, j0, j1, zone_fraction)}
+        return {"tide_m": tide, "takeoff": None, "takeoffs": [], "near_takeoff": None, "_rows": rows, **shared}
     k0 = peaks[0]["k"]
     peak = rows[k0]
-
-    # The peel: how the break runs away from the takeoff on each side, over RIDE_M. Towards -y
-    # (lower rows) is to the surfer's right.
-    sides = {}
-    for side, sel in (("right", lambda r: peak["y"] - RIDE_M <= r["y"] < peak["y"]),
-                      ("left", lambda r: peak["y"] < r["y"] <= peak["y"] + RIDE_M)):
-        ks = [k for k, r in enumerate(rows) if sel(r)]
-        if len(ks) < 5:
-            sides[side] = None
-            continue
-        ys = np.array([rows[k]["y"] for k in ks])
-        later = np.polyfit(np.abs(ys - peak["y"]), ts[ks] - ts[k0], 1)[0]  # s per m along the shore
-        sides[side] = {
-            "metres": float(abs(ys - peak["y"]).max()),
-            "seconds_per_100m": round(float(later * 100), 1),
-            "rock_share": round(float(np.mean([rows[k]["rock"] for k in ks])), 2),
-        }
-    ride = [r for r in rows if abs(r["y"] - peak["y"]) <= RIDE_M]
+    ride = [r for r in rows if abs(r["y"] - peak["y"]) <= RIDE_M and r["in_area"]]
 
     def med(key, rs):
         v = [r[key] for r in rs if r[key] is not None]
@@ -226,7 +229,6 @@ def read_run(run: dict, trust_y: tuple[float, float], zone_fraction: float) -> d
         "tide_m": tide,
         "takeoff": where(k0),
         "takeoffs": [where(p["k"], {"stands_out_s": p["stands_out_s"]}) for p in peaks],
-        "peel": sides,
         "near_takeoff": {
             "height_over_offshore": None if med("height", ride) is None else round(med("height", ride) / h0, 2),
             "reflection": med("reflection", ride),
@@ -235,20 +237,26 @@ def read_run(run: dict, trust_y: tuple[float, float], zone_fraction: float) -> d
             "rock_share": round(float(np.mean([r["rock"] for r in ride])), 2),
         },
         "_rows": rows,
-        **common(run, rows, frame, j0, j1, zone_fraction),
+        **shared,
     }
 
 
-def common(run: dict, rows: list, frame: Frame, j0: int, j1: int, zone_fraction: float) -> dict:
-    """What every run's entry carries, takeoff or not: the zone and the break points."""
-    lon, lat = frame.lonlat([r["x"] for r in rows], [r["y"] for r in rows])
+def common(run: dict, rows: list, frame: Frame, j0: int, j1: int, zone_fraction: float, area=None) -> dict:
+    """What every run's entry carries, takeoff or not: the zone and the break points, inside the
+    spot's area."""
+    share = run["break_share"]
+    if area:
+        h = run["header"]
+        xs, ys = np.meshgrid((np.arange(h["nx"]) + 0.5) * h["dx"], (np.arange(h["ny"]) + 0.5) * h["dy"])
+        share = np.where(inside(*frame.lonlat(xs, ys), area), share, 0.0)
+    kept = [r for r in rows if r["in_area"]]
     return {
-        "rock_share": round(float(np.mean([r["rock"] for r in rows])), 2),
+        "rock_share": round(float(np.mean([r["rock"] for r in kept])), 2) if kept else None,
         "breaks": [
-            [round(float(o), 6), round(float(a), 6), round(r["height"], 2), round(r["depth"], 1), r["rock"]]
-            for o, a, r in zip(lon, lat, rows)
+            [round(r["lon"], 6), round(r["lat"], 6), round(r["height"], 2), round(r["depth"], 1), r["rock"]]
+            for r in kept
         ],
-        "zone": zone_polygons(run["break_share"], slice(j0, j1), zone_fraction, run["header"]["dx"], frame),
+        "zone": zone_polygons(share, slice(j0, j1), zone_fraction, run["header"]["dx"], frame),
     }
 
 
@@ -284,7 +292,7 @@ def tide_shift(mid: dict, low: dict) -> float | None:
 
     Each run crops the bed's offshore end differently, so this compares positions on the bed.
     """
-    a = {r["j"]: r["x_bed"] for r in mid["_rows"]}
+    a = {r["j"]: r["x_bed"] for r in mid["_rows"] if r.get("in_area", True)}
     d = [a[r["j"]] - r["x_bed"] for r in low["_rows"] if r["j"] in a]
     return round(float(np.median(d)), 1) if d else None
 
@@ -329,6 +337,7 @@ def main(argv=None) -> int:
     spot, cfg = spots[args.name], spots[args.name]["sheet"]
     trust = tuple(cfg["trust_y_m"])
     level = cfg.get("zone_fraction", 0.08)
+    area = cfg.get("area")
 
     rows, swell = [], None
     for entry in cfg["rows"]:
@@ -339,7 +348,7 @@ def main(argv=None) -> int:
             run = load_run(Path(entry[tide_name]))
             w = run["header"]["waves"]
             swell = swell or {"height_m": w["wave_height_m"], "period_s": w["wave_period_s"]}
-            tides[tide_name] = read_run(run, trust, level)
+            tides[tide_name] = read_run(run, trust, level, area)
             tides[tide_name]["run"] = entry[tide_name]
         shift = tide_shift(tides["mid"], tides["low"]) if {"mid", "low"} <= tides.keys() else None
         for v in tides.values():
@@ -348,7 +357,7 @@ def main(argv=None) -> int:
         mid = tides.get("mid", {})
         print(
             f"{entry['from']:3d} (maker {entry['maker']}): takeoff {mid.get('takeoff')} "
-            f"peel {mid.get('peel')} near {mid.get('near_takeoff')} low tide moves it {shift} m seaward"
+            f"near {mid.get('near_takeoff')} low tide moves it {shift} m seaward"
         )
 
     sheet = {
@@ -361,6 +370,7 @@ def main(argv=None) -> int:
         "swell": swell,
         "zone_fraction": level,
         "trust_y_m": list(trust),
+        "area": area,
         "generated": datetime.date.today().isoformat(),
         "peaks": recurring_peaks(rows),
         "rows": rows,

@@ -60,10 +60,17 @@ shift_m = -2.0
 [coxos.sheet]
 # tools/spot_sheet.py. One row per open-sea direction; `maker` is that swell's direction at the
 # wave-maker after the shelf has bent it (Snell, 13 s; docs/spot-sheets.md section 1). The trusted
-# rows reach past the run's north margin to take in the point: there the 2400 m box agrees with
-# the 1200 m one within 16 m and 1% (340 deg, 2026-11-06).
+# rows reach 150 m past the run's north margin line, over the point: there the 2400 m box agrees
+# with the 1200 m one within 16 m and 1% (340 deg, 2026-11-06). Reaching as far into the south
+# margin scattered break points far offshore, so the south edge stays at 300 m.
 trust_y_m = [300.0, 1050.0]
 zone_fraction = 0.08
+# Coxos itself, as Max drew it on the preview map (2026-11-06): the runs show the whole coast.
+area = [
+  [39.00282, -9.42983], [39.00257, -9.42789], [39.00156, -9.42675], [39.00055, -9.42578],
+  [38.99941, -9.42448], [38.99878, -9.42497], [38.99853, -9.42659], [38.99846, -9.42902],
+  [38.99916, -9.43032], [39.00042, -9.43097], [39.00181, -9.43089], [39.00257, -9.43032],
+]
 rows = [
   { from = 280, maker = 275, mid = "out/coxos_2m13s_275", low = "out/coxos_2m13s_275_low" },
   { from = 290, maker = 282, mid = "out/coxos_2m13s_282", low = "out/coxos_2m13s_282_low" },

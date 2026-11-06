@@ -132,6 +132,14 @@ throughout (701 readings).
   direction to direction. But they cluster: four places are a takeoff in half or more of the 14
   runs (39.0056 −9.4285, 39.0016 −9.4288, 39.0064 −9.4275, 39.0031 −9.4286). Those are features of
   the bed; the swell's direction switches them on and off. The map shows them as dashed rings.
+- **Coxos is only part of it.** The runs show the whole coast; Max drew the spot itself on the
+  map (2026-11-06), and `area` in `[coxos.sheet]` keeps only what lies inside: the rock ledge
+  and the bay south-east of it, about 39.0028 to 38.9985. Takeoffs are still found over all the
+  trusted rows, so the outline makes no edges of its own. Inside it, the takeoff sits on the
+  outer ledge at about 39.0016 −9.4288 at every direction from 280° to 340° (39.0011 to 39.0022),
+  a peak in 8 of the 14 runs, and the breaking zone runs from there south-east into the bay. Low
+  tide moves the break 15 to 42 m out (0 m at 340°). The 2026-11-06 peaks above are the whole
+  coast's.
 - **What is left out.** The peel (which way and how fast) came out inconsistent between
   neighbouring directions and tides, sometimes negative, so the map does not show it; nor
   whether it barrels. Both wait for the 2 m seabed.

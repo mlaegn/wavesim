@@ -45,6 +45,7 @@
     <div><span style="border:2px dashed #888"></span>a peak of the reef: a takeoff at many swells</div>
     <div><span style="background:#3b82f6"></span>break points, larger = bigger</div>
     <div><span style="background:#e11d48"></span>reaches the rock unbroken</div>
+    <div><span style="border:1px dashed #888"></span>the spot: only what is inside counts</div>
   </div>
   <div class="warn" id="warn"></div>
 </aside>
@@ -79,6 +80,9 @@ function draw(fit) {
   Object.keys(row.tides).forEach(k => chip(tides, `${k} (${row.tides[k].tide_m >= 0 ? "+" : ""}${row.tides[k].tide_m} m)`, k === tide, () => { tide = k; draw(false); }));
 
   layer.clearLayers();
+  if (SHEET.area) {
+    L.polygon(SHEET.area, { color: "#fff", weight: 1.5, dashArray: "6 6", fill: false, interactive: false }).addTo(layer);
+  }
   for (const poly of t.zone) {
     L.polygon(poly.map(ring => ring.map(([lon, lat]) => [lat, lon])), {
       color: "#ff7a1a", weight: 1, fillColor: "#ff7a1a", fillOpacity: 0.4,
