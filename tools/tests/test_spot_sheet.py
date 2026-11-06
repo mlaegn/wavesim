@@ -71,3 +71,22 @@ def test_inside_reads_the_area_as_lat_lon_corners():
     lon = np.array([-9.425, -9.435, -9.425])
     lat = np.array([39.005, 39.005, 39.02])
     assert spot_sheet.inside(lon, lat, area).tolist() == [True, False, False]
+
+
+def test_frame_xy_inverts_lonlat():
+    f = spot_sheet.Frame(FRAME)
+    x, y = f.xy(*f.lonlat(np.array([10.0, 250.0]), np.array([600.0, -30.0])))
+    assert np.allclose(x, [10.0, 250.0], atol=1e-4) and np.allclose(y, [600.0, -30.0], atol=1e-4)
+
+
+def test_png_grey_round_trips():
+    import zlib
+
+    img = np.arange(12, dtype=np.uint8).reshape(3, 4) * 20
+    png = spot_sheet.png_grey(img)
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+    assert int.from_bytes(png[16:20], "big") == 4 and int.from_bytes(png[20:24], "big") == 3
+    idat = png.index(b"IDAT")
+    n = int.from_bytes(png[idat - 4 : idat], "big")
+    raw = zlib.decompress(png[idat + 4 : idat + 4 + n])
+    assert [raw[i * 5 + 1 : i * 5 + 5] for i in range(3)] == [bytes(img[i]) for i in range(3)]

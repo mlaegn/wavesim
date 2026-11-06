@@ -140,6 +140,13 @@ throughout (701 readings).
   a peak in 8 of the 14 runs, and the breaking zone runs from there south-east into the bay. Low
   tide moves the break 15 to 42 m out (0 m at 340°). The 2026-11-06 peaks above are the whole
   coast's.
+- **Wave height (2026-11-06).** Each run also carries its wave height over the offshore height
+  as a small grey PNG on a latitude-longitude grid, which gogo colours and lets you tap to read.
+  The raw height is striped half a wavelength apart by the swell reflected off the rock, so it is
+  smoothed over the wet cells first (Gaussian, sigma 15 m). At Coxos it peaks at about 1.9× just
+  inside the takeoff; the break-point heights read about 2× because they include the reflection.
+- **Stray break points.** A break point more than 40 m off the median of its 10 neighbours each
+  side is a single row misread on the 15 m bed, and is left out of the map and the numbers.
 - **What is left out.** The peel (which way and how fast) came out inconsistent between
   neighbouring directions and tides, sometimes negative, so the map does not show it; nor
   whether it barrels. Both wait for the 2 m seabed.

@@ -17,7 +17,15 @@ rows to trust. For each run the sheet gives, in latitude and longitude:
   at the local phase speed, says which rows break first. (Which way it then peels is left out:
   on the 15 m bed it is not consistent from one direction to the next.)
 - a few numbers near the takeoff: height at the break over the offshore height, depth, how far
-  from the shoreline, and the share of rows where the wave reaches the rock unbroken.
+  from the shoreline, and the share of rows where the wave reaches the rock unbroken;
+- the wave-height map: the run's wave height over the recorded waves, over the offshore
+  height, smoothed over the wet cells (sigma HEIGHT_SMOOTH_M) so that the stripes the swell
+  reflected off the rock lays over the incoming one, half a wavelength apart, do not read as
+  peaks, and resampled onto a latitude-longitude grid of about one cell, as an 8-bit grey PNG
+  (0 = no data; v = 1 + round(ratio / HEIGHT_TOP * 254)) that the page colours itself.
+
+A break point more than STRAY_M seaward or shoreward of the median of its neighbours (STRAY_ROWS
+either side) is a misreading of a single row on the 15 m bed, and is left out.
 
 Only the rows inside `trust_y_m` count: the rest is the run's side margins (README, "side
 walls"). An optional `area`, a polygon of [lat, lon] corners, keeps only what lies inside it: the
@@ -27,20 +35,25 @@ surf spot itself, where the runs show the whole coast. Writes `out/sheets/<name>
 from __future__ import annotations
 
 import argparse
+import base64
 import datetime
 import json
 import math
 import sys
 import tomllib
+import zlib
 from pathlib import Path
 
 import numpy as np
 from contourpy import FillType, contour_generator
 from pyproj import Transformer
-from scipy.ndimage import median_filter, uniform_filter
+from scipy.ndimage import gaussian_filter, map_coordinates, median_filter, uniform_filter
 
 G = 9.81
 RIDE_M = 150.0  # how far along the shore from the takeoff the numbers are read
+STRAY_M, STRAY_ROWS = 40.0, 10  # a break point this far off its neighbours' median is dropped
+HEIGHT_TOP = 3.0  # the height map's grey levels span 0 to this many times the offshore height
+HEIGHT_SMOOTH_M = 15.0  # Gaussian sigma: the swell reflected off the rock stripes the raw height
 
 
 def phase_speed(depth: np.ndarray, period: float) -> np.ndarray:
@@ -58,7 +71,9 @@ def load_run(run: Path) -> dict:
     frames = np.memmap(run / h["frames"], dtype="<f4", mode="r", shape=(len(times), len(h["fields"]), ny, nx))
     use = times >= h["stats"]["from_s"] - 1e-9
     breaking = np.asarray(frames[use, h["fields"].index("breaking")]) > 0
-    out = {"header": h, "bed": bed, "break_share": breaking.mean(axis=0), "coarse": None}
+    stats = np.fromfile(run / h["stats"]["file"], dtype="<f4").reshape(len(h["stats"]["fields"]), ny, nx)
+    height = stats[h["stats"]["fields"].index("wave_height")].astype("float64")
+    out = {"header": h, "bed": bed, "break_share": breaking.mean(axis=0), "height": height, "coarse": None}
     if (run / "coarse" / "run.json").exists():
         c = json.loads((run / "coarse" / "run.json").read_text())
         cbed = np.fromfile(run / "coarse" / c["bed"], dtype="<f4").reshape(c["ny"], c["nx"]).astype("float64")
@@ -93,6 +108,13 @@ class Frame:
         self.e0, self.n0 = frame["origin_easting"], frame["origin_northing"]
         self.ex, self.ey = (math.sin(b), math.cos(b)), (-math.cos(b), math.sin(b))
         self.to_ll = Transformer.from_crs(frame["crs"], "EPSG:4326", always_xy=True)
+        self.to_utm = Transformer.from_crs("EPSG:4326", frame["crs"], always_xy=True)
+
+    def xy(self, lon, lat):
+        """Longitude, latitude to run-frame metres: the inverse of lonlat."""
+        e, n = self.to_utm.transform(np.asarray(lon, float), np.asarray(lat, float))
+        de, dn = e - self.e0, n - self.n0
+        return de * self.ex[0] + dn * self.ex[1], de * self.ey[0] + dn * self.ey[1]
 
     def lonlat(self, x, y):
         x, y = np.asarray(x, float), np.asarray(y, float)
@@ -208,6 +230,9 @@ def read_run(run: dict, trust_y: tuple[float, float], zone_fraction: float, area
     lon, lat = frame.lonlat([r["x"] for r in rows], [r["y"] for r in rows])
     for r, o, a, ok in zip(rows, lon, lat, inside(lon, lat, area) if area else [True] * len(rows)):
         r["lon"], r["lat"], r["in_area"] = float(o), float(a), bool(ok)
+    xs = median_filter(np.array([r["x"] for r in rows]), size=2 * STRAY_ROWS + 1, mode="nearest")
+    for r, m in zip(rows, xs):
+        r["stray"] = abs(r["x"] - m) > STRAY_M
 
     ts = median_filter(np.array([r["t"] for r in rows]), size=max(3, int(30 / dy) | 1), mode="nearest")
     peaks = [p for p in takeoffs(rows, ts, dy) if rows[p["k"]]["in_area"]]
@@ -216,7 +241,7 @@ def read_run(run: dict, trust_y: tuple[float, float], zone_fraction: float, area
         return {"tide_m": tide, "takeoff": None, "takeoffs": [], "near_takeoff": None, "_rows": rows, **shared}
     k0 = peaks[0]["k"]
     peak = rows[k0]
-    ride = [r for r in rows if abs(r["y"] - peak["y"]) <= RIDE_M and r["in_area"]]
+    ride = [r for r in rows if abs(r["y"] - peak["y"]) <= RIDE_M and r["in_area"] and not r["stray"]]
 
     def med(key, rs):
         v = [r[key] for r in rs if r[key] is not None]
@@ -250,7 +275,7 @@ def common(run: dict, rows: list, frame: Frame, j0: int, j1: int, zone_fraction:
         h = run["header"]
         xs, ys = np.meshgrid((np.arange(h["nx"]) + 0.5) * h["dx"], (np.arange(h["ny"]) + 0.5) * h["dy"])
         share = np.where(inside(*frame.lonlat(xs, ys), area), share, 0.0)
-    kept = [r for r in rows if r["in_area"]]
+    kept = [r for r in rows if r["in_area"] and not r["stray"]]
     return {
         "rock_share": round(float(np.mean([r["rock"] for r in kept])), 2) if kept else None,
         "breaks": [
@@ -258,6 +283,63 @@ def common(run: dict, rows: list, frame: Frame, j0: int, j1: int, zone_fraction:
             for r in kept
         ],
         "zone": zone_polygons(share, slice(j0, j1), zone_fraction, run["header"]["dx"], frame),
+        "height_map": height_map(run, frame, j0, j1, area),
+    }
+
+
+def png_grey(img: np.ndarray) -> bytes:
+    """An 8-bit greyscale PNG, row 0 at the top. No dependency beyond zlib."""
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        body = kind + data
+        return len(data).to_bytes(4, "big") + body + zlib.crc32(body).to_bytes(4, "big")
+
+    h, w = img.shape
+    raw = b"".join(b"\x00" + img[i].astype(np.uint8).tobytes() for i in range(h))
+    ihdr = w.to_bytes(4, "big") + h.to_bytes(4, "big") + bytes([8, 0, 0, 0, 0])
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b"")
+
+
+def height_map(run: dict, frame: Frame, j0: int, j1: int, area=None, pad_m: float = 30.0) -> dict | None:
+    """The wave height over the offshore height on a latitude-longitude grid of about one cell,
+    over the area (or the trusted rows), wet cells only: {bounds: [[s, w], [n, e]], png: base64}.
+    """
+    h = run["header"]
+    dx, dy, ny, nx = h["dx"], h["dy"], h["ny"], h["nx"]
+    tide, h0 = h["waves"]["tide_m"], h["waves"]["wave_height_m"]
+    if area:
+        lats, lons = [a for a, _ in area], [o for _, o in area]
+    else:
+        xs, ys = np.meshgrid([0.0, nx * dx], [j0 * dy, j1 * dy])
+        lons, lats = frame.lonlat(xs, ys)
+        lons, lats = list(np.ravel(lons)), list(np.ravel(lats))
+    lat0 = (min(lats) + max(lats)) / 2
+    dlat = dx / 111_320.0
+    dlon = dx / (111_320.0 * math.cos(math.radians(lat0)))
+    pad_lat, pad_lon = pad_m / 111_320.0, pad_m / (111_320.0 * math.cos(math.radians(lat0)))
+    south, north = min(lats) - pad_lat, max(lats) + pad_lat
+    west, east = min(lons) - pad_lon, max(lons) + pad_lon
+    rows, cols = int(math.ceil((north - south) / dlat)), int(math.ceil((east - west) / dlon))
+    lat = north - (np.arange(rows) + 0.5) * dlat  # row 0 at the top
+    lon = west + (np.arange(cols) + 0.5) * dlon
+    LON, LAT = np.meshgrid(lon, lat)
+    x, y = frame.xy(LON, LAT)
+    i, j = x / dx - 0.5, y / dy - 0.5
+    ok = (i >= 0) & (i <= nx - 1) & (j >= j0) & (j <= j1 - 1)
+    wet_cells = (run["bed"] < tide).astype("float64")
+    s = HEIGHT_SMOOTH_M / dx
+    smooth = gaussian_filter(run["height"] * wet_cells, s) / np.maximum(gaussian_filter(wet_cells, s), 1e-9)
+    ratio = map_coordinates(smooth, [j, i], order=1, mode="nearest") / h0
+    wet = map_coordinates(run["bed"], [j, i], order=1, mode="nearest") < tide
+    ok &= wet & np.isfinite(ratio)
+    if area:
+        ok &= inside(LON, LAT, area)
+    if not ok.any():
+        return None
+    grey = np.where(ok, 1 + np.round(np.clip(ratio, 0, HEIGHT_TOP) / HEIGHT_TOP * 254), 0)
+    return {
+        "bounds": [[round(south, 6), round(west, 6)], [round(south + rows * dlat, 6), round(west + cols * dlon, 6)]],
+        "top": HEIGHT_TOP,
+        "png": base64.b64encode(png_grey(grey)).decode(),
     }
 
 
