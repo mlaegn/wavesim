@@ -246,7 +246,7 @@ converged at Δx/h₀ = 6 × 10⁻³, which for our 8 m depth is 0.05 m. Earlier
 air had matched the BEM of Grilli et al. (1997) (Guignard et al. 2001).
 
 Ours, with H the crest height at the curl: waveslice 3.16 / 3.27² = **0.30**, inside the
-measured range. OpenFOAM at 0.05 m: 1.14 / 3.15² = **0.12**, below all of them.
+measured range. OpenFOAM at 0.05 m: 1.14 / 3.15² = **0.11**, below all of them.
 
 **Not the time step.** Every run above but one used `maxCo 0.5` with the damBreak tutorial's
 settings. Larsen, Fuhrman & Roenby (2019) showed that this makes interFoam's crest velocities too
@@ -295,7 +295,7 @@ thermal state stayed nominal throughout.
 | Lip thrown | 10.72 m | 9.25 m | 9.75 m | 9.35 m | 7.67 m |
 | Tube, height × width | 1.61 × 3.14 m | 1.21 × 2.84 m | 1.42 × 3.00 m | 1.49 × 2.83 m | 1.54 × 1.41 m |
 | Tube area | 3.16 m² | 1.89 m² | 2.42 m² | 2.55 m² | 1.14 m² |
-| A/H² | 0.30 | 0.17 | 0.23 | 0.25 | 0.12 |
+| A/H² | 0.30 | 0.17 | 0.23 | 0.25 | 0.11 |
 
 **Against the gate, at 0.063 m:** the face goes vertical 1.25 m shoreward of waveslice's (within
 2 m), the crest is 1.7% low (within 5%), and the tube is 19% small (within 20%). V1 passes. At

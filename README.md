@@ -53,7 +53,8 @@ Design rules:
 | [docs/dispersion.md](docs/dispersion.md) | The dispersive model, the breaking switch, what was tried and dropped, the verification numbers and the limits |
 | [docs/bathymetry.md](docs/bathymetry.md) | Notes on real-world bed data: NOAA CUDEM for Hawaii, its provenance and caveats, and what was found for Portugal |
 | [docs/pipeline.md](docs/pipeline.md) | What the 2D run and the slices find on Pipeline: lines across and along the reef, swells heavy and mellow, plane beaches, direction, and the check against the real place |
-| [docs/3d-box.md](docs/3d-box.md) | A scope, not built: a 3D OpenFOAM box around the break, to see whether the peel makes a bigger tube |
+| [docs/v1-breaking-wave.md](docs/v1-breaking-wave.md) | One breaking wave in waveslice, OpenFOAM and Basilisk, scored against Surf Ranch lidar: the short write-up, with figures |
+| [docs/3d-box.md](docs/3d-box.md) | A scope, parked after V1 and a first 3D strip: a 3D Basilisk box around the break, to see whether the peel makes a bigger tube |
 | [docs/spot-sheets.md](docs/spot-sheets.md) | A plan, not built: per-spot sheets of how the wave changes with the swell's angle and the tide, shown on gogo's spot pages |
 | [docs/forecast-tables.md](docs/forecast-tables.md) | A scope, parked: per-spot tables from offshore swell to the wave at the spot, for gogo's score |
 
