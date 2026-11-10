@@ -156,7 +156,31 @@ throughout (701 readings).
   13 to 21% low (1.70 and 1.87 m against 2.15 m saved; 2.11 m with 6). **So the next runs save a
   frame every second** (`--frame-interval 1`).
 - **Stray break points.** A break point more than 40 m off the median of its 10 neighbours each
-  side is a single row misread on the 15 m bed, and is left out of the map and the numbers.
+  side is a single row misread on the 15 m bed, and is left out of the map and the numbers. So
+  is one where the wave is under 0.4 of the depth (added 2026-11-10): water that deep does not
+  break a wave, and these come in runs of up to 14 rows on the outer ledge, too long for the
+  median, mostly in the small swell (0 to 14 of about 90 points a run). Until 2026-11-10 the
+  takeoff search still read the stray rows, so a short run of them far out, the earliest crest
+  around, could win: 2 m at 290° low tide had its takeoff 80 m seaward of every break point.
+  Now neither kind is a takeoff, and every takeoff sits on a break point the map shows.
+- **Three swell sizes (2026-11-10).** A small (1.2 m, 12 s) and a big (3 m, 14 s) swell at all
+  seven directions, low tide only (Max: mid to low is Coxos's best tide), a frame every second:
+  14 runs, 8 to 40 minutes each on 3 efficiency-core threads, 7 GB of raw output, the heat guard
+  nominal throughout. A 4-run pilot at 280° and 320° came first to see whether size changes the
+  map at all. It does, the same way at every direction:
+
+  | low tide | 1.2 m, 12 s | 2 m, 13 s | 3 m, 14 s |
+  |---|---|---|---|
+  | breaking zone in the spot's area | 1.8–2.0 ha | 4.3–4.6 ha | 6.1–8.6 ha |
+  | break line against 2 m (median) | 7–27 m inshore | — | 9–69 m seaward |
+  | rows reaching the rock unbroken | 16–33% | 10–22% | 0–20%, mostly 0 |
+  | takeoff depth | 3–5 m, mostly on the inside | 4–7 m | 4.5–9 m |
+  | harmonics in the moving wave, fit rms | 5, 4% of H | 6, 4–5% | 6, 6% |
+
+  The small swell breaks on the inside rock, either just south of the point (39.0009–39.0012,
+  −9.4284) or north of it (39.0022–39.0024, −9.4283). The big one breaks wide over the ledge,
+  with takeoffs out to the north tip (39.0027, −9.4295) at 320° and 330°. Over all 28 runs the
+  takeoff that recurs most is on the outer ledge at 39.0017, −9.4290 (43% of runs).
 - **What is left out.** The peel (which way and how fast) came out inconsistent between
   neighbouring directions and tides, sometimes negative, so the map does not show it; nor
   whether it barrels. Both wait for the 2 m seabed.

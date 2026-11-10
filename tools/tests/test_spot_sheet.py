@@ -50,6 +50,15 @@ def test_a_row_onto_the_rock_is_never_a_takeoff():
     assert all(abs(p["k"] - 100) > 10 for p in spot_sheet.takeoffs(rows, ts, 3.0))
 
 
+def test_a_break_point_off_its_neighbours_or_too_deep_to_break_is_stray():
+    rows = [{"x": 500.0, "height": 3.0, "depth": 4.0} for _ in range(60)]
+    rows[20]["x"] = 400.0  # one row read 100 m seaward
+    for k in range(40, 46):  # a run of rows on the ledge in 9 m of water with a 2 m wave
+        rows[k].update(height=2.0, depth=9.0)
+    spot_sheet.mark_strays(rows)
+    assert [k for k, r in enumerate(rows) if r["stray"]] == [20, *range(40, 46)]
+
+
 def test_the_tide_shift_compares_positions_on_the_bed_not_in_each_run():
     # The low-tide run is cropped 45 m further offshore, so its x reads 45 m more for the same place.
     mid = {"_rows": [{"j": j, "x_bed": 3300.0} for j in range(10)]}

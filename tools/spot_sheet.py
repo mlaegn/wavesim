@@ -25,7 +25,9 @@ rows to trust. For each run the sheet gives, in latitude and longitude:
   (0 = no data; v = 1 + round(ratio / HEIGHT_TOP * 254)) that the page colours itself.
 
 A break point more than STRAY_M seaward or shoreward of the median of its neighbours (STRAY_ROWS
-either side) is a misreading of a single row on the 15 m bed, and is left out.
+either side) is a misreading of a single row on the 15 m bed, and is left out. So is one where
+the wave is under STRAY_HD of the depth: water that deep does not break a wave, and these come
+in short runs of rows on the outer ledge, mostly in the small swell. Neither kind is a takeoff.
 
 Only the rows inside `trust_y_m` count: the rest is the run's side margins (README, "side
 walls"). An optional `area`, a polygon of [lat, lon] corners, keeps only what lies inside it: the
@@ -52,6 +54,7 @@ from scipy.ndimage import distance_transform_edt, gaussian_filter, map_coordinat
 G = 9.81
 RIDE_M = 150.0  # how far along the shore from the takeoff the numbers are read
 STRAY_M, STRAY_ROWS = 40.0, 10  # a break point this far off its neighbours' median is dropped
+STRAY_HD = 0.4  # ... and one where the wave is under this share of the depth
 HEIGHT_TOP = 3.0  # the height map's grey levels span 0 to this many times the offshore height
 HEIGHT_SMOOTH_M = 15.0  # Gaussian sigma: the swell reflected off the rock stripes the raw height
 LOOP_FRAMES, LOOP_PIXEL_M, LOOP_HARMONICS = 24, 4.0, 6  # the moving wave: frames per period, pixel, most harmonics
@@ -233,18 +236,19 @@ def read_run(run: dict, trust_y: tuple[float, float], zone_fraction: float, area
     lon, lat = frame.lonlat([r["x"] for r in rows], [r["y"] for r in rows])
     for r, o, a, ok in zip(rows, lon, lat, inside(lon, lat, area) if area else [True] * len(rows)):
         r["lon"], r["lat"], r["in_area"] = float(o), float(a), bool(ok)
-    xs = median_filter(np.array([r["x"] for r in rows]), size=2 * STRAY_ROWS + 1, mode="nearest")
-    for r, m in zip(rows, xs):
-        r["stray"] = abs(r["x"] - m) > STRAY_M
+    mark_strays(rows)
 
-    ts = median_filter(np.array([r["t"] for r in rows]), size=max(3, int(30 / dy) | 1), mode="nearest")
-    peaks = [p for p in takeoffs(rows, ts, dy) if rows[p["k"]]["in_area"]]
+    # The takeoffs are looked for over the break points that are not stray: a short run of stray
+    # rows far out on the ledge would otherwise be the earliest crest around, and win.
+    rows_ok = [r for r in rows if not r["stray"]]
+    ts = median_filter(np.array([r["t"] for r in rows_ok]), size=max(3, int(30 / dy) | 1), mode="nearest")
+    peaks = [p for p in takeoffs(rows_ok, ts, dy) if rows_ok[p["k"]]["in_area"]] if rows_ok else []
     shared = common(run, rows, frame, j0, j1, zone_fraction, area)
     shared["loop"] = wave_loop(run["dir"], run, frame, j0, j1, area, loop_png) if loop_png else None
     if not peaks:
         return {"tide_m": tide, "takeoff": None, "takeoffs": [], "near_takeoff": None, "_rows": rows, **shared}
     k0 = peaks[0]["k"]
-    peak = rows[k0]
+    peak = rows_ok[k0]
     ride = [r for r in rows if abs(r["y"] - peak["y"]) <= RIDE_M and r["in_area"] and not r["stray"]]
 
     def med(key, rs):
@@ -252,8 +256,8 @@ def read_run(run: dict, trust_y: tuple[float, float], zone_fraction: float, area
         return round(float(np.median(v)), 2) if v else None
 
     def where(k, extra=None):
-        lon, lat = frame.lonlat(rows[k]["x"], rows[k]["y"])
-        return {"lon": round(float(lon), 6), "lat": round(float(lat), 6), "depth_m": round(rows[k]["depth"], 1), **(extra or {})}
+        lon, lat = frame.lonlat(rows_ok[k]["x"], rows_ok[k]["y"])
+        return {"lon": round(float(lon), 6), "lat": round(float(lat), 6), "depth_m": round(rows_ok[k]["depth"], 1), **(extra or {})}
 
     return {
         "tide_m": tide,
@@ -269,6 +273,14 @@ def read_run(run: dict, trust_y: tuple[float, float], zone_fraction: float, area
         "_rows": rows,
         **shared,
     }
+
+
+def mark_strays(rows: list) -> None:
+    """Sets each row's "stray": its break point lies more than STRAY_M off the median of its
+    neighbours, or the wave there is under STRAY_HD of the depth."""
+    xs = median_filter(np.array([r["x"] for r in rows]), size=2 * STRAY_ROWS + 1, mode="nearest")
+    for r, m in zip(rows, xs):
+        r["stray"] = bool(abs(r["x"] - m) > STRAY_M or r["height"] < STRAY_HD * r["depth"])
 
 
 def common(run: dict, rows: list, frame: Frame, j0: int, j1: int, zone_fraction: float, area=None) -> dict:
