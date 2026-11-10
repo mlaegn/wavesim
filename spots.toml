@@ -85,3 +85,31 @@ rows = [
   { from = 330, maker = 304, mid = "out/coxos_2m13s_304", low = "out/coxos_2m13s_304_low" },
   { from = 340, maker = 307, mid = "out/coxos_2m13s_307", low = "out/coxos_2m13s_307_low" },
 ]
+
+# A small and a big swell, low tide only (mid to low is Coxos's best tide; 2026-11-10). The 12 s
+# and 14 s maker directions come within 2 deg of the 13 s ones, so the same beds are used.
+[[coxos.sheet.swells]]
+height_m = 1.2
+period_s = 12.0
+rows = [
+  { from = 280, maker = 275, low = "out/coxos_1.2m12s_275_low" },
+  { from = 290, maker = 282, low = "out/coxos_1.2m12s_282_low" },
+  { from = 300, maker = 288, low = "out/coxos_1.2m12s_288_low" },
+  { from = 310, maker = 294, low = "out/coxos_1.2m12s_294_low" },
+  { from = 320, maker = 300, low = "out/coxos_1.2m12s_300_low" },
+  { from = 330, maker = 304, low = "out/coxos_1.2m12s_304_low" },
+  { from = 340, maker = 307, low = "out/coxos_1.2m12s_307_low" },
+]
+
+[[coxos.sheet.swells]]
+height_m = 3.0
+period_s = 14.0
+rows = [
+  { from = 280, maker = 275, low = "out/coxos_3m14s_275_low" },
+  { from = 290, maker = 282, low = "out/coxos_3m14s_282_low" },
+  { from = 300, maker = 288, low = "out/coxos_3m14s_288_low" },
+  { from = 310, maker = 294, low = "out/coxos_3m14s_294_low" },
+  { from = 320, maker = 300, low = "out/coxos_3m14s_300_low" },
+  { from = 330, maker = 304, low = "out/coxos_3m14s_304_low" },
+  { from = 340, maker = 307, low = "out/coxos_3m14s_307_low" },
+]
