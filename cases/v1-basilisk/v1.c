@@ -17,6 +17,7 @@ single cell deep, the bed's kink at the slope's toe added 20 m² of water, and t
 
     v1 LEVEL     # 10: 0.25 m, 11: 0.126 m, 12: 0.063 m, 13: 0.031 m
     v1 LEVEL 8   # no cell larger than 1 m rather than 0.5 m
+    v1 LEVEL 9 0.1   # refine on velocity errors over 0.1 m/s rather than 0.05
 
 Writes, in the current folder:
 
@@ -25,8 +26,8 @@ Writes, in the current folder:
   x 150-258 m, z -2-6 m, float32, z-major, every 0.025 s from 13 s; the bed counts as water there,
   so that the only 0.5 contour is the free surface;
 - `frames/u-<t>.bin`: u and w on the same grid at a few times, for the air-speed check;
-- `state-14.500.bin`: f, u and w over the whole tank at 14.5 s, on the same kind of grid (x 0-258 m,
-  z -8 m to the top), from which `v1-3d.c` starts its strip;
+- `state-12.000.bin`, `state-14.500.bin`: f, u and w over the whole tank at 12 and 14.5 s, on the
+  same kind of grid (x 0-258 m, z -8 m to the top), from which `v1-peel.c` and `v1-3d.c` start;
 - `log`: one line every 0.05 s (time, step, cells, water area, highest surface).
 */
 
@@ -96,6 +97,8 @@ int main (int argc, char * argv[])
   if (argc > 1)
     LEVEL = atoi (argv[1]);
   MINLEVEL = min (LEVEL, argc > 2 ? atoi (argv[2]) : 9);
+  if (argc > 3)
+    uemax = atof (argv[3]);
   size (LENGTH);
   origin (0., - DEPTH);
   rho1 = 1000., rho2 = 1.;
@@ -216,8 +219,10 @@ event velocities (t = {10., 14.5, 15.5, 16.})
   sample ("u", {u.x, u.y}, t);
 }
 
-/** The whole tank at 14.5 s; the bed counts as water at rest. */
-event state (t = 14.5)
+/** The whole tank at 12 and 14.5 s; the bed counts as water at rest. */
+event state (t = {12., 14.5})
 {
-  sample_box ("state-14.500.bin", {f, u.x, u.y}, 0., LENGTH, - DEPTH, TOP);
+  char path[80];
+  sprintf (path, "state-%.3f.bin", t);
+  sample_box (path, {f, u.x, u.y}, 0., LENGTH, - DEPTH, TOP);
 }

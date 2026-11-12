@@ -350,6 +350,52 @@ top at +250 m, and no cell larger than 1 m, rather than 0.5 m, to keep that air 
 sides, so this has to be solved first: report it upstream, find which of Basilisk's restriction
 steps fails, or bound the box by the embedded solid instead of masks.
 
+### A made-up peel, 2026-11-12: as built, it does not peel
+
+With the box parked, a free test of the question itself: does a peeling break make a bigger tube
+than the same wave breaking straight? `cases/v1-basilisk/v1-peel.c`, run by `run.sh 9 5400
+--peel <angle>`, takes V1's wave and slope into a strip 16.1 m wide and shifts the bed shoreward
+by z tan(angle), so that the depth lines lie at the angle to the crest. The side walls are
+mirrors, so the bed is a peak at one wall and a valley at the other. To keep it on the laptop,
+the domain is the shoreward half of the tank (x 129–258 m), the run starts from the 2D state at
+12 s, and the shift ramps in from 206 to 216 m, just ahead of where that wave is at 12 s. Cells
+are 0.25 m. It is measured on three cross-sections, at z = 1, 8.06 and 15.1 m, by `measure.py`.
+
+**The straight control (0°) works.** It breaks as the 2D run at the same cells does: the face
+goes vertical at 16.15 s and 223.8 m (2D: 16.25 s, 224.6 m), and the lip lands at 17.02 s
+(17.12 s). The tube is 1.98, 2.05 and 1.91 m² on the three sections, against 1.93 m² in 2D. So
+±3% between sections is the noise floor. It took 52 min on one core, at most 550,000 cells.
+
+**At 20° the wave breaks straight.** The face goes vertical at 16.07–16.10 s and 223.0–223.3 m on
+all three sections, although the still depth under it is 1.14 m on the section near one wall
+and 1.49 m on the one near the other. A peel would have taken about 0.5 s to get from one to the
+other. The lip's front stays within one
+cell (0.25 m) across the strip from 16.0 s to 17.05 s, the run's end. The crest is 3.46–3.56 m,
+against 3.31 m straight. Where the lip had landed by then (z = 1 m), the tube is 2.19 m², 11%
+over the control. That comes from the deeper bed on average, not from a peel.
+
+**Why, most likely:** the turned bed comes too late. The face goes vertical at 223 m, only 7 to
+17 m past the ramp. The breaker was shaped over the 100 m of straight slope before that, and a
+short last stretch of different depth barely moves it. The 16 m strip may also be too narrow
+for one part of the crest to break apart from another: the solitary wave is 50 to 100 m long.
+A real test needs the depth lines turned along the whole slope. Since a shift does nothing to
+the flat bed, that run can start from the solitary wave at t = 0, with no 2D state and no
+ramp. It needs the whole tank, though, and 18 s of it: *estimate* 3–4 h at 0.25 m on a 16 m
+strip, 6–8 h on 32 m.
+
+**A trap, not a crash.** The 20° run died at 14.25 s with SIGFPE (exit 136), with nothing in
+its log. Basilisk traps division by zero and invalid operations. With the trap off, no NaN ever
+reached a field, and the water held to 0.35%. So `v1-peel.c` switches the trap off and checks the
+fields itself after every step. (`qcc -catch`, Basilisk's way to find a trap, does not compile
+in this version.) The 20° run stopped at 17.05 s at its 40 min limit; it was not run to the end,
+since the answer was already clear. `run.sh` now reports a case that exits with an error as
+status 4, where before it reported 0.
+
+**A flaw to fix before more runs:** the control gains 1.5% of its water over the 6 s, although
+the tank is closed, where V0 held its water to 0.03%. Offshore, the back of the wave reflects
+off the new wall at 129 m, but that does not explain a gain. It did not touch the break, which
+matches 2D, but it is unexplained.
+
 References for this section:
 
 - Feddersen, F., Fincham, A. M., Brodie, K. L., Young, A. P., Spydell, M. S., Grimes, D. J.,
