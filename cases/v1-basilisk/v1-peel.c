@@ -24,11 +24,21 @@ Set-up as `v1-3d.c` (V0), with three differences, all for cost:
 
     v1-peel LEVEL ANGLE    # needs state.bin: v1.c's state-12.000.bin at level LEVEL + 1
 
+That version does not peel (docs/3d-box.md, 2026-11-12): the bed turns only 7 to 17 m before
+the break, and the wave breaks straight. So there is a second version, `full`: the depth lines
+are turned along the whole slope, with no ramp. A shift does nothing to the flat bed, where the
+solitary wave starts, so this one starts from `v1.c`'s solitary wave at t = 0, in the whole
+tank: a cube 258 m on a side, level 10 for 0.252 m cells, level 8 (1 m) as the largest below
++4 m. No state.bin.
+
+    v1-peel LEVEL ANGLE full    # 10 20 full: 0.252 m cells, depth lines at 20°
+
 Writes `case.json`, and for each of three cross-sections, at z = 1, 8.06 and 15.1 m,
 `sec-<z>/case.json` and `sec-<z>/frames/f-<t>.bin` in `v1.c`'s format, so that
 `cases/v1-steep/measure.py out/<run>/sec-<z>` measures it as it measures a 2D run. Also
-`facets-<t>.txt`, the surface as triangles at a few moments, and `log`: one line every 0.05 s
-with the time, step, cells, water volume per metre of width and wall-clock seconds.
+`facets-<t>.txt`, the surface as triangles every 0.1 s from 15.8 s (the first version: at
+16, 16.4, 16.8, 17.2 and 17.6 s), and `log`: one line every 0.05 s with the time, step, cells,
+water volume per metre of width and wall-clock seconds.
 */
 
 #include "grid/octree.h"
@@ -45,13 +55,10 @@ with the time, step, cells, water volume per metre of width and wall-clock secon
 #define DEPTH 8.
 #define TOP2D 8.125 // v1.c's top: the 2D state reaches up to here
 #define LENGTH 258. // the 2D tank
-#define X0 129.
-#define SIZE 129.
-#define WIDTH 16.125 // SIZE/8, a cell edge of the octree's level 3
+#define WIDTH 16.125 // 129/8 or 258/16: a cell edge of the octree either way
 #define FILL 4. // no cell larger than 1 m below this height
-#define RAMP0 206.
-#define RAMP1 216.
-#define START 12.
+#define HEIGHT 2.4
+#define CREST 60.
 #define END_TIME 18.
 #define FRAMES_FROM 15.
 #define FRAME_EVERY 0.025
@@ -62,6 +69,9 @@ with the time, step, cells, water volume per metre of width and wall-clock secon
 
 int LEVEL = 9, MINLEVEL = 7;
 double ANGLE = 20.; // degrees
+int FULL = 0; // the second version: turned along the whole slope, from t = 0
+double XLEFT = 129., SIZE = 129., START = 12.; // the domain's offshore edge and size
+double RAMP0 = 206., RAMP1 = 216.; // FULL: the shift is everywhere
 double uemax = 0.05;
 float * S = NULL;
 int SNX, SNZ;
@@ -83,9 +93,36 @@ double profile_z (double x)
 /** V1's profile, shifted shoreward by z tan(ANGLE) beyond the ramp. */
 double bed_z (double x, double z)
 {
-  double r = clamp ((x - RAMP0)/(RAMP1 - RAMP0), 0., 1.);
-  r = r*r*(3. - 2.*r);
+  double r = 1.;
+  if (!FULL) {
+    r = clamp ((x - RAMP0)/(RAMP1 - RAMP0), 0., 1.);
+    r = r*r*(3. - 2.*r);
+  }
   return profile_z (x - r*z*tan (ANGLE*pi/180.));
+}
+
+/** FULL: the SGN solitary wave of `v1.c`, on the flat bed 8 m deep. */
+void solitary (double x, double * eta, double * big, double * ubar,
+	       double * ubar_x, double * ubar_xx)
+{
+  double h = DEPTH, a = HEIGHT;
+  double kappa = sqrt (3.*a/(4.*h*h*(h + a)));
+  double c = sqrt (G_*(h + a));
+  double s = 1./cosh (kappa*(x - CREST)), th = tanh (kappa*(x - CREST));
+  *eta = a*s*s;
+  double eta_x = -2.*kappa*(*eta)*th;
+  double eta_xx = 2.*kappa*kappa*(*eta)*(2.*th*th - s*s);
+  *big = h + *eta;
+  *ubar = c*(*eta)/(*big);
+  *ubar_x = c*h*eta_x/sq(*big);
+  *ubar_xx = c*h*(eta_xx/sq(*big) - 2.*sq(eta_x)/cube(*big));
+}
+
+double surface (double x)
+{
+  double eta, big, ub, ubx, ubxx;
+  solitary (x, &eta, &big, &ub, &ubx, &ubxx);
+  return eta;
 }
 
 /** Field k (0 f, 1 u, 2 w) of the 2D state, bilinear between its cell centres. */
@@ -112,19 +149,26 @@ int main (int argc, char * argv[])
     LEVEL = atoi (argv[1]);
   if (argc > 2)
     ANGLE = atof (argv[2]);
-  MINLEVEL = min (LEVEL, 7);
-  SDX = LENGTH/(1 << (LEVEL + 1));
-  SNX = round (LENGTH/SDX), SNZ = round ((TOP2D + DEPTH)/SDX);
-  long n = 3L*SNX*SNZ;
-  S = malloc (n*sizeof (float));
-  FILE * fp = fopen ("state.bin", "rb");
-  if (!fp || fread (S, sizeof (float), n, fp) != n) {
-    fprintf (stderr, "state.bin: expected %ld floats (%d x %d x 3)\n", n, SNX, SNZ);
-    return 1;
+  FULL = argc > 3 && !strcmp (argv[3], "full");
+  if (FULL) {
+    XLEFT = 0., SIZE = LENGTH, START = 0.;
+    MINLEVEL = min (LEVEL, 8);
   }
-  fclose (fp);
+  else {
+    MINLEVEL = min (LEVEL, 7);
+    SDX = LENGTH/(1 << (LEVEL + 1));
+    SNX = round (LENGTH/SDX), SNZ = round ((TOP2D + DEPTH)/SDX);
+    long n = 3L*SNX*SNZ;
+    S = malloc (n*sizeof (float));
+    FILE * fp = fopen ("state.bin", "rb");
+    if (!fp || fread (S, sizeof (float), n, fp) != n) {
+      fprintf (stderr, "state.bin: expected %ld floats (%d x %d x 3)\n", n, SNX, SNZ);
+      return 1;
+    }
+    fclose (fp);
+  }
   size (SIZE);
-  origin (X0, - DEPTH, 0.);
+  origin (XLEFT, - DEPTH, 0.);
   rho1 = 1000., rho2 = 1.;
   mu1 = 1e-3, mu2 = 1.48e-5;
   f.sigma = 0.07;
@@ -139,6 +183,18 @@ int main (int argc, char * argv[])
 void set_fields ()
 {
   solid (cs, fs, y - bed_z (x, z) - 1e-3); // 1 mm up: a bed exactly on the domain edge trips embed-tree.h in 3D
+  if (FULL) { // as v1.c's set_fields()
+    fraction (f, surface (x) - y);
+    foreach() {
+      double eta, big, ub, ubx, ubxx;
+      solitary (x, &eta, &big, &ub, &ubx, &ubxx);
+      double zeta = clamp (y - bed_z (x, z), 0., big);
+      u.x[] = f[]*cs[]*(ub + (sq(big)/6. - sq(zeta)/2.)*ubxx);
+      u.y[] = f[]*cs[]*(- zeta*ubx);
+      u.z[] = 0.;
+    }
+    return;
+  }
   foreach() {
     f[] = clamp (state (0, x, y), 0., 1.);
     u.x[] = cs[]*state (1, x, y);
@@ -285,9 +341,13 @@ event frames (t = FRAMES_FROM - START; t <= END_TIME - START + 1e-6; t += FRAME_
   free (row);
 }
 
-/** The surface in 3D at a few moments of the break, for a picture of the peel. */
-event facets (t = {16. - START, 16.4 - START, 16.8 - START, 17.2 - START, 17.6 - START})
+/** The surface in 3D through the break, for pictures of the peel: every 0.1 s in the `full`
+version, every 0.4 s from 16 s in the first. */
+event facets (t = 15.8 - START; t <= 17.65 - START; t += 0.1)
 {
+  int k = round ((START + t - 16.)/0.4);
+  if (!FULL && (k < 0 || fabs (START + t - 16. - 0.4*k) > 1e-3))
+    return 0;
   char path[80];
   sprintf (path, "facets-%.3f.txt", START + t);
   FILE * fp = fopen (path, "w");

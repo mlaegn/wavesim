@@ -6,11 +6,14 @@
 #   cases/v1-basilisk/run.sh 10 3600 --3d   # the 3D strip of v1-3d.c, from the 2D run's state
 #   cases/v1-basilisk/run.sh 9 3600 --peel 20   # v1-peel.c, depth lines at 20°, from the 2D
 #                                               # run's state at level 10 (one more, same cells)
+#   cases/v1-basilisk/run.sh 10 18000 --peel 20 full   # turned along the whole slope, whole
+#                                                      # tank from t = 0 (0.252 m cells)
 #
 # Basilisk must be built in out/basilisk/basilisk/src (see v1.c). The case is compiled and run
 # in Docker on one core, in out/basilisk-v1-L<level>/ (out/basilisk-v1-3d-L<level>/ for --3d,
 # which needs the 2D run at that level first; out/basilisk-v1-peel<angle>-L<level>/ for --peel,
-# which needs the 2D run at level + 1). Every 30 s a watchdog reads macOS's
+# which needs the 2D run at level + 1; out/basilisk-v1-peel<angle>-full-L<level>/ for --peel
+# <angle> full, which needs nothing). Every 30 s a watchdog reads macOS's
 # thermal state and stops the run at anything above nominal, or once the limit has passed;
 # caffeinate keeps the Mac awake only while this script runs. Exit status: 0 finished,
 # 2 stopped by heat, 3 by time, 4 the case failed (its exit code is in <case>/exit).set -euo pipefail
@@ -26,8 +29,13 @@ if [ "$dims" = --3d ]; then
     src=v1-3d tag=-3d state_file="$root/out/basilisk-v1-L$level/state-14.500.bin"
 elif [ "$dims" = --peel ]; then
     angle=${angle:?angle in degrees}
-    src=v1-peel tag=-peel$angle args="$level $angle"
-    state_file="$root/out/basilisk-v1-L$((level + 1))/state-12.000.bin"
+    src=v1-peel
+    if [ "${5:-}" = full ]; then # turned along the whole slope, from t = 0: no state
+        tag=-peel$angle-full args="$level $angle full"
+    else
+        tag=-peel$angle args="$level $angle"
+        state_file="$root/out/basilisk-v1-L$((level + 1))/state-12.000.bin"
+    fi
 fi
 case_dir="$root/out/basilisk-v1$tag-L$level"
 image=opencfd/openfoam-default:2512
