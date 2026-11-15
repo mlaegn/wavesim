@@ -44,6 +44,7 @@
 
 pub mod bathymetry;
 pub mod dispersion;
+pub mod eddy;
 pub mod forcing;
 pub mod grid;
 mod par;
@@ -56,6 +57,7 @@ pub mod state;
 
 pub use bathymetry::Bathymetry;
 pub use dispersion::{Breaking, Dispersion, DispersionStats};
+pub use eddy::EddyViscosity;
 pub use forcing::{LinearWave, Relaxation, Sponge, WaveMaker, linear_wave, manning_factor};
 pub use grid::{GHOST, Grid};
 pub use solver::{G, H_DRY, Order, Solver};

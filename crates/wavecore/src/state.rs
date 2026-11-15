@@ -8,6 +8,10 @@ pub struct State {
     pub h: Vec<f64>,
     pub hu: Vec<f64>,
     pub hv: Vec<f64>,
+    /// How long the breaking front passing each cell has been breaking, in seconds, and 0
+    /// where none is: the memory of the eddy viscosity (see [`crate::eddy`]), carried by
+    /// [`crate::Solver::step`]. Not conserved; a new state starts with no wave breaking.
+    pub breaking: Vec<f64>,
     /// Simulation time in seconds; advanced by [`crate::Solver::step`].
     pub time: f64,
 }
@@ -19,6 +23,7 @@ impl State {
             h: vec![0.0; n],
             hu: vec![0.0; n],
             hv: vec![0.0; n],
+            breaking: vec![0.0; n],
             time: 0.0,
         }
     }
@@ -40,6 +45,7 @@ impl State {
         mirror_ghosts(grid, &mut self.h);
         mirror_ghosts(grid, &mut self.hu);
         mirror_ghosts(grid, &mut self.hv);
+        mirror_ghosts(grid, &mut self.breaking);
         let (nx, ny, w) = (grid.nx, grid.ny, grid.width());
         for j in 0..ny + 2 * GHOST {
             for k in 0..GHOST {
@@ -65,6 +71,7 @@ impl State {
             wrap_ghosts_y(grid, &mut self.h);
             wrap_ghosts_y(grid, &mut self.hu);
             wrap_ghosts_y(grid, &mut self.hv);
+            wrap_ghosts_y(grid, &mut self.breaking);
         }
     }
 

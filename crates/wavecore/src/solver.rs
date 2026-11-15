@@ -17,6 +17,7 @@ use crate::bathymetry::Bathymetry;
 use crate::dispersion::{
     Breaking, Dispersion, DispersionStats, Work, breaking_indicator, breaking_into, switch,
 };
+use crate::eddy::EddyWork;
 use crate::forcing::{Drive, H_FRICTION_MIN, Sponge, WaveMaker, manning_factor, relax_cell};
 use crate::grid::{GHOST, Grid, wrap_ghosts_y};
 use crate::par::{max_rows, rows3};
@@ -251,6 +252,8 @@ pub struct Solver {
     dispersion: Option<(Dispersion, RefCell<Work>)>,
     /// The smoothness switch, recomputed on every evaluation.
     phi: RefCell<Vec<f64>>,
+    /// Scratch for following breaking fronts.
+    eddy: RefCell<EddyWork>,
 }
 
 impl Solver {
@@ -267,6 +270,7 @@ impl Solver {
             sponges: Vec::new(),
             dispersion: None,
             phi: RefCell::new(vec![0.0; grid.cells()]),
+            eddy: RefCell::new(EddyWork::new(&grid)),
         }
     }
 
@@ -415,7 +419,33 @@ impl Solver {
             }
         }
         self.damp(s, dt);
+        self.follow_breaking(s, dt);
         s.time = t + dt;
+    }
+
+    /// Follow the breaking fronts on to the state just reached and apply their eddy viscosity,
+    /// split from the rest of the step. Only with dispersion: in plain shallow water the shock
+    /// alone is the breaking, and a dam break must still meet its exact solution.
+    fn follow_breaking(&self, s: &mut State, dt: f64) {
+        let Some(eddy) = self
+            .dispersion
+            .as_ref()
+            .and_then(|(d, _)| d.breaking.viscosity)
+        else {
+            return;
+        };
+        let (grid, periodic) = (self.grid, self.periodic_y);
+        s.fill_boundaries(&grid, periodic);
+        // The switch as the surface alone reads it, without the fronts: where they start.
+        let fresh = Breaking {
+            viscosity: None,
+            ..self.breaking_config()
+        };
+        let mut phi = self.phi.borrow_mut();
+        switch(&grid, &self.bed, s, fresh, &mut phi);
+        let fill = |s: &mut State| s.fill_boundaries(&grid, periodic);
+        eddy.step(&grid, s, &phi, dt, &mut self.eddy.borrow_mut(), fill);
+        self.clean_dry(s);
     }
 
     /// Sponge layer and bottom friction, applied after the flux update.

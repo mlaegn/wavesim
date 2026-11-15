@@ -31,13 +31,14 @@
 //! slope x (kh)^2.
 
 use crate::bathymetry::Bathymetry;
+use crate::eddy::EddyViscosity;
 use crate::grid::{GHOST, Grid, fill_vector_ghosts};
 use crate::par::{rows1, rows2, rows3, sum_rows};
 use crate::solver::{H_DRY, velocity};
 use crate::state::State;
 
 /// Depths below this get no dispersion; a few centimetres of water has no wave to disperse.
-const H_DISPERSION_MIN: f64 = 0.05;
+pub(crate) const H_DISPERSION_MIN: f64 = 0.05;
 
 /// When to switch the dispersive terms off. Each pair is `(starts fading, fully off)`.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -46,6 +47,10 @@ pub struct Breaking {
     pub eta_ratio: (f64, f64),
     /// Magnitude of the surface slope, `|grad eta|`.
     pub slope: (f64, f64),
+    /// Follow breaking fronts from step to step, keep the dispersive terms off where they
+    /// are and just behind them, and give them an eddy viscosity; see [`crate::eddy`]. `None`
+    /// reads the switch afresh at every step and leaves the dissipation to the shock alone.
+    pub viscosity: Option<EddyViscosity>,
 }
 
 impl Default for Breaking {
@@ -54,10 +59,16 @@ impl Default for Breaking {
     /// models this follows (Tissier et al. 2012, Kazolea et al. 2014). The fade used to start at
     /// a slope of 0.20 (11 degrees) and was over by 24: Ting & Kirby's spilling and plunging
     /// breakers then broke 1.0 and 1.3 m before they did in the laboratory, on a 1:35 beach.
+    ///
+    /// Breaking fronts are not followed: read afresh at every step, the switch lets a broken
+    /// wave go on as a smooth bore, and Ting & Kirby's spilling breaker stays 1.66 times as tall
+    /// as the laboratory's across the inner surf zone. Following them (`viscosity`, see
+    /// [`crate::eddy`]) fixes that, but breaks the plunging breaker 0.86 m early.
     fn default() -> Self {
         Self {
             eta_ratio: (0.30, 0.55),
             slope: (0.40, 0.65),
+            viscosity: None,
         }
     }
 }
@@ -130,8 +141,12 @@ pub(crate) fn switch(
             let ex = (eta(k + 1) - eta(k - 1)) * ix;
             let ey = (eta(k + w) - eta(k - w)) * iy;
             let ratio = (eta(k) / h[k]).max(0.0);
-            let off = smoothstep(breaking.eta_ratio.0, breaking.eta_ratio.1, ratio)
+            let mut off = smoothstep(breaking.eta_ratio.0, breaking.eta_ratio.1, ratio)
                 .max(smoothstep(breaking.slope.0, breaking.slope.1, ex.hypot(ey)));
+            // A front still breaking, or the broken water just behind it.
+            if breaking.viscosity.is_some() && EddyViscosity::keeps_off(s.breaking[k]) {
+                off = 1.0;
+            }
             *out = 1.0 - off;
         }
     });

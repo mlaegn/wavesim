@@ -60,6 +60,7 @@ pub fn approach(
     let never = Breaking {
         eta_ratio: (1e9, 2e9),
         slope: (1e9, 2e9),
+        viscosity: None,
     };
     let solver = Solver::new(grid, Bathymetry::from_fn(&grid, |x, _| -depth(x)))
         .with_order(Order::Fifth)

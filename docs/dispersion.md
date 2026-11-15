@@ -51,10 +51,18 @@ A run counts a cell as breaking where the switch reads 0.8, which the slope crit
 
 | | Tallest (the break point) | Switch first reads breaking | Laboratory |
 |---|---|---|---|
-| Spilling | x = 6.76 m, 0.187 m deep, 0.179 m tall | x = 6.91 m | x = 6.40 m, 0.196 m |
-| Plunging | x = 7.57 m, 0.164 m deep, 0.192 m tall | x = 7.22 m | x = 7.795 m, 0.156 m |
+| Spilling | x = 6.66 m, 0.190 m deep, 0.180 m tall | x = 6.86 m | x = 6.40 m, 0.196 m |
+| Plunging | x = 7.48 m, 0.166 m deep, 0.198 m tall | x = 6.93 m | x = 7.795 m, 0.156 m |
 
-On 10, 5 and 2.5 cm cells the tallest point is at 6.47, 6.76, 6.63 m (spilling) and 7.57, 7.57, 7.46 m (plunging): it hardly moves. The switch's first reading moves seaward as the cells shrink (7.47, 6.91, 5.48 m and 7.57, 7.22, 4.81 m), because it measures a slope over two cells; on 2.5 cm cells, an eighth of the breaking depth, ripples a few cells long that these equations carry wrongly set it off far too early. So the break point is where the wave is tallest, and the seaward edge of a break map is uncertain by about that much.
+"Tallest" is the highest crest less the lowest trough over the recorded periods. The incident wave is tuned on the mean height of the waves (see the surf zone below); tuned on the envelope, as it was at first, the break points were 6.76 and 7.57 m and the switch first read breaking at 6.91 and 7.22 m.
+
+On 10, 5 and 2.5 cm cells, with the incident wave tuned on the envelope, the tallest point was at 6.47, 6.76, 6.63 m (spilling) and 7.57, 7.57, 7.46 m (plunging): it hardly moves. The switch's first reading moves seaward as the cells shrink (7.47, 6.91, 5.48 m and 7.57, 7.22, 4.81 m), because it measures a slope over two cells; on 2.5 cm cells, an eighth of the breaking depth, ripples a few cells long that these equations carry wrongly set it off far too early. So the break point is where the wave is tallest, and the seaward edge of a break map is uncertain by about that much.
+
+**Across the surf zone.** Ting & Kirby also measured how tall the spilling breaker stays after it breaks (their Fig. 4, digitised in `crates/wavecore/tests/data`). In the inner surf zone, 0.17 to 0.05 m deep, the height falls with the depth at `H/d` 0.58 to 0.61. The model, measured like for like (the mean height of the waves, after taking out a drift of the mean level by a centimetre or more over the recorded periods; the envelope counted that drift as wave and read 1.90), comes out **1.66 times as tall**, `H/d` near 1.0, the same excess the 1:30 beach and the Coxos runs show. Shoaling up to the break is within 4%.
+
+The cause is the switch, not the shock. Read afresh at every step, it turns the dispersive terms back on as soon as a broken front eases, and the wave goes on as a smooth bore that loses little. Plain shallow water over the inner surf zone gives `H/d` 0.65 to 0.70 (1.13 times the laboratory's); Kennedy et al.'s (2000) eddy viscosity with the switch as it is, only 1.53. What works is following each breaking front from step to step (`wavecore::eddy`): it starts where the switch reads breaking, goes on while the surface rises faster than Kennedy's threshold (0.65 falling to 0.15 `sqrt(g h)` over `5 sqrt(h/g)`), keeps the dispersive terms off on it and for `5 sqrt(h/g)` behind it, and carries Kennedy's viscosity. That gives **1.04**, no station off by more than 11%, against bounds of 15% and 30% set before the first run; without the viscosity, 1.13.
+
+It is **not on by default** (`Breaking::viscosity` is `None`). With it the plunging breaker is tallest at x = 6.93 m, 0.86 m early against the 0.5 m allowed. On that steep 5 s wave the switch reads breaking at 6.93 m however a front is started (at 0.8, fully off, or by Kennedy's rate of rise); the switch alone lets the crest recover and grow on, the memory holds it to that reading. Leaving fronts to the switch until they have broken for `5 sqrt(h/g)` moved the plunging break only to 7.08 m, and then the spilling breaker broke 0.8 m late with its inner surf zone at 1.26. The surf-zone test turns it on; the break-point tests run the default.
 
 **On the Pipeline reef.** One cross-shore line of the Pipeline bed (y = 361.5 m, through the part of the reef where the 2.5 m, 14 s swell breaks well out), run in 1D on 3, 1.5 and 0.75 m cells from the same profile:
 
