@@ -408,6 +408,12 @@ cells; the straight 3D control above matched it within ±3%.
 wave reaches it, and the break runs across the strip at about 29 m/s. The 10 m/s wave at 20°
 gives 27 m/s.
 
+![The three cross-sections at five moments: the break reaches each in turn](../img/peel/sections.png)
+
+![The surface in 3D from 15.8 to 17.6 s, mirrored at the strip's wall](../img/peel/peel.gif)
+
+The figures are made by `cases/v1-basilisk/peel_figures.py` (how to run it is at its top).
+
 | | z = 1 m (the bed's peak) | z = 8.06 m | z = 15.1 m | 2D, straight |
 |---|---|---|---|---|
 | Face vertical | 16.32 s, 226.2 m | 16.52 s, 227.9 m | 16.80 s, 230.2 m | 16.25 s, 224.6 m |
