@@ -135,6 +135,21 @@ struct Breaking {
     onset_depth: f64,
     peak_x: f64,
     peak_height: f64,
+    /// Crest-to-trough height over the recorded periods, as `(x, height)` in Ting & Kirby's x,
+    /// for every cell from the flat bottom before the slope to where the water is 2 cm deep.
+    heights: Vec<(f64, f64)>,
+}
+
+impl Breaking {
+    /// The height at Ting & Kirby's `x`, linear between the two cells either side.
+    fn height_at(&self, x: f64) -> f64 {
+        let k = self
+            .heights
+            .partition_point(|&(xi, _)| xi < x)
+            .clamp(1, self.heights.len() - 1);
+        let ((x0, h0), (x1, h1)) = (self.heights[k - 1], self.heights[k]);
+        h0 + (h1 - h0) * (x - x0) / (x1 - x0)
+    }
 }
 
 /// Ting & Kirby's flume on cells of `dx`, run until the waves have settled, with the zone
@@ -215,12 +230,17 @@ fn flume(height: f64, period: f64, dx: f64) -> Breaking {
     let toe_cell = (toe / dx) as usize;
     let count = (0.5 * wave.length / dx) as usize;
     let incident = (toe_cell - count..toe_cell).map(height_at).sum::<f64>() / count as f64;
+    let heights = (0..nx)
+        .filter(|&i| x_tk(x(i)) > -2.0 && depth(x(i)) > 0.02)
+        .map(|i| (x_tk(x(i)), height_at(i)))
+        .collect();
     Breaking {
         incident,
         onset_x: x_tk(x(onset)),
         onset_depth: depth(x(onset)),
         peak_x: x_tk(x(peak)),
         peak_height: height_at(peak),
+        heights,
     }
 }
 
@@ -278,4 +298,81 @@ fn a_spilling_breaker_breaks_where_ting_and_kirby_saw_it() {
 #[ignore = "slow physics check: cargo test --release -- --include-ignored"]
 fn a_plunging_breaker_breaks_where_ting_and_kirby_saw_it() {
     check("plunging", 0.128, 5.0, 7.795, 0.156);
+}
+
+/// Ting & Kirby's Fig. 4 for the spilling breaker, digitised: `(x, height)` in metres, the
+/// height being crest to trough.
+fn spilling_heights_measured() -> Vec<(f64, f64)> {
+    include_str!("data/tk94_fig4_spilling.dat")
+        .lines()
+        .filter(|l| !l.trim_start().starts_with('#') && !l.trim().is_empty())
+        .map(|l| {
+            let v: Vec<f64> = l.split_whitespace().map(|s| s.parse().unwrap()).collect();
+            (v[0], (v[2] - v[3]) / 100.0)
+        })
+        .collect()
+}
+
+fn median(mut v: Vec<f64>) -> f64 {
+    v.sort_by(f64::total_cmp);
+    let n = v.len();
+    if n % 2 == 1 {
+        v[n / 2]
+    } else {
+        0.5 * (v[n / 2 - 1] + v[n / 2])
+    }
+}
+
+// How tall the wave stays once it has broken, against the laboratory. The tests above check
+// only where it breaks. Seaward of the break the model has a known answer to meet (shoaling); in
+// the inner surf zone (x from 7.5 to 11.5 m, 0.17 to 0.05 m deep) the measured height falls with
+// the depth at H/d = 0.58 to 0.61, the saturated surf zone, and that is where a breaking closure
+// that dissipates too little shows. The README reports H/d near 1.0 in the model's own 1:30
+// beach test, and the Coxos runs give a tide slope dH/dT of 0.8 in 1 to 3 m of water.
+//
+// Bounds set before the first run, from the digitising error (about 1 mm in height, under 3%
+// of the smallest inner-surf wave) and what a depth-averaged model with a switch can expect:
+// the median of model over lab within 10% seaward of x = 5.5 m, and within 15% over the
+// inner surf zone, with no single inner-surf station off by more than 30%.
+#[test]
+#[ignore = "slow physics check: cargo test --release -- --include-ignored"]
+fn a_spilling_breaker_loses_height_across_the_surf_zone_as_ting_and_kirby_saw() {
+    let (height, period, dx) = (0.125, 2.0, 0.05);
+    let first = flume(height, period, dx);
+    let b = flume(height * height / first.incident, period, dx);
+    let mut shoaling = Vec::new();
+    let mut surf = Vec::new();
+    println!("x_TK    depth   lab H    model H  ratio  lab H/d  model H/d");
+    for (x, lab) in spilling_heights_measured() {
+        let model = b.height_at(x);
+        let d = (0.38 - x / 35.0).min(0.40);
+        println!(
+            "{x:6.3}  {d:.3}  {lab:.4}  {model:.4}  {:.2}   {:.2}     {:.2}",
+            model / lab,
+            lab / d,
+            model / d
+        );
+        if x < 5.5 {
+            shoaling.push(model / lab);
+        } else if (7.5..=11.5).contains(&x) {
+            surf.push(model / lab);
+        }
+    }
+    let (shoal_med, surf_med) = (median(shoaling), median(surf.clone()));
+    let worst = surf.iter().map(|r| (r - 1.0).abs()).fold(0.0, f64::max);
+    println!(
+        "incident {:.4} m; model over lab: shoaling median {shoal_med:.3}, inner surf median \
+         {surf_med:.3}, worst inner-surf station off by {:.0}%",
+        b.incident,
+        100.0 * worst
+    );
+    assert!(
+        (shoal_med - 1.0).abs() < 0.10,
+        "shoaling median {shoal_med}"
+    );
+    assert!(
+        (surf_med - 1.0).abs() < 0.15,
+        "inner surf median {surf_med}"
+    );
+    assert!(worst < 0.30, "an inner-surf station off by {worst}");
 }
