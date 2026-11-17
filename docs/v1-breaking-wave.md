@@ -179,6 +179,11 @@ measured what a full 3D break would cost: about 400 core-hours for a coarse firs
 waveslice's tubes in wavesim's forecasts now have independent support from a full
 air-and-water model and from field data.
 
+A made-up peel followed, on a 16 m strip with the depth lines turned 20° to the crest along the
+whole slope. The break runs along the strip as it should, at about 29 m/s, but the tube comes out
+about 9% smaller than in the same run with the depth lines straight (1.74 against 1.91 m²). On
+this slope, then, the peel does not make the tube bigger.
+
 Details, every run and the 3D plan: [docs/3d-box.md](3d-box.md).
 
 ## Reproducing it

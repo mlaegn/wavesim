@@ -401,8 +401,10 @@ matches 2D, but it is unexplained.
 `v1-peel.c`'s `full` version, run by `run.sh 10 18000 --peel 20 full`: the depth lines at 20°
 along the whole slope, no ramp, the whole tank from the solitary wave at t = 0. The strip is the
 same, 16.1 m wide, and so are the cells, 0.252 m. It took 4 h 41 min on one core and at most
-1.49 million cells, at nominal heat throughout. The straight comparison is the 2D run at the same
-cells; the straight 3D control above matched it within ±3%.
+1.49 million cells, at nominal heat throughout. The control is the same run with the depth
+lines parallel to the crest (`run.sh 10 21600 --peel 0 full`, run 2026-11-17, 4 h 50 min). It
+breaks as the 2D run at the same cells does, on all three sections: face vertical 0.02 s
+earlier, tube 1.89 to 1.93 m² against 1.93 m².
 
 **It peels.** Each cross-section breaks in the same depth, about 1 m, so each breaks when the
 wave reaches it, and the break runs across the strip at about 29 m/s. The 10 m/s wave at 20°
@@ -414,19 +416,21 @@ gives 27 m/s.
 
 The figures are made by `cases/v1-basilisk/peel_figures.py` (how to run it is at its top).
 
-| | z = 1 m (the bed's peak) | z = 8.06 m | z = 15.1 m | 2D, straight |
-|---|---|---|---|---|
-| Face vertical | 16.32 s, 226.2 m | 16.52 s, 227.9 m | 16.80 s, 230.2 m | 16.25 s, 224.6 m |
-| Still depth there | 0.95 m | 1.01 m | 1.02 m | 1.03 m |
-| Crest then | 3.31 m | 3.31 m | 3.29 m | 3.31 m |
-| Lip lands | 17.23 s | 17.40 s | 17.68 s | 17.12 s |
-| Lip thrown | 9.61 m | 9.44 m | 9.45 m | 9.50 m |
-| Tube, height × width | 1.10 × 2.67 m | 1.19 × 2.72 m | 1.18 × 2.75 m | 1.22 × 2.84 m |
-| Tube area | 1.69 m² | 1.78 m² | 1.74 m² | 1.93 m² |
+| | 20°, z = 1 m (the bed's peak) | 20°, z = 8.06 m | 20°, z = 15.1 m | 3D straight, all three sections | 2D, straight |
+|---|---|---|---|---|---|
+| Face vertical | 16.32 s, 226.2 m | 16.52 s, 227.9 m | 16.80 s, 230.2 m | 16.23 s, 224.4 m | 16.25 s, 224.6 m |
+| Still depth there | 0.95 m | 1.01 m | 1.02 m | 1.04 m | 1.03 m |
+| Crest then | 3.31 m | 3.31 m | 3.29 m | 3.29–3.30 m | 3.31 m |
+| Lip lands | 17.23 s | 17.40 s | 17.68 s | 17.10 s | 17.12 s |
+| Lip thrown | 9.61 m | 9.44 m | 9.45 m | 9.53–9.61 m | 9.50 m |
+| Tube, height × width | 1.10 × 2.67 m | 1.19 × 2.72 m | 1.18 × 2.75 m | 1.22–1.26 × 2.87–2.95 m | 1.22 × 2.84 m |
+| Tube area | 1.69 m² | 1.78 m² | 1.74 m² | 1.89–1.93 m² | 1.93 m² |
 
 **The tube is about 10% smaller, not bigger.** The crest is as high and the lip thrown as far
 as when the wave breaks straight, but the tube is a little lower and narrower on every section:
-1.69 to 1.78 m² against 1.93 m², beyond the ±3% noise. On this slope and at this angle, then, the
+1.69 to 1.78 m², 1.74 m² on average, against 1.89 to 1.93 m² in the straight 3D run, 1.91 m² on
+average. That is 9% smaller, and the smallest straight section is still 6% above the largest
+peeling one. On this slope and at this angle, then, the
 peel does not make the tube bigger. For Pipeline's question this points away from the peel
 (explanation 2) and towards the bed (explanation 1). That rests on one made-up case, though.
 
@@ -435,11 +439,10 @@ peel does not make the tube bigger. For Pipeline's question this points away fro
 - **One angle, one slope, one cell size.** 20° on a 1-in-15 plane slope, at 0.25 m, where the 2D
   tube was still changing by 28% per level. A finer run might move straight and peeling tubes
   differently.
-- **No 3D control in the same set-up.** The comparison is with 2D. The control in the first
-  version matched 2D within ±3%, but a straight whole-tank 3D run (about 4.5 h) would close
-  that gap.
 - **The water gain:** this run gains 0.85% of its water, from about 8 s, when the wave reaches
-  the slope. As in the first version's control (above), it is unexplained.
+  the slope. The straight control gains 0.96%, so the gain is in the set-up, not in the turned
+  bed, and it does not stop the control matching 2D. As in the first version's control (above),
+  it is unexplained.
 - **A strip with mirror walls**, 16 m wide: a peak and a valley, not a reef that peels one way
   for a long stretch.
 
