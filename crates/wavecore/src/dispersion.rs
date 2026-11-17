@@ -32,7 +32,7 @@
 
 use crate::bathymetry::Bathymetry;
 use crate::eddy::EddyViscosity;
-use crate::grid::{GHOST, Grid, fill_vector_ghosts};
+use crate::grid::{GHOST, Grid, fill_vector_ghosts, mirror_ghosts, wrap_ghosts_y};
 use crate::par::{rows1, rows2, rows3, sum_rows};
 use crate::solver::{H_DRY, velocity};
 use crate::state::State;
@@ -114,25 +114,28 @@ fn smoothstep(lo: f64, hi: f64, x: f64) -> f64 {
 /// where it is steep or tall for its depth (a front about to break, a bore, the swash).
 /// Both the dispersive terms and the fifth-order reconstruction are scaled by it.
 ///
-/// It is computed everywhere the stencils reach; the outermost ring copies its neighbour.
+/// It is computed over the interior; the ghost layers then follow the same boundaries as the
+/// water (mirrored at walls, wrapped where `periodic_y`), so the two sides of a wall face or a
+/// periodic seam blend their reconstructions alike and no water crosses a wall.
 pub(crate) fn switch(
     grid: &Grid,
     bed: &Bathymetry,
     s: &State,
     breaking: Breaking,
+    periodic_y: bool,
     phi: &mut [f64],
 ) {
     let w = grid.width();
-    let rows = grid.ny + 2 * GHOST;
+    let (nx, ny) = (grid.nx, grid.ny);
     let (ix, iy) = (0.5 / grid.dx, 0.5 / grid.dy);
     let h = &s.h[..];
     let b = &bed.b[..];
     let eta = |m: usize| h[m] + b[m];
     rows1(w, phi, |j, row| {
-        if j == 0 || j == rows - 1 {
+        if j < GHOST || j >= ny + GHOST {
             return;
         }
-        for (i, out) in row.iter_mut().enumerate().take(w - 1).skip(1) {
+        for (i, out) in row.iter_mut().enumerate().take(nx + GHOST).skip(GHOST) {
             let k = j * w + i;
             if h[k] < H_DISPERSION_MIN {
                 *out = 0.0;
@@ -150,13 +153,9 @@ pub(crate) fn switch(
             *out = 1.0 - off;
         }
     });
-    for j in 0..rows {
-        phi[j * w] = phi[j * w + 1];
-        phi[j * w + w - 1] = phi[j * w + w - 2];
-    }
-    for i in 0..w {
-        phi[i] = phi[w + i];
-        phi[(rows - 1) * w + i] = phi[(rows - 2) * w + i];
+    mirror_ghosts(grid, phi);
+    if periodic_y {
+        wrap_ghosts_y(grid, phi);
     }
 }
 
@@ -175,7 +174,7 @@ pub(crate) fn breaking_indicator(
     filled.fill_boundaries(grid, periodic_y);
     let mut phi = vec![0.0; grid.cells()];
     let mut out = vec![0.0; grid.nx * grid.ny];
-    breaking_into(grid, bed, &filled, breaking, &mut phi, &mut out);
+    breaking_into(grid, bed, &filled, breaking, periodic_y, &mut phi, &mut out);
     out
 }
 
@@ -186,10 +185,11 @@ pub(crate) fn breaking_into(
     bed: &Bathymetry,
     s: &State,
     breaking: Breaking,
+    periodic_y: bool,
     phi: &mut [f64],
     out: &mut [f64],
 ) {
-    switch(grid, bed, s, breaking, phi);
+    switch(grid, bed, s, breaking, periodic_y, phi);
     for (n, (i, j)) in grid.interior().enumerate() {
         let k = grid.idx(i, j);
         out[n] = if s.h[k] < H_DISPERSION_MIN {

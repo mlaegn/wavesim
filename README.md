@@ -319,6 +319,7 @@ Choose the order with `Solver::with_order`; the default is `Order::Second`. Add 
 | Lake at rest over a rough bed | Still water stays still (momentum below 1e-11) and volume is conserved over 500 steps |
 | Lake at rest with dry bumps | The same, with wet/dry fronts beside steep bed steps |
 | Dam break onto a dry bed | Volume conserved, depth non-negative, water advances into the dry region |
+| Walls and a periodic seam | A hump 0.39 of the depth tall, where the breaking switch varies across the rows nearest the edge, keeps the volume of a closed basin to 1e-12 with the fifth-order scheme, with and without dispersion, at walls and across a periodic seam (it lost 1e-6 before the switch's ghost cells followed the boundaries) |
 | Wet-bed dam break vs the Stoker solution | Second order at least 4× more accurate than first order; observed L1 convergence rate above 0.9 (measured 1.07) |
 | Dry-bed dam break vs the Ritter solution | The same criteria (measured rate 1.03) |
 | Exact-solution self-check | The Stoker middle state satisfies the Rankine–Hugoniot conditions |

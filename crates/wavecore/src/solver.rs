@@ -329,7 +329,15 @@ impl Solver {
     pub fn breaking_into(&self, s: &mut State, phi: &mut Vec<f64>, out: &mut [f64]) {
         s.fill_boundaries(&self.grid, self.periodic_y);
         phi.resize(self.grid.cells(), 0.0);
-        breaking_into(&self.grid, &self.bed, s, self.breaking_config(), phi, out);
+        breaking_into(
+            &self.grid,
+            &self.bed,
+            s,
+            self.breaking_config(),
+            self.periodic_y,
+            phi,
+            out,
+        );
     }
 
     /// How hard the dispersive solves have worked so far, or `None` for shallow water.
@@ -442,7 +450,7 @@ impl Solver {
             ..self.breaking_config()
         };
         let mut phi = self.phi.borrow_mut();
-        switch(&grid, &self.bed, s, fresh, &mut phi);
+        switch(&grid, &self.bed, s, fresh, periodic, &mut phi);
         let fill = |s: &mut State| s.fill_boundaries(&grid, periodic);
         eddy.step(&grid, s, &phi, dt, &mut self.eddy.borrow_mut(), fill);
         self.clean_dry(s);
@@ -546,7 +554,14 @@ impl Solver {
         // dispersive terms both fade out where it is not.
         let mut phi_guard = self.phi.borrow_mut();
         if self.order == Order::Fifth || self.dispersion.is_some() {
-            switch(g, &self.bed, s, self.breaking_config(), &mut phi_guard);
+            switch(
+                g,
+                &self.bed,
+                s,
+                self.breaking_config(),
+                self.periodic_y,
+                &mut phi_guard,
+            );
         }
         let phi: &[f64] = &phi_guard;
         let mut out = Rhs {
