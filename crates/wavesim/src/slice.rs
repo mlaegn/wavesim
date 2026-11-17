@@ -773,4 +773,90 @@ mod tests {
         let e = slice_of_saved_wave("told", 1.0, None, told);
         assert!(e.contains("more than its limit"), "{e}");
     }
+
+    #[test]
+    fn a_wave_saved_at_a_tide_gets_the_tank_of_the_same_water_at_mean_sea_level() {
+        // The same sea two ways: a beach saved at a tide 1 m below mean sea level, and the same
+        // beach 1 m higher saved at mean sea level. The water under the wave is the same, so the
+        // slice must build the same tank: bed, surface and potential, node for node.
+        let tank_for = |name: &str, raise: f64, tide: f64| {
+            let dir =
+                std::env::temp_dir().join(format!("wavesim-slice-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let x: Vec<f64> = (0..=400).map(f64::from).collect();
+            // Still water 5 m deep under the crest at x = 200, rising 1 in 40.
+            let depth = |x: f64| 10.0 - x / 40.0;
+            let z: Vec<f64> = x.iter().map(|&x| -depth(x) - 1.0 + raise).collect();
+            let doc = serde_json::json!({ "name": "plane", "x": x, "z": z, "z_bed": z });
+            let line = dir.join("line.json");
+            std::fs::write(&line, doc.to_string()).unwrap();
+            let eta: Vec<f64> = x
+                .iter()
+                .map(|&x| (std::f64::consts::TAU * (x - 200.0) / 107.0).cos())
+                .collect();
+            let ubar: Vec<f64> = x
+                .iter()
+                .zip(&eta)
+                .map(|(&x, &e)| {
+                    if depth(x) > 0.0 {
+                        (G / depth(x)).sqrt() * e
+                    } else {
+                        0.0
+                    }
+                })
+                .collect();
+            let doc = serde_json::json!({
+                "format": "wavesim-handoff", "depth": 5.0, "time": 300.0, "crest": 200.0,
+                "x": x, "eta": eta, "ubar": ubar, "broke_seaward_at": null,
+                "tide_m": tide, "wave_period_s": 16.0, "wave_height_m": 2.5,
+            });
+            let saved = dir.join("handoff.json");
+            std::fs::write(&saved, doc.to_string()).unwrap();
+            let opts = SliceOptions {
+                case: Case::Steep,
+                depth: 10.0,
+                height: 2.5,
+                finest: 0.6,
+                frame_every: 4,
+                out: dir.join("slice"),
+                max_wall_seconds: Some(0.0),
+                handoff_depth: None,
+                line: Some(line.clone()),
+                period: None,
+                handoff_file: Some(saved.clone()),
+            };
+            let h = line_tank(&opts, &line, Source::Run(saved)).unwrap();
+            let _ = std::fs::remove_dir_all(&dir);
+            h
+        };
+        let low = tank_for("low-tide", 0.0, -1.0);
+        let raised = tank_for("raised", 1.0, 0.0);
+        let close = |a: &[(f64, f64)], b: &[(f64, f64)]| {
+            a.len() == b.len()
+                && a.iter()
+                    .zip(b)
+                    .all(|(p, q)| (p.0 - q.0).abs() < 1e-9 && (p.1 - q.1).abs() < 1e-9)
+        };
+        assert!(close(&low.profile, &raised.profile), "profiles differ");
+        assert!(close(&low.tank.bed, &raised.tank.bed), "beds differ");
+        assert!(
+            close(&low.tank.surface, &raised.tank.surface),
+            "surfaces differ"
+        );
+        assert!(
+            low.tank
+                .phi
+                .iter()
+                .zip(&raised.tank.phi)
+                .all(|(a, b)| (a - b).abs() < 1e-9),
+            "potentials differ"
+        );
+        // Under the crest the line is 6 m below mean sea level; at the run's tide, 1 m below it,
+        // the slice sees the 5 m of water the run had, not 6.
+        let d = depth_at(&low.profile, 200.0);
+        assert!((d - 5.0).abs() < 0.1, "{d} m under the crest");
+        assert_eq!(low.record["tide"], serde_json::json!(-1.0));
+        assert_eq!(low.record["swell_period"], serde_json::json!(16.0));
+    }
 }
