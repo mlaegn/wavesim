@@ -365,7 +365,9 @@ Max should check it:
 
 Two things to carry forward. The break height is 1.4 times Komar & Gaughan's 3.0 m for that
 swell, while gogo's rays give no shelf focusing (0.97). So either the last 500 m focuses it, or
-the tallest-wave convention and the slightly-too-tall inner surf zone (H/h near 1.0) inflate it.
+the tallest-wave convention inflates it. (The inner surf zone is too tall, H/h near 1.0 where
+saturated surf zones sit at 0.5 to 0.65, but that is shoreward of the break: on Ting & Kirby's
+beach the heights up to the break are within 4% of the laboratory's.)
 That is the first number the labels can check, through the `size` faults. And a spot locals know
 for heavy, hollow waves comes out mostly spilling. On Pipeline's 3 m bed the cause was a reef
 smoother than the real one, and a 15 m bed is smoother still.

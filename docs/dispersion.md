@@ -115,7 +115,7 @@ The fix removes cells shallower than 5 cm from the dispersive system entirely. T
 | Wave-maker, `kh = 0.59` | amplitude 0.0498 and 0.0499, phase lag 4.737 rad | 0.05; 4.741 (shallow water would give 4.486) |
 | 2.5 m, 14 s swell in 8 m, energy kept over 400 m | 93% | shallow water keeps 14% |
 | 1:30 beach, 8 s, 1.5 m: shoaling from 6 m to 3.5 m | ×1.14 | Green's law ×1.14 |
-| Same beach: breaking | peak `H/h` 0.68 at 3.0 m depth; surf zone `H/h` up to 0.96 in 1.0–2.5 m | textbook range 0.7–1.2 (see the caveat above) |
+| Same beach: breaking | peak `H/h` 0.68 at 3.0 m depth; surf zone `H/h` up to 0.96 in 1.0–2.5 m | at the break, textbook range 0.7–1.2 (see the caveat above); in a saturated surf zone 0.5–0.65, so the surf zone is too tall (see "Across the surf zone") |
 | Still water over a rough bed, with and without dry bumps | momentum below 1e-9 | zero |
 | Linear solves | 4–11 iterations each, none unconverged | |
 
