@@ -101,8 +101,10 @@ Little, because the break reading is done (2026-11-04: shoreward-most near-peak,
    walls only suit that.
 3. **A reducer. Done 2026-11-06.** `tools/spot_sheet.py coxos` reads the runs listed under
    `[coxos.sheet]` in `spots.toml` and writes `out/sheets/coxos.json` (240 KB) and a preview map
-   beside it. Per run: the breaking zone (cells breaking in at least 8% of the saved frames, about
-   every wave), the break points, the takeoffs and a few numbers near the main one.
+   beside it. Per run: the breaking zone (in each row from the break point to the shoreline at the
+   run's tide, since 2026-11-17; before, cells whose breaking field was above 0 in 8% of the saved
+   frames, which put 22-35% of the zone on the run-up over the rocks and left out 0.7-2.6 ha of the
+   water inshore of the break), the break points, the takeoffs and a few numbers near the main one.
 4. **The lineup: not needed.** The reducer finds the takeoffs itself (below), so Max does not have
    to mark one; he checks the ones it finds.
 
@@ -173,7 +175,8 @@ throughout (701 readings).
 
   | low tide | 1.2 m, 12 s | 2 m, 13 s | 3 m, 14 s |
   |---|---|---|---|
-  | breaking zone in the spot's area | 1.8–2.0 ha | 4.3–4.6 ha | 6.1–8.6 ha |
+  | breaking zone in the spot's area, break point to shore | 2.5–4.9 ha | 3.6–5.3 ha | 4.3–6.8 ha |
+  | ...as first drawn (breaking field above 0 in 8% of frames) | 1.8–2.0 ha | 4.3–4.6 ha | 6.1–8.6 ha |
   | break line against 2 m (median) | 7–27 m inshore | — | 9–69 m seaward |
   | rows reaching the rock unbroken | 16–33% | 10–22% | 0–20%, mostly 0 |
   | takeoff depth | 3–5 m, mostly on the inside | 4–7 m | 4.5–9 m |

@@ -8,8 +8,13 @@ The spot's `[name.sheet]` table in spots.toml lists the runs, by swell (`[[name.
 each a height and period) and within a swell one per open-sea direction and tide, and the band of
 rows to trust. For each run the sheet gives, in latitude and longitude:
 
-- the breaking zone: cells where the surface is breaking in at least `zone_fraction` of the
-  saved frames of the settled sea (every wave breaks there, roughly);
+- the breaking zone: in each row, from its break point to the shoreline at the run's tide, where
+  the waves break and the broken water runs in. A stray row (below) starts at the median of its
+  neighbours' break points instead of its own. (It used to be the cells whose breaking field was
+  above 0 in 8% of the frames, the switch only starting to fade. On Coxos that put 22-35% of
+  the zone above still water, on the run-up over the rocks, and left out 0.7-2.6 ha of the water
+  between the break points and the shore. The run's own reading, 0.8, comes late on 3 m cells
+  and sits in the swash.);
 - the break points: the run's own break line (one point per row: where the wave stops growing
   and breaks, or reaches the rock unbroken), with the height and depth there;
 - the takeoffs: where the crest breaks before the reef on both sides. The crest leaves the
@@ -75,11 +80,9 @@ def load_run(run: Path) -> dict:
     bed = np.fromfile(run / h["bed"], dtype="<f4").reshape(ny, nx).astype("float64")
     times = np.array(h["times"])
     frames = np.memmap(run / h["frames"], dtype="<f4", mode="r", shape=(len(times), len(h["fields"]), ny, nx))
-    use = times >= h["stats"]["from_s"] - 1e-9
-    breaking = np.asarray(frames[use, h["fields"].index("breaking")]) > 0
     stats = np.fromfile(run / h["stats"]["file"], dtype="<f4").reshape(len(h["stats"]["fields"]), ny, nx)
     height = stats[h["stats"]["fields"].index("wave_height")].astype("float64")
-    out = {"dir": run, "header": h, "bed": bed, "break_share": breaking.mean(axis=0), "height": height, "coarse": None}
+    out = {"dir": run, "header": h, "bed": bed, "height": height, "coarse": None}
     if (run / "coarse" / "run.json").exists():
         c = json.loads((run / "coarse" / "run.json").read_text())
         cbed = np.fromfile(run / "coarse" / c["bed"], dtype="<f4").reshape(c["ny"], c["nx"]).astype("float64")
@@ -196,7 +199,7 @@ def inside(lon, lat, area) -> np.ndarray:
     return out
 
 
-def read_run(run: dict, trust_y: tuple[float, float], zone_fraction: float, area=None, loop_png: Path | None = None) -> dict:
+def read_run(run: dict, trust_y: tuple[float, float], area=None, loop_png: Path | None = None) -> dict:
     """One run's entry in the sheet. Takeoffs are found over all the trusted rows, so the
     spot's `area` does not make edges of its own; then only what lies inside it is kept."""
     h = run["header"]
@@ -243,7 +246,7 @@ def read_run(run: dict, trust_y: tuple[float, float], zone_fraction: float, area
     rows_ok = [r for r in rows if not r["stray"]]
     ts = median_filter(np.array([r["t"] for r in rows_ok]), size=max(3, int(30 / dy) | 1), mode="nearest")
     peaks = [p for p in takeoffs(rows_ok, ts, dy) if rows_ok[p["k"]]["in_area"]] if rows_ok else []
-    shared = common(run, rows, frame, j0, j1, zone_fraction, area)
+    shared = common(run, rows, frame, j0, j1, area)
     shared["loop"] = wave_loop(run["dir"], run, frame, j0, j1, area, loop_png) if loop_png else None
     if not peaks:
         return {"tide_m": tide, "takeoff": None, "takeoffs": [], "near_takeoff": None, "_rows": rows, **shared}
@@ -277,16 +280,34 @@ def read_run(run: dict, trust_y: tuple[float, float], zone_fraction: float, area
 
 def mark_strays(rows: list) -> None:
     """Sets each row's "stray": its break point lies more than STRAY_M off the median of its
-    neighbours, or the wave there is under STRAY_HD of the depth."""
+    neighbours, or the wave there is under STRAY_HD of the depth; and "x_median", that median."""
     xs = median_filter(np.array([r["x"] for r in rows]), size=2 * STRAY_ROWS + 1, mode="nearest")
     for r, m in zip(rows, xs):
         r["stray"] = bool(abs(r["x"] - m) > STRAY_M or r["height"] < STRAY_HD * r["depth"])
+        r["x_median"] = float(m)
 
 
-def common(run: dict, rows: list, frame: Frame, j0: int, j1: int, zone_fraction: float, area=None) -> dict:
+def zone_mask(run: dict, rows: list) -> np.ndarray:
+    """1 where the waves break and the broken water runs in, 0 elsewhere: in each row of `rows`,
+    from its break point to the shoreline at the run's tide (the first cell from there whose bed is
+    at or above it). A stray row starts at the median of its neighbours' break points instead."""
+    h = run["header"]
+    nx, dx, tide = h["nx"], h["dx"], h["waves"]["tide_m"]
+    bed = run["bed"]
+    mask = np.zeros(bed.shape)
+    for r in rows:
+        x = r["x_median"] if r["stray"] else r["x"]
+        i = min(max(int(round(x / dx - 0.5)), 0), nx - 1)
+        dry = np.nonzero(bed[r["j"], i:] >= tide)[0]
+        shore = i + int(dry[0]) if dry.size else nx
+        mask[r["j"], i:shore] = 1.0
+    return mask
+
+
+def common(run: dict, rows: list, frame: Frame, j0: int, j1: int, area=None) -> dict:
     """What every run's entry carries, takeoff or not: the zone and the break points, inside the
     spot's area."""
-    share = run["break_share"]
+    share = zone_mask(run, rows)
     if area:
         h = run["header"]
         xs, ys = np.meshgrid((np.arange(h["nx"]) + 0.5) * h["dx"], (np.arange(h["ny"]) + 0.5) * h["dy"])
@@ -298,7 +319,7 @@ def common(run: dict, rows: list, frame: Frame, j0: int, j1: int, zone_fraction:
             [round(r["lon"], 6), round(r["lat"], 6), round(r["height"], 2), round(r["depth"], 1), r["rock"]]
             for r in kept
         ],
-        "zone": zone_polygons(share, slice(j0, j1), zone_fraction, run["header"]["dx"], frame),
+        "zone": zone_polygons(share, slice(j0, j1), 0.5, run["header"]["dx"], frame),
         "height_map": height_map(run, frame, j0, j1, area),
     }
 
@@ -510,7 +531,7 @@ def recurring_peaks(swells: list, min_s: float = 5.0, radius_m: float = 50.0) ->
     return sorted(clusters, key=lambda c: -c["share"])
 
 
-def read_swell(cfg: dict, trust, level: float, area, loops: Path | None = None) -> dict:
+def read_swell(cfg: dict, trust, area, loops: Path | None = None) -> dict:
     """One swell's rows: a direction each, with its runs at each tide. Every run must have been
     made with the swell this table names."""
     rows = []
@@ -527,7 +548,7 @@ def read_swell(cfg: dict, trust, level: float, area, loops: Path | None = None) 
                     f"listed under the {cfg['height_m']} m, {cfg['period_s']} s swell"
                 )
             key = f"{cfg['height_m']:g}m{cfg['period_s']:g}s_{entry['from']}_{tide_name}"
-            tides[tide_name] = read_run(run, trust, level, area, loops / f"{key}.png" if loops else None)
+            tides[tide_name] = read_run(run, trust, area, loops / f"{key}.png" if loops else None)
             tides[tide_name]["run"] = entry[tide_name]
         shift = tide_shift(tides["mid"], tides["low"]) if {"mid", "low"} <= tides.keys() else None
         for v in tides.values():
@@ -556,11 +577,10 @@ def main(argv=None) -> int:
         return 2
     spot, cfg = spots[args.name], spots[args.name]["sheet"]
     trust = tuple(cfg["trust_y_m"])
-    level = cfg.get("zone_fraction", 0.08)
     area = cfg.get("area")
 
     out = args.out or Path("out/sheets") / f"{args.name}.json"
-    swells = [read_swell(s, trust, level, area, out.parent / args.name) for s in cfg["swells"]]
+    swells = [read_swell(s, trust, area, out.parent / args.name) for s in cfg["swells"]]
 
     sheet = {
         "format": "wavesim-spot-sheet",
@@ -569,7 +589,7 @@ def main(argv=None) -> int:
         "description": spot.get("description"),
         "note": "model, not observation",
         "seabed": {"source": spot.get("source"), "cell_m": spot.get("cell_m"), "attribution": spot.get("attribution")},
-        "zone_fraction": level,
+        "zone": "each row from its break point to the shoreline",
         "trust_y_m": list(trust),
         "area": area,
         "generated": datetime.date.today().isoformat(),

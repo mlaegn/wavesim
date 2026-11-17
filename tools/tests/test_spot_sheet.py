@@ -59,6 +59,30 @@ def test_a_break_point_off_its_neighbours_or_too_deep_to_break_is_stray():
     assert [k for k, r in enumerate(rows) if r["stray"]] == [20, *range(40, 46)]
 
 
+def test_the_zone_runs_from_each_break_point_to_the_shore():
+    # A beach rising 1 in 30 from 6 m deep at x = 0, at a tide 0.5 m up: the shoreline is the
+    # first cell whose bed reaches 0.5 m, at x = 195 m (cell 65 of 3 m cells).
+    nx, ny, dx = 100, 30, 3.0
+    x = (np.arange(nx) + 0.5) * dx
+    bed = np.tile(-6.0 + x / 30.0, (ny, 1))
+    run = {"header": {"nx": nx, "dx": dx, "waves": {"tide_m": 0.5}}, "bed": bed}
+    shore = int(np.nonzero(bed[0] >= 0.5)[0][0])
+    rows = [{"j": j, "x": 120.0 + j, "height": 2.0, "depth": 3.0} for j in range(ny)]
+    rows[12]["x"] = 30.0  # one row misread 100 m seaward: it starts with its neighbours
+    del rows[20]  # a row without a break point has no zone
+    spot_sheet.mark_strays(rows)
+    zone = spot_sheet.zone_mask(run, rows)
+    for r in rows:
+        start = int(round((r["x_median"] if r["stray"] else r["x"]) / dx - 0.5))
+        expect = np.zeros(nx)
+        expect[start:shore] = 1.0
+        assert np.array_equal(zone[r["j"]], expect), r["j"]
+    assert rows[12]["stray"] and not zone[12, :35].any()
+    assert not zone[20].any()
+    # Never on land, never seaward of a break point.
+    assert not zone[:, shore:].any()
+
+
 def test_the_tide_shift_compares_positions_on_the_bed_not_in_each_run():
     # The low-tide run is cropped 45 m further offshore, so its x reads 45 m more for the same place.
     mid = {"_rows": [{"j": j, "x_bed": 3300.0} for j in range(10)]}

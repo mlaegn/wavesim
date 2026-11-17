@@ -65,7 +65,6 @@ shift_m = -2.0
 # with the 1200 m one within 16 m and 1% (340 deg, 2026-11-06). Reaching as far into the south
 # margin scattered break points far offshore, so the south edge stays at 300 m.
 trust_y_m = [300.0, 1050.0]
-zone_fraction = 0.08
 # Coxos itself, as Max drew it on the preview map (2026-11-06): the runs show the whole coast.
 area = [
   [39.00282, -9.42983], [39.00257, -9.42789], [39.00156, -9.42675], [39.00055, -9.42578],
