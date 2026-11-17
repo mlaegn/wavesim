@@ -860,6 +860,12 @@ fn a_run_saves_lines_for_the_slice_solver_when_a_settled_crest_passes() {
             .collect()
     };
     let (x, eta, bed) = (list("x"), list("eta"), list("bed"));
+    // It says what it was saved from: a slice puts it over still water at the run's tide, with
+    // the run's period.
+    assert_eq!(
+        (get("tide_m"), get("wave_period_s"), get("wave_height_m")),
+        (o.tide, o.period, o.height)
+    );
     // Saved once the sea had settled, the last four periods of the run.
     let settled = 60.0 - wavesim::BREAKS_SHOWN * o.period;
     assert!(get("time") >= settled, "saved at {} s", get("time"));

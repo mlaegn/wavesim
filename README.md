@@ -266,8 +266,10 @@ uv run --python 3.12 --with rasterio --with numpy --with scipy --with pyproj \
 cargo run --release -p wavesim -- run data/pipeline.json --height 2.5 --period 14 \
     --threads 3 --max-minutes 15 --handoff-y 511.5 --handoff-depth 9 --out out/pipeline_handoff
 cargo run --release -p wavesim -- slice --line data/pipeline_line_511.5_w50.json \
-    --handoff-file out/pipeline_handoff/handoff_y511.5.json --period 14
+    --handoff-file out/pipeline_handoff/handoff_y511.5.json
 ```
+
+The saved file records the run's tide and swell, so the slice puts the wave over the water it was saved in (the line, relative to mean sea level, is lowered by the tide) and takes the run's period; a `--period` that differs is an error.
 
 The slice hands over only the followed wave, between the troughs either side of its crest, tapered to still water beyond: in a swell the wave ahead is breaking where this one will, and its foam cannot be followed this way. The water ahead is therefore still, not the previous wave's backwash, and the velocity across the line is dropped, a slice being two-dimensional. The slice's bed is the averaged line, simplified to the points that keep it within 10 cm, and it ends in a wall where the water is half a metre deep. The results below, up to the check that led to the averaging, were run on single 1 m lines (`--width 0`); the averaging changes the tube, and little else.
 

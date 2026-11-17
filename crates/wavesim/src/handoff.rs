@@ -303,22 +303,67 @@ struct HandoffFile {
     /// written before runs recorded it).
     #[serde(default)]
     broke_seaward_at: Option<f64>,
+    /// The run's still-water level above mean sea level and its swell, absent in files written
+    /// before runs recorded them; then they are read from the `run.json` beside the file.
+    #[serde(default)]
+    tide_m: Option<f64>,
+    #[serde(default)]
+    wave_period_s: Option<f64>,
+    #[serde(default)]
+    wave_height_m: Option<f64>,
+}
+
+/// A wave a 2D run saved for the slice solver, and what it was saved from.
+#[derive(Clone, Debug)]
+pub struct Saved {
+    pub approach: Approach,
+    /// The depth of the hand-off point.
+    pub depth: f64,
+    /// Where the run's waves broke seaward of the hand-off point, if they did.
+    pub broke_seaward_at: Option<f64>,
+    /// The run's still-water level above mean sea level: the saved surface and bed are relative
+    /// to still water at this tide.
+    pub tide: f64,
+    /// The run's swell period, and its height (crest to trough at the wave-maker) if known.
+    pub period: Option<f64>,
+    pub height: Option<f64>,
 }
 
 impl Approach {
-    /// The wave a 2D run saved for the slice solver (see `wavesim run --handoff-y`), the depth
-    /// it was saved at, and where the run's waves broke seaward of that point, if they did.
-    pub fn read(path: &std::path::Path) -> Result<(Approach, f64, Option<f64>), Error> {
+    /// The wave a 2D run saved for the slice solver (see `wavesim run --handoff-y`), with the
+    /// depth it was saved at, where the run's waves broke seaward of that point, if they did, and
+    /// the run's tide and swell. A file from before runs recorded the tide and swell takes them
+    /// from the `run.json` beside it; without either, it is refused, since a slice at the wrong
+    /// tide puts the wave over the wrong depth of water.
+    pub fn read(path: &std::path::Path) -> Result<Saved, Error> {
         let text = std::fs::read_to_string(path)
             .map_err(|e| Error::Setup(format!("{}: {e}", path.display())))?;
         let f: HandoffFile = serde_json::from_str(&text)
             .map_err(|e| Error::Setup(format!("{}: not a wavesim-handoff: {e}", path.display())))?;
-        if f.format != "wavesim-handoff" || f.x.len() != f.eta.len() || f.x.len() != f.ubar.len() {
+        if f.format != "wavesim-handoff"
+            || f.x.len() < 2
+            || f.x.len() != f.eta.len()
+            || f.x.len() != f.ubar.len()
+        {
             return Err(Error::Setup(format!(
                 "{}: not a wavesim-handoff",
                 path.display()
             )));
         }
+        // Older files: the run's own settings, from its header beside the file.
+        let run: Option<serde_json::Value> = path
+            .parent()
+            .map(|dir| dir.join("run.json"))
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|text| serde_json::from_str(&text).ok());
+        let from_run = |key: &str| run.as_ref().and_then(|r| r["waves"][key].as_f64());
+        let tide = f.tide_m.or_else(|| from_run("tide_m")).ok_or_else(|| {
+            Error::Setup(format!(
+                "{}: the file does not say at what tide it was saved, and there is no run.json \
+                 beside it that does; save it again with a current `wavesim run --handoff-y`",
+                path.display()
+            ))
+        })?;
         let approach = Approach {
             time: f.time,
             x: f.x,
@@ -327,7 +372,14 @@ impl Approach {
             crest: f.crest,
             steps: 0,
         };
-        Ok((approach, f.depth, f.broke_seaward_at))
+        Ok(Saved {
+            approach,
+            depth: f.depth,
+            broke_seaward_at: f.broke_seaward_at,
+            tide,
+            period: f.wave_period_s.or_else(|| from_run("wave_period_s")),
+            height: f.wave_height_m.or_else(|| from_run("wave_height_m")),
+        })
     }
 
     /// The followed crest's height over the still depth beneath it, the measure the main

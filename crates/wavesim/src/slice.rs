@@ -95,9 +95,11 @@ pub struct SliceOptions {
     pub handoff_depth: Option<f64>,
     /// A real line of seabed (a `wavesim-line` file) to break a swell on instead of `case`'s
     /// made-up one, with a swell `height` from crest to trough and `period` long; it needs
-    /// `handoff_depth`.
+    /// `handoff_depth` or `handoff_file`.
     pub line: Option<PathBuf>,
-    pub period: f64,
+    /// The swell's period, s: for a swell along the line alone, [`LINE_PERIOD`] if `None`; with
+    /// `handoff_file`, the run's own, which this must match if given.
+    pub period: Option<f64>,
     /// For `line`: the wave a 2D run saved (`wavesim run --handoff-y`), instead of bringing a
     /// swell in along the line alone, which cannot spread energy sideways as the reef does.
     pub handoff_file: Option<PathBuf>,
@@ -114,6 +116,30 @@ pub struct SliceSummary {
     pub frames: usize,
     pub seconds: f64,
     pub estimate: f64,
+}
+
+/// The period of a swell brought in along a line alone when none is given, s.
+pub const LINE_PERIOD: f64 = 14.0;
+
+/// The period a slice on a real line works with: the run's for a saved wave (the period chosen
+/// on the command line must agree with it), or the one chosen, or [`LINE_PERIOD`].
+fn slice_period(saved: Option<&crate::handoff::Saved>, chosen: Option<f64>) -> Result<f64, Error> {
+    let Some(s) = saved else {
+        return Ok(chosen.unwrap_or(LINE_PERIOD));
+    };
+    match (s.period, chosen) {
+        (Some(run), Some(asked)) if (run - asked).abs() > 1e-9 => Err(Error::Setup(format!(
+            "the saved wave is from a {run} s swell, not {asked} s; leave out --period, or give \
+             the run's"
+        ))),
+        (Some(run), _) => Ok(run),
+        (None, Some(asked)) => Ok(asked),
+        (None, None) => Err(Error::Setup(
+            "the saved wave does not say its swell's period, and there is no run.json beside it \
+             that does; give --period"
+                .into(),
+        )),
+    }
 }
 
 /// The depth of `profile` at `x`, straight between its points.
@@ -217,11 +243,19 @@ fn line_tank(opts: &SliceOptions, path: &std::path::Path, source: Source) -> Res
         .map_err(|e| Error::Setup(format!("{}: {e}", path.display())))?;
     let line: LineFile = serde_json::from_str(&text)
         .map_err(|e| Error::Setup(format!("{}: not a wavesim-line: {e}", path.display())))?;
+    // A 2D run's saved wave, first: its surface and bed are relative to still water at the run's
+    // tide, so the line, relative to mean sea level, is lowered by that tide to sit under it.
+    let saved = match &source {
+        Source::Run(file) => Some(crate::handoff::Approach::read(file)?),
+        Source::Line(_) => None,
+    };
+    let tide = saved.as_ref().map_or(0.0, |s| s.tide);
+    let period = slice_period(saved.as_ref(), opts.period)?;
     let points: Vec<(f64, f64)> = line
         .x
         .iter()
         .zip(line.z.iter().zip(&line.z_bed))
-        .map(|(&x, (z, &bed))| (x, z.unwrap_or(bed)))
+        .map(|(&x, (z, &bed))| (x, z.unwrap_or(bed) - tide))
         .collect();
     let still = |x: f64| -> f64 {
         let k = points
@@ -232,24 +266,25 @@ fn line_tank(opts: &SliceOptions, path: &std::path::Path, source: Source) -> Res
     };
     // The main model's cells: 2 m is about 60 to a wavelength of a 14 s swell on the reef.
     let cell = 2.0;
-    let (approach, depth, from) = match &source {
-        Source::Run(file) => {
-            let (a, depth, broke) = crate::handoff::Approach::read(file)?;
-            if let Some(x) = broke {
+    let (approach, depth, from, swell_height) = match (&source, saved) {
+        (Source::Run(file), Some(s)) => {
+            if let Some(x) = s.broke_seaward_at {
                 return Err(Error::Setup(format!(
                     "the 2D run's waves broke at x = {x:.0} m, seaward of where this one was saved \
                      (crest at {:.0} m), so it had already broken once: a slice would start from \
                      a broken wave",
-                    a.crest
+                    s.approach.crest
                 )));
             }
-            (a, depth, file.display().to_string())
+            (s.approach, s.depth, file.display().to_string(), s.height)
         }
-        Source::Line(depth) => (
-            crate::handoff::swell(&points, cell, opts.height, opts.period, *depth)?,
+        (Source::Line(depth), _) => (
+            crate::handoff::swell(&points, cell, opts.height, period, *depth)?,
             *depth,
             "the line alone".to_string(),
+            Some(opts.height),
         ),
+        (Source::Run(_), None) => unreachable!("a saved wave was read above"),
     };
     let eta_ratio = approach.eta_ratio(&still);
     // A 2D run's wave must be handed over before the run's breaking switch has begun to act on
@@ -267,7 +302,7 @@ fn line_tank(opts: &SliceOptions, path: &std::path::Path, source: Source) -> Res
             eta_ratio / (1.0 + eta_ratio)
         )));
     }
-    let omega = std::f64::consts::TAU / opts.period;
+    let omega = std::f64::consts::TAU / period;
     let wavelength =
         std::f64::consts::TAU / wavecore::linear_wave(omega, still(approach.crest), true).k;
     let taper = 0.15 * wavelength;
@@ -319,8 +354,9 @@ fn line_tank(opts: &SliceOptions, path: &std::path::Path, source: Source) -> Res
     let record = serde_json::json!({
         "line": line.name,
         "from": from,
-        "swell_height": opts.height,
-        "swell_period": opts.period,
+        "swell_height": swell_height,
+        "swell_period": period,
+        "tide": tide,
         "depth": depth,
         "time": wave.time,
         "crest": wave.crest,
@@ -572,11 +608,29 @@ pub fn run_slice(opts: &SliceOptions) -> Result<SliceSummary, Error> {
 mod tests {
     use super::*;
 
-    /// A slice of a 16 s swell from a saved wave on a plane beach rising 1 in 40, its crest
-    /// `crest` m above still water where the beach is 5 m deep, the run's waves having broken
-    /// at `broke` if they did; refused at once by a limit of no time at all if nothing refuses
-    /// it first.
-    fn slice_of_saved_wave(name: &str, crest: f64, broke: Option<f64>) -> String {
+    /// What a saved wave's file says about the run it came from, what is beside it, and the
+    /// period asked for on the command line.
+    struct Recorded {
+        tide: Option<f64>,
+        period: Option<f64>,
+        /// A `run.json` written beside the file, as a run's directory has.
+        run_json: Option<serde_json::Value>,
+        asked: Option<f64>,
+    }
+
+    /// A current file: a 16 s swell at mean sea level, no `--period`.
+    const CURRENT: Recorded = Recorded {
+        tide: Some(0.0),
+        period: Some(16.0),
+        run_json: None,
+        asked: None,
+    };
+
+    /// A slice of a 16 s swell from a saved wave on a plane beach rising 1 in 40 (5 m deep at
+    /// mean sea level under the crest), its crest `crest` m above the run's still water, the
+    /// run's waves having broken at `broke` if they did; refused at once by a limit of no time at
+    /// all if nothing refuses it first.
+    fn slice_of_saved_wave(name: &str, crest: f64, broke: Option<f64>, rec: Recorded) -> String {
         let dir = std::env::temp_dir().join(format!("wavesim-slice-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -603,11 +657,20 @@ mod tests {
             })
             .collect();
         let saved = dir.join("handoff.json");
-        let doc = serde_json::json!({
+        let mut doc = serde_json::json!({
             "format": "wavesim-handoff", "depth": 5.0, "time": 300.0, "crest": 200.0,
             "x": x, "eta": eta, "ubar": ubar, "broke_seaward_at": broke,
         });
+        if let Some(tide) = rec.tide {
+            doc["tide_m"] = serde_json::json!(tide);
+        }
+        if let Some(period) = rec.period {
+            doc["wave_period_s"] = serde_json::json!(period);
+        }
         std::fs::write(&saved, doc.to_string()).unwrap();
+        if let Some(run) = &rec.run_json {
+            std::fs::write(dir.join("run.json"), run.to_string()).unwrap();
+        }
         let opts = SliceOptions {
             case: Case::Steep,
             depth: 10.0,
@@ -618,25 +681,96 @@ mod tests {
             max_wall_seconds: Some(0.0),
             handoff_depth: None,
             line: Some(line),
-            period: 16.0,
+            period: rec.asked,
             handoff_file: Some(saved),
         };
-        run_slice(&opts).unwrap_err().to_string()
+        let e = run_slice(&opts).unwrap_err().to_string();
+        let _ = std::fs::remove_dir_all(&dir);
+        e
     }
 
     #[test]
     fn a_wave_saved_after_the_breaking_switch_began_on_it_is_refused() {
         // 3 m over 5 m is 0.375 of the total depth; 1 m is 0.17, refused only by the time limit.
-        let e = slice_of_saved_wave("broken", 3.0, None);
+        let e = slice_of_saved_wave("broken", 3.0, None, CURRENT);
         assert!(e.contains("part broken"), "{e}");
-        let e = slice_of_saved_wave("whole", 1.0, None);
+        let e = slice_of_saved_wave("whole", 1.0, None, CURRENT);
         assert!(e.contains("more than its limit"), "{e}");
     }
 
     #[test]
     fn a_wave_saved_behind_where_the_run_broke_is_refused() {
         // Low again, as a re-formed wave is, so only where the run broke tells.
-        let e = slice_of_saved_wave("reformed", 1.0, Some(150.0));
+        let e = slice_of_saved_wave("reformed", 1.0, Some(150.0), CURRENT);
         assert!(e.contains("already broken once"), "{e}");
+    }
+
+    #[test]
+    fn a_saved_wave_goes_over_the_water_of_the_tide_it_was_saved_at() {
+        // A crest 2 m up where the beach is 5 m deep at mean sea level: 0.29 of the total depth,
+        // under the 0.30 where the run's switch starts. Saved at a tide 1 m below mean sea level,
+        // the water there was 4 m deep and the crest 0.33 of it: part broken, and refused. Before
+        // the slice read the tide it put the wave over 5 m and took it.
+        let at = |tide: f64| Recorded {
+            tide: Some(tide),
+            ..CURRENT
+        };
+        let e = slice_of_saved_wave("tide0", 2.0, None, at(0.0));
+        assert!(e.contains("more than its limit"), "{e}");
+        let e = slice_of_saved_wave("tide-1", 2.0, None, at(-1.0));
+        assert!(e.contains("is 0.33 of the total depth"), "{e}");
+        // A file from before runs recorded the tide takes it from the run.json beside it...
+        let older = Recorded {
+            tide: None,
+            period: None,
+            run_json: Some(
+                serde_json::json!({ "waves": { "tide_m": -1.0, "wave_period_s": 16.0 } }),
+            ),
+            asked: None,
+        };
+        let e = slice_of_saved_wave("older", 2.0, None, older);
+        assert!(e.contains("is 0.33 of the total depth"), "{e}");
+        // ...and with nothing to say what tide it was, it is refused.
+        let unknown = Recorded {
+            tide: None,
+            ..CURRENT
+        };
+        let e = slice_of_saved_wave("unknown", 1.0, None, unknown);
+        assert!(e.contains("at what tide"), "{e}");
+    }
+
+    #[test]
+    fn a_saved_wave_keeps_its_own_period() {
+        // The run's period stands; one asked for that differs is an error, not a quiet override.
+        let e = slice_of_saved_wave(
+            "period14",
+            1.0,
+            None,
+            Recorded {
+                asked: Some(14.0),
+                ..CURRENT
+            },
+        );
+        assert!(e.contains("a 16 s swell, not 14 s"), "{e}");
+        let same = Recorded {
+            asked: Some(16.0),
+            ..CURRENT
+        };
+        let e = slice_of_saved_wave("period16", 1.0, None, same);
+        assert!(e.contains("more than its limit"), "{e}");
+        // A file that does not say, with nothing beside it, needs --period.
+        let silent = Recorded {
+            period: None,
+            ..CURRENT
+        };
+        let e = slice_of_saved_wave("silent", 1.0, None, silent);
+        assert!(e.contains("give --period"), "{e}");
+        let told = Recorded {
+            period: None,
+            asked: Some(16.0),
+            ..CURRENT
+        };
+        let e = slice_of_saved_wave("told", 1.0, None, told);
+        assert!(e.contains("more than its limit"), "{e}");
     }
 }

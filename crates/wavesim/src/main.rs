@@ -130,9 +130,10 @@ enum Command {
         /// --handoff-depth
         #[arg(long)]
         line: Option<PathBuf>,
-        /// The swell's period in seconds, for --line
-        #[arg(long, default_value_t = 14.0)]
-        period: f64,
+        /// The swell's period in seconds, for --line: 14 by default for a swell along the line
+        /// alone; with --handoff-file the run's own, which this must match if given
+        #[arg(long)]
+        period: Option<f64>,
         /// For --line: start from the wave a 2D run saved (`wavesim run --handoff-y`), e.g.
         /// out/pipeline/handoff_y511.5.json, rather than a swell along the line alone
         #[arg(long)]
@@ -412,12 +413,19 @@ fn lower_priority(priority: Priority) {
 
 fn slice(opts: &SliceOptions) -> Result<(), Error> {
     match &opts.line {
-        Some(line) => println!(
-            "a swell {} m high and {} s long, onto the line in {}",
-            opts.height,
-            opts.period,
-            line.display()
-        ),
+        Some(line) => match &opts.handoff_file {
+            Some(file) => println!(
+                "the wave saved in {}, onto the line in {}",
+                file.display(),
+                line.display()
+            ),
+            None => println!(
+                "a swell {} m high and {} s long, onto the line in {}",
+                opts.height,
+                opts.period.unwrap_or(wavesim::slice::LINE_PERIOD),
+                line.display()
+            ),
+        },
         None => println!(
             "a wave {} m high in {} m of water, onto the {} seabed",
             opts.height,

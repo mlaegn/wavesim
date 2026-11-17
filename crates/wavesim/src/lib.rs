@@ -107,9 +107,14 @@ pub struct HandoffLine {
 /// surface above still water and the velocity along the line, `hu / h`, at every cell, in the
 /// bed file's frame. The velocity across the line is left out; a slice is two-dimensional. The
 /// file is written when the run ends, with where the settled sea broke seaward of the point, if
-/// it did (see [`Catch::finish`]).
+/// it did (see [`Catch::finish`]), and the swell and tide it came from: its surface and bed are
+/// relative to still water at that tide, and a slice must put it over the same water.
 struct Catch {
     line: HandoffLine,
+    /// The run's still-water level above mean sea level, and its swell's height (crest to
+    /// trough at the wave-maker).
+    tide: f64,
+    height: f64,
     path: PathBuf,
     /// The grid's `x = 0` in the bed file's frame.
     offset: f64,
@@ -164,7 +169,7 @@ impl Catch {
         tide: f64,
         line: HandoffLine,
         offset: f64,
-        period: f64,
+        (height, period): (f64, f64),
         dir: &std::path::Path,
     ) -> Result<Self, Error> {
         let g = bed.grid();
@@ -191,6 +196,8 @@ impl Catch {
         }
         Ok(Self {
             line,
+            tide,
+            height,
             path: dir.join(format!("handoff_y{}.json", line.y)),
             offset,
             row,
@@ -224,6 +231,9 @@ impl Catch {
         let doc = serde_json::json!({
             "format": "wavesim-handoff",
             "version": 1,
+            "tide_m": self.tide,
+            "wave_height_m": self.height,
+            "wave_period_s": self.period,
             "y": self.line.y,
             "row_y": (self.row as f64 + 0.5) * g.dy,
             "depth": self.line.depth,
@@ -1407,7 +1417,7 @@ pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<
                 opts.tide,
                 line,
                 f.x0 as f64 * bed.header.dx,
-                opts.period,
+                (opts.height, opts.period),
                 &opts.out,
             ),
             _ => Catch::new(
@@ -1415,7 +1425,7 @@ pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<
                 opts.tide,
                 line,
                 plan.crop as f64 * coarse_bed.header.dx,
-                opts.period,
+                (opts.height, opts.period),
                 &opts.out,
             ),
         })
