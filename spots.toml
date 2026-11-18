@@ -112,3 +112,21 @@ rows = [
   { from = 330, maker = 304, low = "out/coxos_3m14s_304_low" },
   { from = 340, maker = 307, low = "out/coxos_3m14s_307_low" },
 ]
+
+# Ribeira d'Ilhas, 1.6 km south of Coxos, on the same merged seabed (it covers 38.93-39.08 N).
+# A tryout so far (2026-11-18): one quick look on 6 m cells, not a sheet.
+[ribeira]
+description = "Ribeira d'Ilhas, Ericeira, Portugal"
+source = "2011 coastal LiDAR (DGT/APA via EMODnet HR, ~15 m) merged with the EMODnet DTM (~115 m), shifted to mean sea level"
+url = "data/coxos/coxos_seabed_msl.tif"  # the Coxos merge reaches Ribeira; tools/merge_bed.py coxos
+datum = "mean sea level (lowest astronomical tide + 2.0 m, approximate)"
+attribution = "EMODnet Bathymetry; DGT and APA (2011 coastal LiDAR)"
+lat = 38.988         # gogo's Ribeira point (coast.yml)
+lon = -9.419
+utm_crs = "EPSG:32629"
+bearing = 110.0      # swell from 290 deg at the maker; the shore faces 260 deg (coast.yml)
+offshore_m = 3500.0
+onshore_m = 500.0
+width_m = 1200.0
+cell_m = 3.0
+clip_above = 6.0
