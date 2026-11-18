@@ -989,3 +989,42 @@ fn a_saved_line_says_whether_the_waves_broke_seaward_of_its_hand_off_point() {
     assert_eq!(s.warnings.len(), 1, "{:?}", s.warnings);
     assert!(s.warnings[0].contains("y = 11 m") && s.warnings[0].contains("already broken"));
 }
+
+#[test]
+fn a_run_into_an_old_run_directory_keeps_nothing_of_the_old_run_but_the_files_it_did_not_write() {
+    let dir = scratch("rerun");
+    let opts = options(&dir, beach(&dir));
+    // What an earlier nested run with a hand-off would have left, and a file of the user's.
+    let coarse = opts.out.join("coarse");
+    fs::create_dir_all(&coarse).unwrap();
+    for name in ["run.json", "bed.f32", "frames.f32", "stats.f32"] {
+        fs::write(coarse.join(name), "old").unwrap();
+    }
+    fs::write(opts.out.join("handoff_y7.json"), "{}").unwrap();
+    fs::write(opts.out.join("run.json"), "old").unwrap();
+    fs::write(opts.out.join("breaks.png"), "mine").unwrap();
+
+    // This run is on one grid and saves no line.
+    run(&opts, |_| {}).unwrap();
+    assert!(
+        !opts.out.join("handoff_y7.json").exists(),
+        "the old line survived"
+    );
+    assert!(!coarse.exists(), "the old coarse run survived");
+    assert_eq!(
+        fs::read_to_string(opts.out.join("breaks.png")).unwrap(),
+        "mine"
+    );
+    assert!(Run::read(&opts.out).is_ok());
+
+    // A file of the user's in the coarse directory keeps the directory, but not the old run.
+    fs::create_dir_all(&coarse).unwrap();
+    fs::write(coarse.join("run.json"), "old").unwrap();
+    fs::write(coarse.join("notes.txt"), "mine").unwrap();
+    run(&opts, |_| {}).unwrap();
+    assert!(!coarse.join("run.json").exists());
+    assert_eq!(
+        fs::read_to_string(coarse.join("notes.txt")).unwrap(),
+        "mine"
+    );
+}

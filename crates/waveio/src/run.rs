@@ -52,6 +52,22 @@ pub struct Stats {
     pub to_s: f64,
 }
 
+/// The files a run writes in its directory; anything else there is left alone.
+const RUN_FILES: [&str; 4] = ["run.json", "bed.f32", "frames.f32", "stats.f32"];
+
+/// Remove a run's own files from `dir`, if it has any, and nothing else. A missing directory
+/// or file is not an error.
+pub fn remove_run(dir: &Path) -> Result<(), Error> {
+    for name in RUN_FILES {
+        let path = dir.join(name);
+        match fs::remove_file(&path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(Error::io(&path, e)),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 /// Writes a run directory: `run.json`, `bed.f32` and `frames.f32`.
 pub struct RunWriter {
     dir: PathBuf,
@@ -62,7 +78,9 @@ pub struct RunWriter {
 impl RunWriter {
     /// Create `dir`, copy the bed into it and open the frames file. `fields` names what each
     /// frame holds, in order (it must include `eta`); `waves` records the settings so the run
-    /// can be reproduced and labelled.
+    /// can be reproduced and labelled. A run already in `dir` is removed first, so until
+    /// [`finish`](Self::finish) writes `run.json` the directory has no header at all, rather
+    /// than the old run's header beside the new run's frames, and no old `stats.f32`.
     pub fn create(
         dir: &Path,
         bed: &Bed,
@@ -73,6 +91,7 @@ impl RunWriter {
             return Err(Error::format(dir, "a run must have an \"eta\" field"));
         }
         fs::create_dir_all(dir).map_err(|e| Error::io(dir, e))?;
+        remove_run(dir)?;
         let bed_path = dir.join("bed.f32");
         let bytes: Vec<u8> = bed.elevation.iter().flat_map(|v| v.to_le_bytes()).collect();
         fs::write(&bed_path, bytes).map_err(|e| Error::io(&bed_path, e))?;

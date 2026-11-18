@@ -1388,8 +1388,39 @@ fn progress(coarse: &Stage, fine: Option<&Stage>, duration: f64) -> Progress {
     }
 }
 
+/// Remove what an earlier run left in `out` that a new one might not write over: its hand-off
+/// lines and, from a nested run, the coarse run. Otherwise a run that saves no line, or runs on
+/// one grid, leaves the old run's line for a slice to take and the old coarse run for the spot
+/// sheet's travel times, as if they were its own. Files wavesim did not write are kept; the run's
+/// own files are cleared when it opens them ([`RunWriter::create`]).
+fn clear_previous(out: &std::path::Path) -> Result<(), Error> {
+    let io = |path: &std::path::Path| {
+        let path = path.to_path_buf();
+        move |source| waveio::Error::Io { path, source }
+    };
+    let coarse = out.join("coarse");
+    waveio::remove_run(&coarse)?;
+    // Only goes if nothing else is in it.
+    let _ = std::fs::remove_dir(&coarse);
+    let entries = match std::fs::read_dir(out) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        entries => entries.map_err(io(out))?,
+    };
+    for entry in entries {
+        let path = entry.map_err(io(out))?.path();
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if name.starts_with("handoff_y") && name.ends_with(".json") && path.is_file() {
+            std::fs::remove_file(&path).map_err(io(&path))?;
+        }
+    }
+    Ok(())
+}
+
 /// Run the simulation and write the run directory (and, for a nested run, the coarse run in
-/// its `coarse` subdirectory). `on_progress` is called after every frame of the main run.
+/// its `coarse` subdirectory). `on_progress` is called after every frame of the main run. An
+/// earlier run in the same directory is replaced: its files are removed before the first frame,
+/// so a run that stops part-way leaves no `run.json` rather than the old one, and nothing of the
+/// old run survives to be read as this one's. Other files in the directory are kept.
 pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<Summary, Error> {
     let started = Instant::now();
     let full = Bed::read(&opts.bed)?;
@@ -1475,6 +1506,7 @@ pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<
         None => opts.out.clone(),
     };
     let stats_from = plan.duration - BREAKS_SHOWN * opts.period;
+    clear_previous(&opts.out)?;
     let mut coarse = Stage::new(
         coarse_bed,
         solver,

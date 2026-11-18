@@ -142,6 +142,30 @@ fn run_round_trips_frames_and_times() {
 }
 
 #[test]
+fn a_run_written_over_an_old_one_has_no_header_until_it_finishes() {
+    let dir = scratch("rewrite");
+    let bed = sample_bed(3, 2);
+    let mut w = RunWriter::create(&dir, &bed, &["eta"], serde_json::json!({})).unwrap();
+    w.write_frame(0.0, &[&[0.0; 6]]).unwrap();
+    w.write_stats(&["eta_max"], &[&[1.0; 6]], 0.0, 1.0).unwrap();
+    w.finish().unwrap();
+    fs::write(dir.join("notes.txt"), "mine").unwrap();
+
+    // A second run into the same directory, stopped before it finishes: the old header must
+    // not describe its frames, and the old statistics must not pass for its own.
+    let mut w = RunWriter::create(&dir, &bed, &["eta"], serde_json::json!({})).unwrap();
+    w.write_frame(0.0, &[&[2.0; 6]]).unwrap();
+    drop(w);
+    assert!(!dir.join("run.json").exists(), "the old header survived");
+    assert!(
+        !dir.join("stats.f32").exists(),
+        "the old statistics survived"
+    );
+    assert!(Run::read(&dir).is_err());
+    assert_eq!(fs::read_to_string(dir.join("notes.txt")).unwrap(), "mine");
+}
+
+#[test]
 fn a_frame_of_the_wrong_size_is_rejected() {
     let dir = scratch("badframe");
     let bed = sample_bed(6, 4);

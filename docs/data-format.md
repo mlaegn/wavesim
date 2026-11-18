@@ -73,6 +73,8 @@ Runs with `wave_height` also record in `waves`: `break_line`, one entry per row,
 
 **Nested runs.** `wavesim run` writes the reef, on the bed's own cells, as the run in the output directory, and the coarse run that carried the swell across the shelf, with the wave-maker, as a run of its own in `coarse/` inside it. The reef's run has no wave-maker; its `waves` record `nested_in` (`"coarse"`), `coarse_cell_m`, `fine_start_s` (its first frame is then, not at 0), `edge_depth_m` (the depth where the reef grid begins), `zone_offshore_cells` (the relaxation zone along its offshore edge, which is the coarse run, not this one; `near_field_end_m` is its end, and `sponge_offshore_cells` its width, so a viewer starts past it and marks it as a model zone) and `coarse_breaking_in_zone` (the largest fraction of the time the coarse run spent breaking under that zone, in the middle half of the width, which should be 0). A reader must not assume `times` starts at 0.
 
+**Writing over a run.** A run into a directory that already holds one replaces it: before its first frame it removes the old run's `run.json`, `bed.f32`, `frames.f32` and `stats.f32`, its `handoff_y*.json` lines, and those four files in `coarse/` (and `coarse/` itself if nothing else is in it), so nothing of the old run is read as the new one's. Other files in the directory are kept. `run.json` is written last, so a run that stopped part-way, crashed or killed, has frames but no header, and cannot be read; one stopped by `--max-minutes` finishes normally and says so (`truncated`).
+
 ## Reading a run
 
 Python:

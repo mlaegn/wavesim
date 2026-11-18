@@ -12,5 +12,5 @@ mod slice;
 
 pub use bed::{BED_FORMAT, Bed, BedHeader, Frame};
 pub use error::Error;
-pub use run::{RUN_FORMAT, Run, RunHeader, RunWriter, Stats};
+pub use run::{RUN_FORMAT, Run, RunHeader, RunWriter, Stats, remove_run};
 pub use slice::{Curl, Landing, SLICE_FORMAT, Slice, SliceHeader, SliceWriter};
