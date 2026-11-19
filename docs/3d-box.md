@@ -385,16 +385,14 @@ strip, 6–8 h on 32 m.
 
 **A trap, not a crash.** The 20° run died at 14.25 s with SIGFPE (exit 136), with nothing in
 its log. Basilisk traps division by zero and invalid operations. With the trap off, no NaN ever
-reached a field, and the water held to 0.35%. So `v1-peel.c` switches the trap off and checks the
+reached a field. So `v1-peel.c` switches the trap off and checks the
 fields itself after every step. (`qcc -catch`, Basilisk's way to find a trap, does not compile
 in this version.) The 20° run stopped at 17.05 s at its 40 min limit; it was not run to the end,
 since the answer was already clear. `run.sh` now reports a case that exits with an error as
 status 4, where before it reported 0.
 
-**A flaw to fix before more runs:** the control gains 1.5% of its water over the 6 s, although
-the tank is closed, where V0 held its water to 0.03%. Offshore, the back of the wave reflects
-off the new wall at 129 m, but that does not explain a gain. It did not touch the break, which
-matches 2D, but it is unexplained.
+**The control seemed to gain 1.5% of its water** over the 6 s, although the tank is closed. It
+did not: the count was wrong (2026-11-18, below the next section).
 
 ### The peel, turned along the whole slope, 2026-11-15: it peels, and the tube is smaller
 
@@ -439,12 +437,18 @@ peel does not make the tube bigger. For Pipeline's question this points away fro
 - **One angle, one slope, one cell size.** 20° on a 1-in-15 plane slope, at 0.25 m, where the 2D
   tube was still changing by 28% per level. A finer run might move straight and peeling tubes
   differently.
-- **The water gain:** this run gains 0.85% of its water, from about 8 s, when the wave reaches
-  the slope. The straight control gains 0.96%, so the gain is in the set-up, not in the turned
-  bed, and it does not stop the control matching 2D. As in the first version's control (above),
-  it is unexplained.
 - **A strip with mirror walls**, 16 m wide: a peak and a valley, not a reef that peels one way
   for a long stretch.
+
+**The water gain was the count, not the water (2026-11-18).** The logs of both versions showed
+the water growing once the wave reached the slope: 1.5% in the first version's control, 0.85%
+and 0.96% in the whole-slope runs. `v1-peel.c` counted it as `f[]*cs[]*dv()`, but Basilisk's
+`dv()` is already the cell's volume times `cm`, and `embed.h` sets `cm` to the fluid fraction
+`cs`. So the bed fraction was counted twice. That count is not conserved: it rises wherever the
+mesh refines along the bed, as it does under the arriving wave. A coarse straight run (0.5 m
+cells, `run.sh 9 3000 --peel 0 full`, to 14.9 s) logged both: `f[]*dv()`, the count `v1.c` and V0
+use, held to 0.013%, as in 2D, while the double count rose by 0.35%. `v1-peel.c` now counts
+`f[]*dv()`. No run was changed by this, only its log.
 
 References for this section:
 

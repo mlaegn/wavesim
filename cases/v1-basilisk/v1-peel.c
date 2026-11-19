@@ -303,7 +303,7 @@ event logfile (t += 0.05; t <= END_TIME - START)
   double vol = 0.;
   long cells = 0;
   foreach (reduction(+:vol) reduction(+:cells)) {
-    vol += f[]*cs[]*dv();
+    vol += f[]*dv(); // dv() is cube(Delta)*cm[], and embed.h makes cm the fluid fraction cs
     cells++;
   }
   FILE * fp = fopen ("log", i == 0 ? "w" : "a");
