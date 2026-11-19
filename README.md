@@ -342,6 +342,7 @@ Choose the order with `Solver::with_order`; the default is `Order::Second`. Add 
 | Cnoidal waves | Height, zero mean and period exact; wavelength within 2% of the reported 3.85 m (3.785 m); the long-wave limit for a small wave |
 | Dispersive solves | Converge every time, in under 20 iterations on average |
 | Thin film at a run-up | A white-box test: changing a 1 mm film's speed from 1 to 1000 m/s changes nothing about its neighbours, and the test fails if the masking is removed |
+| Blow-ups | Water that is no longer a number stops a run at once, with the cell's place, depth and speed, instead of dropping out of the time step (an all-NaN sea used to read as "no water in the domain"); a step averaging a fifth of the still sea's over 1000 steps stops it too, as the thin-film runaway in [docs/dispersion.md](docs/dispersion.md) would have. Checked on made-up states, not on a real blow-up |
 | Masked dispersive operator | Symmetric and positive definite with a patchy mask, masked cells exactly zero |
 | Threads | The threaded and serial builds give byte-identical `frames.f32` on the real Pipeline bed (same SHA-256), so threading cannot change a result |
 | Breaking field | Written for every frame; 0 in still water; a clear reading (above 0.8) occurs only in shallow water on a beach test |

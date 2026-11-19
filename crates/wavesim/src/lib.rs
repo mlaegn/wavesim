@@ -703,6 +703,56 @@ struct Stage {
     eta: Vec<f32>,
     breaking: Vec<f32>,
     stats: Stats,
+    /// Where the grid starts in the bed file's frame, along x, metres.
+    x0: f64,
+    watch: StepWatch,
+}
+
+/// A run's time step averaged over this many steps is checked for a collapse.
+const WATCH_STEPS: u32 = 1000;
+
+/// A run whose time step, averaged over [`WATCH_STEPS`], is this many times shorter than the
+/// still sea's has gone wrong. The step is set by the fastest water, `|u| + c` along each
+/// axis, and in still water by the deepest cell: at Coxos about 20 m/s on the coarse grid.
+/// Surf and swash stay below that, so a fifth of the step means water near 100 m/s, as when a
+/// sponge on land once sped films microns deep up to tens of m/s on Pipeline and cut the step
+/// eightfold; the run then crawls to its time limit and looks merely unfinished.
+const COLLAPSE: f64 = 5.0;
+
+/// Watches the time step for a collapse, [`WATCH_STEPS`] steps at a time.
+struct StepWatch {
+    /// The still sea's step; 0 if it has none (no water), which turns the watch off.
+    reference: f64,
+    steps: u32,
+    seconds: f64,
+}
+
+impl StepWatch {
+    fn new(reference: f64) -> Self {
+        Self {
+            reference: if reference.is_finite() {
+                reference
+            } else {
+                0.0
+            },
+            steps: 0,
+            seconds: 0.0,
+        }
+    }
+
+    /// Count a step of `stable` seconds (the stable step, before it is shortened to land on a
+    /// frame). At the end of each block of steps, `Some(ratio)` if their average was more than
+    /// [`COLLAPSE`] times shorter than the still sea's.
+    fn collapsed(&mut self, stable: f64) -> Option<f64> {
+        self.steps += 1;
+        self.seconds += stable;
+        if self.steps < WATCH_STEPS {
+            return None;
+        }
+        let mean = self.seconds / f64::from(self.steps);
+        (self.steps, self.seconds) = (0, 0.0);
+        (mean * COLLAPSE < self.reference).then(|| self.reference / mean)
+    }
 }
 
 /// What a grid records at every step from `from` on (the last [`BREAKS_SHOWN`] periods), rather
@@ -1046,6 +1096,8 @@ impl Stage {
         let grid = bed.grid();
         let mut state = State::lake_at_rest(&grid, &solver.bed, 0.0);
         state.time = start;
+        let x0 = settings["cropped_offshore_m"].as_f64().unwrap_or(0.0);
+        let watch = StepWatch::new(solver.stable_dt(&state));
         let writer = RunWriter::create(out, &bed, &["eta", "breaking"], settings)?;
         let cells = grid.nx * grid.ny;
         Ok(Self {
@@ -1076,6 +1128,8 @@ impl Stage {
                 waves: Vec::new(),
                 harmonic: FirstHarmonic::new(opts.period, cells),
             },
+            x0,
+            watch,
         })
     }
 
@@ -1188,14 +1242,44 @@ impl Stage {
     }
 
     /// The next step: as long as is stable, ending no later than `until` or the next frame.
-    fn next_dt(&self, until: f64) -> Result<f64, Error> {
+    /// Water that is no longer a number, or moves infinitely fast, or a step that has
+    /// collapsed (see [`COLLAPSE`]), is an [`Error::Unstable`] that says where.
+    fn next_dt(&mut self, until: f64) -> Result<f64, Error> {
         let stable = self.solver.stable_dt(&self.state);
-        if !stable.is_finite() {
+        if stable.is_nan() || stable <= 0.0 {
+            return Err(self.unstable("the water is no longer a number or moves infinitely fast"));
+        }
+        if stable.is_infinite() {
             return Err(setup("no water in the domain at this tide"));
+        }
+        if let Some(ratio) = self.watch.collapsed(stable) {
+            return Err(self.unstable(&format!(
+                "the time step fell to 1/{ratio:.0} of the still sea's over the last \
+                 {WATCH_STEPS} steps"
+            )));
         }
         Ok(stable
             .min(self.next_frame - self.state.time)
             .min(until - self.state.time))
+    }
+
+    /// A blow-up, `why`, at the cell that limits the step now, in the bed file's frame.
+    fn unstable(&self, why: &str) -> Error {
+        let g = self.bed.grid();
+        let at = match self.solver.limiting_cell(&self.state) {
+            Some(c) => format!(
+                "; at x = {:.0} m, y = {:.0} m the water is {:.3} m deep and moving at {:.1} m/s",
+                self.x0 + (c.i as f64 + 0.5) * g.dx,
+                (c.j as f64 + 0.5) * g.dy,
+                c.depth,
+                c.speed
+            ),
+            None => String::new(),
+        };
+        Error::Unstable {
+            time: self.state.time,
+            what: format!("{why}{at}"),
+        }
     }
 
     fn advance(&mut self, dt: f64) {
@@ -1825,4 +1909,76 @@ pub fn update_breaks(dir: &std::path::Path) -> Result<Vec<Option<BreakPoint>>, E
         source,
     })?;
     Ok(points)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_step_a_fifth_of_the_still_seas_or_less_for_a_whole_block_is_a_collapse() {
+        let mut w = StepWatch::new(0.1);
+        // Surf and swash at 70% of the still sea's step: fine, block after block.
+        for _ in 0..3 * WATCH_STEPS {
+            assert_eq!(w.collapsed(0.07), None);
+        }
+        // A tenth of it, the whole block: a collapse, reported at the block's end.
+        for _ in 0..WATCH_STEPS - 1 {
+            assert_eq!(w.collapsed(0.01), None);
+        }
+        let ratio = w.collapsed(0.01).unwrap();
+        assert!((ratio - 10.0).abs() < 1e-9, "{ratio}");
+        // A burst of tiny steps inside an otherwise ordinary block is not.
+        for k in 0..WATCH_STEPS {
+            let dt = if k < 100 { 0.001 } else { 0.1 };
+            assert_eq!(w.collapsed(dt), None);
+        }
+        // With no still sea to compare with, the watch is off.
+        let mut off = StepWatch::new(f64::INFINITY);
+        for _ in 0..WATCH_STEPS {
+            assert_eq!(off.collapsed(1e-9), None);
+        }
+    }
+
+    #[test]
+    fn water_that_is_no_longer_a_number_is_a_blow_up_at_its_cell_not_a_dry_domain() {
+        let dir = std::env::temp_dir().join(format!("wavesim-unit-nan-{}", std::process::id()));
+        let bed = Bed {
+            header: Bed::header_for("flat", 20, 10, 2.0, 2.0),
+            elevation: vec![-3.0; 200],
+        };
+        let opts = RunOptions {
+            bed: dir.join("bed.json"),
+            out: dir.clone(),
+            height: 0.2,
+            period: 8.0,
+            tide: 0.0,
+            duration: None,
+            frame_interval: 5.0,
+            manning: 0.0,
+            dispersive: false,
+            nested: false,
+            threads: 1,
+            background: false,
+            budget_seconds: None,
+            max_wall_seconds: None,
+            handoff: Vec::new(),
+        };
+        let solver = solver_for(&bed, &opts);
+        let settings = serde_json::json!({"cropped_offshore_m": 100.0});
+        let mut stage = Stage::new(bed, solver, &dir, settings, 0.0, 1e9, &opts).unwrap();
+        stage.step(60.0).unwrap();
+
+        let g = stage.bed.grid();
+        stage.state.hu[g.idx(wavecore::GHOST + 7, wavecore::GHOST + 3)] = f64::NAN;
+        let err = stage.step(60.0).unwrap_err();
+        assert!(matches!(err, Error::Unstable { .. }), "{err}");
+        // Cell (7, 3) of a grid that starts 100 m into the bed file, on 2 m cells.
+        assert!(err.to_string().contains("x = 115 m, y = 7 m"), "{err}");
+
+        stage.state.h.fill(f64::NAN);
+        let err = stage.step(60.0).unwrap_err();
+        assert!(matches!(err, Error::Unstable { .. }), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

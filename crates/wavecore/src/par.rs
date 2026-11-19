@@ -96,10 +96,20 @@ where
         .fold(0.0, |a, b| a + b)
 }
 
-/// The largest `f(j)` for `j` in `j0..j1` (`0.0` if all are smaller).
+/// The largest `f(j)` for `j` in `j0..j1` (`0.0` if all are smaller), or NaN if any is NaN.
 pub(crate) fn max_rows<F>(j0: usize, j1: usize, width: usize, f: F) -> f64
 where
     F: Fn(usize) -> f64 + Sync + Send,
 {
-    per_row(j0, j1, width, f).into_iter().fold(0.0, f64::max)
+    per_row(j0, j1, width, f).into_iter().fold(0.0, max_or_nan)
+}
+
+/// The larger of `a` and `b`, or NaN if either is. `f64::max` returns the other one, so a cell
+/// whose water is no longer a number would drop out of a maximum rather than show in it.
+pub(crate) fn max_or_nan(a: f64, b: f64) -> f64 {
+    if a.is_nan() || b.is_nan() {
+        f64::NAN
+    } else {
+        a.max(b)
+    }
 }

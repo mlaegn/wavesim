@@ -60,5 +60,5 @@ pub use dispersion::{Breaking, Dispersion, DispersionStats};
 pub use eddy::EddyViscosity;
 pub use forcing::{LinearWave, Relaxation, Sponge, WaveMaker, linear_wave, manning_factor};
 pub use grid::{GHOST, Grid};
-pub use solver::{G, H_DRY, Order, Solver};
+pub use solver::{G, H_DRY, Limiting, Order, Solver};
 pub use state::State;

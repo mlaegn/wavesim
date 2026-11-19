@@ -100,7 +100,7 @@ A source of strength `Q` per unit length radiates an amplitude `Q / (2 c_g cos Î
 
 ## A failure on the real bed, and the mask that fixed it
 
-The synthetic tests all passed, then the first run on the Pipeline bed blew up at 52 s (88 s on the coarser 6 m grid). The time step had been collapsing for several seconds before, which made the run look merely slow. Stepping the 6 m case and reporting the fastest cell showed a **thin-film runaway** at the edge of the run-up: a 1 to 2 mm film on a bed 0.9 m above sea level, whose speed grew by a factor of about 1.3 every half second until it reached hundreds of kilometres per second.
+The synthetic tests all passed, then the first run on the Pipeline bed blew up at 52 s (88 s on the coarser 6 m grid). The time step had been collapsing for several seconds before, which made the run look merely slow (a run now stops itself when its step averages a fifth of the still sea's over 1000 steps, and names the fastest cell). Stepping the 6 m case and reporting the fastest cell showed a **thin-film runaway** at the edge of the run-up: a 1 to 2 mm film on a bed 0.9 m above sea level, whose speed grew by a factor of about 1.3 every half second until it reached hundreds of kilometres per second.
 
 The dispersive terms were already switched off in water thinner than 5 cm (`c = 0`), but the *linear system was still coupled* across those cells. A film's acceleration is `w = r / h`, which is enormous for `h` of a millimetre; it entered its neighbours' divergence, and the neighbours' dispersive force fed back into the film's equation, again divided by that depth. The system `A w = r` is positive definite and has a bounded solution at every step; the loop was in the time evolution.
 

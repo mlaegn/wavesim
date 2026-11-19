@@ -20,7 +20,7 @@ use crate::dispersion::{
 use crate::eddy::EddyWork;
 use crate::forcing::{Drive, H_FRICTION_MIN, Sponge, WaveMaker, manning_factor, relax_cell};
 use crate::grid::{GHOST, Grid, wrap_ghosts_y};
-use crate::par::{max_rows, rows3};
+use crate::par::{max_or_nan, max_rows, rows3};
 use crate::state::State;
 
 pub const G: f64 = 9.81;
@@ -89,6 +89,14 @@ struct Axis {
 
 pub(crate) fn velocity(h: f64, hm: f64) -> f64 {
     if h > H_DRY { hm / h } else { 0.0 }
+}
+
+/// How fast cell `k` limits the time step: `(|u| + c) / dx + (|v| + c) / dy`.
+fn rate(s: &State, k: usize, dx: f64, dy: f64) -> f64 {
+    let c = (G * s.h[k]).sqrt();
+    let u = velocity(s.h[k], s.hu[k]).abs();
+    let v = velocity(s.h[k], s.hv[k]).abs();
+    (u + c) / dx + (v + c) / dy
 }
 
 fn minmod3(a: f64, b: f64, c: f64) -> f64 {
@@ -237,6 +245,18 @@ struct Rhs {
     hv: Vec<f64>,
 }
 
+/// The cell that limits the time step, from [`Solver::limiting_cell`]. `i` and `j` count
+/// interior cells from 0, along x and y.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Limiting {
+    pub i: usize,
+    pub j: usize,
+    /// Water depth, metres.
+    pub depth: f64,
+    /// Water speed, metres per second.
+    pub speed: f64,
+}
+
 pub struct Solver {
     pub grid: Grid,
     pub bed: Bathymetry,
@@ -380,25 +400,52 @@ impl Solver {
         }
     }
 
-    /// Largest stable time step for the current state. Infinite if nothing can move.
+    /// Largest stable time step for the current state. Infinite if nothing can move, NaN if the
+    /// water in any cell is no longer a number (see [`Solver::limiting_cell`] for which), and
+    /// 0 if any moves infinitely fast.
     pub fn stable_dt(&self, s: &State) -> f64 {
         let g = &self.grid;
         let w = g.width();
+        let (dx, dy) = (g.dx, g.dy);
         let rate = max_rows(GHOST, GHOST + g.ny, w, |j| {
-            let mut rate: f64 = 0.0;
-            for k in j * w + GHOST..j * w + GHOST + g.nx {
-                let c = (G * s.h[k]).sqrt();
-                let u = velocity(s.h[k], s.hu[k]).abs();
-                let v = velocity(s.h[k], s.hv[k]).abs();
-                rate = rate.max((u + c) / g.dx + (v + c) / g.dy);
-            }
-            rate
+            (j * w + GHOST..j * w + GHOST + g.nx)
+                .map(|k| rate(s, k, dx, dy))
+                .fold(0.0, max_or_nan)
         });
-        if rate > 0.0 {
+        if rate.is_nan() {
+            f64::NAN
+        } else if rate > 0.0 {
             self.cfl / rate
         } else {
             f64::INFINITY
         }
+    }
+
+    /// The cell that sets [`Solver::stable_dt`]: the first whose water is not a number, if any,
+    /// otherwise the one that limits the step most. `None` if nothing can move. For saying where
+    /// a run went wrong; it is serial and not meant for every step.
+    pub fn limiting_cell(&self, s: &State) -> Option<Limiting> {
+        let g = &self.grid;
+        let mut worst: Option<(f64, usize, usize)> = None;
+        for (i, j) in g.interior() {
+            let r = rate(s, g.idx(i, j), g.dx, g.dy);
+            if r.is_nan() {
+                worst = Some((r, i, j));
+                break;
+            }
+            if r > worst.map_or(0.0, |w| w.0) {
+                worst = Some((r, i, j));
+            }
+        }
+        let (_, i, j) = worst?;
+        let k = g.idx(i, j);
+        let (u, v) = (velocity(s.h[k], s.hu[k]), velocity(s.h[k], s.hv[k]));
+        Some(Limiting {
+            i: i - GHOST,
+            j: j - GHOST,
+            depth: s.h[k],
+            speed: u.hypot(v),
+        })
     }
 
     /// Advance one step of size `dt` with reflective walls, then apply sponge damping

@@ -110,7 +110,8 @@ pub fn approach(
             });
         }
         let dt = solver.stable_dt(&s);
-        if !dt.is_finite() || steps > 1_000_000 {
+        // NaN where the water is no longer a number, 0 where it moves infinitely fast.
+        if !(dt.is_finite() && dt > 0.0) || steps > 1_000_000 {
             return Err(Error::Unstable {
                 time: s.time,
                 what: "the approach".into(),
@@ -246,7 +247,7 @@ pub fn swell(
     let mut steps = 0;
     loop {
         let dt = solver.stable_dt(&s);
-        if !dt.is_finite() || s.time > ready + 4.0 * period {
+        if !(dt.is_finite() && dt > 0.0) || s.time > ready + 4.0 * period {
             return Err(Error::Unstable {
                 time: s.time,
                 what: "the swell approach found no crest to hand over".into(),
