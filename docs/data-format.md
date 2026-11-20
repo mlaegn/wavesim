@@ -15,6 +15,11 @@ Grids are metric and rotated so the interesting direction is `+x`:
 
 Because the swell direction is fixed by the frame, a different swell direction means fetching the bed again with a different `bearing`.
 
+Two approximations, both far below a cell and the swell direction's own uncertainty:
+
+- The bearing is applied in the UTM grid, whose north differs from true north by the meridian convergence: about 0.35° at Pipeline and 0.26° at Coxos.
+- The tools read a raster's longitudes and latitudes as WGS84 (EPSG:4326), and `merge_bed.py` stamps that on what it writes, whatever the source's datum. The USACE lidar for Hawaii is in NAD83(PA11) (its VRT is named `…EPSG-6322`), about a metre from WGS84 there.
+
 ## Bed file (`wavesim-bed`, version 1)
 
 `data/<name>.json` plus `data/<name>.f32`.

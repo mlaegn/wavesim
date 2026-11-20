@@ -1878,6 +1878,15 @@ pub fn update_breaks(dir: &std::path::Path) -> Result<Vec<Option<BreakPoint>>, E
         .iter()
         .map(|b| f32::from_le_bytes(*b))
         .collect();
+    if bed.len() != h.nx * h.ny {
+        return Err(setup(format!(
+            "{}: {} values, the run is {} by {}",
+            path.display(),
+            bed.len(),
+            h.nx,
+            h.ny
+        )));
+    }
     let number = |key: &str| h.waves.get(key).and_then(|v| v.as_f64());
     let tide = number("tide_m").unwrap_or(0.0);
     let period = number("wave_period_s").ok_or_else(|| setup("run.json has no wave period"))?;

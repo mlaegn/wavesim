@@ -50,6 +50,10 @@ So at the scale of a wavelength the reef really is as gentle as the 3 m bed says
 
 For Portugal, the merged [EMODnet DTM 2024](https://emodnet.ec.europa.eu/en/bathymetry) is about 115 m and too coarse for reef or sandbar geometry. Sentinel-2 satellite-derived bathymetry has errors of roughly 1–5 m to about 10 m depth, which is as large as the signal in a surf zone. Instituto Hidrográfico is mapping Portuguese waters at high resolution under SEAMAP 2030, but no open data for the Lisbon–Peniche coast was found. This search was not exhaustive.
 
+### The Coxos merge seam
+
+`tools/merge_bed.py coxos` lays the 2011 coastal LiDAR (about 15 m) over the EMODnet DTM, switching from one to the other pixel by pixel, without blending. Measured on 2026-11-17 over the 1175 underwater pixels along the seam, LiDAR minus DTM: median +0.08 m, so no bias; 5–95% from −1.19 to +1.23 m; 15% step by more than a metre; in 10–20 m of water, 90% within 1.09 m. Much of that is detail the 115 m DTM cannot hold, but the bed does jump along a ragged line in water the swell crosses. Feathering the two over one or two DTM cells would smooth it. That has not been done, since it changes the Coxos bed under every run made on it.
+
 ## Attribution
 
 Please credit NOAA National Centers for Environmental Information when publishing results derived from CUDEM data.

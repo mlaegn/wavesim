@@ -351,6 +351,18 @@ impl Approach {
                 path.display()
             )));
         }
+        // A run saves its line on its own cells: `potential` takes the spacing as even, and the
+        // interpolation takes x as increasing.
+        let dx = f.x[1] - f.x[0];
+        let even =
+            f.x.windows(2)
+                .all(|w| ((w[1] - w[0]) - dx).abs() <= 1e-6 * dx);
+        if !(dx > 0.0 && even) {
+            return Err(Error::Setup(format!(
+                "{}: the line's x must increase in even steps, as a run's cells do",
+                path.display()
+            )));
+        }
         // Older files: the run's own settings, from its header beside the file.
         let run: Option<serde_json::Value> = path
             .parent()
@@ -490,6 +502,32 @@ fn interpolate(at: &[f64], values: &[f64], x: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_saved_line_that_is_not_on_even_increasing_cells_or_has_gaps_is_refused() {
+        let dir = std::env::temp_dir().join(format!("wavesim-handoff-bad-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let read = |x: &[f64], eta: &[f64]| {
+            let doc = serde_json::json!({
+                "format": "wavesim-handoff", "depth": 5.0, "time": 300.0, "crest": 2.0,
+                "x": x, "eta": eta, "ubar": vec![0.0; x.len()], "tide_m": 0.0,
+            });
+            let path = dir.join("handoff.json");
+            std::fs::write(&path, doc.to_string()).unwrap();
+            Approach::read(&path).map(|_| ()).map_err(|e| e.to_string())
+        };
+        assert_eq!(read(&[0.0, 2.0, 4.0], &[0.0; 3]), Ok(()));
+        let uneven = read(&[0.0, 2.0, 5.0], &[0.0; 3]).unwrap_err();
+        assert!(uneven.contains("even steps"), "{uneven}");
+        let backwards = read(&[4.0, 2.0, 0.0], &[0.0; 3]).unwrap_err();
+        assert!(backwards.contains("even steps"), "{backwards}");
+        let single = read(&[0.0], &[0.0]).unwrap_err();
+        assert!(single.contains("not a wavesim-handoff"), "{single}");
+        // JSON has no NaN: a writer puts null, which is refused as it is read.
+        let nan = read(&[0.0, 2.0, 4.0], &[0.0, f64::NAN, 0.0]).unwrap_err();
+        assert!(nan.contains("not a wavesim-handoff"), "{nan}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn interpolation_is_straight_and_holds_past_the_ends() {
