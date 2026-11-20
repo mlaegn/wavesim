@@ -16,7 +16,8 @@
 # <angle> full, which needs nothing). Every 30 s a watchdog reads macOS's
 # thermal state and stops the run at anything above nominal, or once the limit has passed;
 # caffeinate keeps the Mac awake only while this script runs. Exit status: 0 finished,
-# 2 stopped by heat, 3 by time, 4 the case failed (its exit code is in <case>/exit).set -euo pipefail
+# 2 stopped by heat, 3 by time, 4 the case failed (its exit code is in <case>/exit).
+set -euo pipefail
 
 level=${1:?refinement level}
 limit=${2:?wall-clock limit in seconds}
@@ -48,11 +49,16 @@ if [ ! -x "$thermal" ]; then
     mkdir -p "$(dirname "$thermal")"
     swiftc -O "$root/cases/v1-steep/thermal.swift" -o "$thermal"
 fi
+# Whether the case's container is running. Not `docker ps ... | grep -q .`: under pipefail, grep
+# leaving early can fail the pipe while the container runs, which would end the watchdog and leave
+# the case running with nothing watching the heat.
+running() { [ -n "$(docker ps -q --filter "name=^${name}$")" ]; }
+
 docker info >/dev/null 2>&1 || {
     open -a OrbStack
     for _ in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
 }
-if docker ps -q --filter "name=^${name}$" | grep -q .; then
+if running; then
     echo "a container named $name is already running" >&2
     exit 1
 fi
@@ -73,18 +79,20 @@ log="$case_dir/watchdog.log"
 start=$(date +%s)
 echo "$(date '+%F %T') started $name, limit ${limit}s" | tee -a "$log"
 status=0
-while docker ps -q --filter "name=^${name}$" | grep -q .; do
+# `|| true` on docker stop: the case may finish between the check and the stop, and that must
+# not end the script before its summary line.
+while running; do
     state=$("$thermal" 2>/dev/null || echo unreadable)
     elapsed=$(( $(date +%s) - start ))
     sim=$( (tail -1 "$case_dir/log" 2>/dev/null || true) | cut -d' ' -f2)
     echo "$(date '+%F %T') ${elapsed}s thermal=$state sim_time=${sim:-0}" >> "$log"
     if [ "$state" != nominal ]; then
         echo "$(date '+%F %T') thermal state $state: stopping" | tee -a "$log"
-        docker stop -t 5 "$name" >/dev/null; status=2; break
+        docker stop -t 5 "$name" >/dev/null || true; status=2; break
     fi
     if [ "$elapsed" -gt "$limit" ]; then
         echo "$(date '+%F %T') over ${limit}s: stopping" | tee -a "$log"
-        docker stop -t 5 "$name" >/dev/null; status=3; break
+        docker stop -t 5 "$name" >/dev/null || true; status=3; break
     fi
     sleep 30
 done
