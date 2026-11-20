@@ -6,8 +6,13 @@
 # with "slow" ticked, or `gh workflow run ci.yml -f slow=true --ref <branch>`.
 #
 # The Rust jobs run on macOS on Apple silicon, the laptop's platform, so a result checked here
-# is the result a run there gives.
+# is the result a run there gives. They use the laptop's Rust too, RUST below: each new stable
+# brings new clippy lints, which would turn CI red for code the laptop passes. Raise it together
+# with `rustup update` on the laptop.
 name: CI
+
+env:
+  RUST: "1.98.1"
 
 on:
   push:
@@ -32,8 +37,9 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST }}
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
@@ -76,6 +82,8 @@ jobs:
       RUST_TEST_THREADS: 1
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST }}
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --release --workspace -- --include-ignored

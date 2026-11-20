@@ -738,8 +738,8 @@ mod tests {
         // symmetric and positive definite, and a masked cell must stay exactly zero.
         let (grid, mut work, mut rng) = setup(false);
         crate::grid::mirror_ghosts(&grid, &mut work.c);
-        for k in 0..grid.cells() {
-            work.mask[k] = if rng.next() > -0.3 { 1.0 } else { 0.0 };
+        for m in work.mask.iter_mut().take(grid.cells()) {
+            *m = if rng.next() > -0.3 { 1.0 } else { 0.0 };
         }
         crate::grid::mirror_ghosts(&grid, &mut work.mask);
         let masked = |grid: &Grid, mask: &[f64], mut v: (Vec<f64>, Vec<f64>)| {
