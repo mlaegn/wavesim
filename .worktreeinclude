@@ -1,0 +1,4 @@
+# Gitignored files copied into every new worktree (Claude Code reads this file).
+# The fetched bathymetry: spots.toml reads data/... paths, so the solver needs it (~190 MB).
+# Never out/ (solver output, tens of GB) or target/ (shared through CARGO_TARGET_DIR).
+data/
