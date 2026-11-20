@@ -191,6 +191,23 @@ fn a_run_written_over_an_old_one_has_no_header_until_it_finishes() {
 }
 
 #[test]
+fn a_header_is_read_without_the_frames() {
+    let dir = scratch("header");
+    let bed = sample_bed(6, 4);
+    let mut w =
+        RunWriter::create(&dir, &bed, &["eta"], serde_json::json!({"period": 12.0})).unwrap();
+    w.write_frame(0.0, &[&[0.0; 24]]).unwrap();
+    w.finish().unwrap();
+    fs::remove_file(dir.join("frames.f32")).unwrap();
+    let header = waveio::RunHeader::read(&dir).unwrap();
+    assert_eq!(
+        (header.frame_count, header.waves["period"].as_f64()),
+        (1, Some(12.0))
+    );
+    assert!(Run::read(&dir).is_err(), "the whole run needs its frames");
+}
+
+#[test]
 fn a_frame_of_the_wrong_size_is_rejected() {
     let dir = scratch("badframe");
     let bed = sample_bed(6, 4);

@@ -491,7 +491,8 @@ fn slice(opts: &SliceOptions) -> Result<(), Error> {
 /// margin, see `side_margin_cells`).
 fn breaks(dir: &std::path::Path, stretch: f64) -> Result<(), Error> {
     let points = wavesim::update_breaks(dir)?;
-    let header = waveio::Run::read(dir)?.header;
+    // The header alone: update_breaks has just read the frames, and they can be 560 MB.
+    let header = waveio::RunHeader::read(dir)?;
     let (ny, dy) = (header.ny, header.dy);
     let margin = header
         .waves
