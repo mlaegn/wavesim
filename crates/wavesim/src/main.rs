@@ -236,7 +236,7 @@ fn real_main() -> Result<(), Error> {
             handoff_depth,
             out,
         } => {
-            lower_priority(priority);
+            let background = lower_priority(priority);
             let threads = use_threads(threads);
             let name = bed
                 .file_stem()
@@ -254,7 +254,7 @@ fn real_main() -> Result<(), Error> {
                 dispersive,
                 nested: !single,
                 threads,
-                background: cfg!(target_os = "macos") && priority == Priority::Background,
+                background,
                 budget_seconds: (max_minutes > 0.0).then_some(max_minutes * 60.0),
                 max_wall_seconds: (max_minutes > 0.0).then_some(max_minutes * 60.0),
                 handoff: handoff_y
@@ -395,20 +395,46 @@ fn use_threads(requested: usize) -> usize {
     }
 }
 
+/// macOS's `taskpolicy`, by its full path: a launcher whose `PATH` lacks `/usr/sbin` (cron,
+/// some IDE task runners) would otherwise not find it.
+#[cfg(target_os = "macos")]
+const TASKPOLICY: &str = "/usr/sbin/taskpolicy";
+
 /// On macOS, move this process to the background class, which the scheduler keeps on the
-/// efficiency cores. Best effort: if `taskpolicy` is missing or refuses, the run goes on at
-/// normal priority.
-fn lower_priority(priority: Priority) {
+/// efficiency cores. Returns whether it is there now. If `taskpolicy` is missing or refuses,
+/// says so: the run goes on at normal priority, where it may use the performance cores, and
+/// its time estimate should be for those.
+fn lower_priority(priority: Priority) -> bool {
     #[cfg(target_os = "macos")]
     if priority == Priority::Background {
-        let _ = std::process::Command::new("taskpolicy")
+        let status = std::process::Command::new(TASKPOLICY)
             .args(["-b", "-p", &std::process::id().to_string()])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status();
+        return match moved(status) {
+            Ok(()) => true,
+            Err(why) => {
+                eprintln!(
+                    "warning: could not move to the efficiency cores ({TASKPOLICY} {why}); \
+                     running at normal priority, which may use the performance cores"
+                );
+                false
+            }
+        };
     }
-    #[cfg(not(target_os = "macos"))]
     let _ = priority;
+    false
+}
+
+/// Whether `taskpolicy` did its job, or why not.
+#[cfg(target_os = "macos")]
+fn moved(status: std::io::Result<std::process::ExitStatus>) -> Result<(), String> {
+    match status {
+        Ok(s) if s.success() => Ok(()),
+        Ok(s) => Err(format!("failed: {s}")),
+        Err(e) => Err(format!("could not start: {e}")),
+    }
 }
 
 fn slice(opts: &SliceOptions) -> Result<(), Error> {
@@ -544,4 +570,26 @@ fn info(path: &std::path::Path) -> Result<(), Error> {
         println!("source: {name}");
     }
     Ok(())
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::ExitStatus;
+
+    use super::*;
+
+    #[test]
+    fn taskpolicy_is_where_the_run_looks_for_it() {
+        assert!(std::path::Path::new(TASKPOLICY).exists());
+    }
+
+    #[test]
+    fn a_taskpolicy_that_fails_or_is_missing_is_reported() {
+        assert_eq!(moved(Ok(ExitStatus::from_raw(0))), Ok(()));
+        let failed = moved(Ok(ExitStatus::from_raw(1 << 8))).unwrap_err();
+        assert!(failed.contains("failed"), "{failed}");
+        let missing = moved(Err(std::io::Error::from(std::io::ErrorKind::NotFound))).unwrap_err();
+        assert!(missing.contains("could not start"), "{missing}");
+    }
 }
