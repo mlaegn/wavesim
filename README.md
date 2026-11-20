@@ -196,7 +196,7 @@ uv run --python 3.12 --with numpy --with scipy --with pyproj --with contourpy to
 **Running it on a laptop.**
 
 - A 2.5 m, 14 s swell at Pipeline crosses the shelf on 319 × 200 cells of 6 m and runs the reef on 179 × 400 cells of 3 m, for 328 simulated seconds (so that the surf zone settles before the four waves recorded): **11.7 minutes on three threads on the efficiency cores**, cool and quiet, about 9 on four, within the default limit of 12 minutes. With `--priority normal` it takes about a third as long, on the performance cores, and heats the laptop.
-- The solver uses **4 threads** by default, not every core. Raise it with `--threads`; `--threads 0` uses all. The results are byte-identical for any number.
+- The solver uses **4 threads** by default, not every core. Raise it with `--threads`, up to half the machine's cores (`--threads 0` asks for that half); `WAVESIM_ALL_CORES=1` lifts the ceiling. The results are byte-identical for any number.
 - For a quick look, fetch a coarser bed with `tools/fetch_spot.py pipeline --cell 6` and run it with `--single`: 6 m cells get the refraction over the shelf right but are too coarse for the break itself.
 
 ## View a run
@@ -389,10 +389,13 @@ wavesim/
 ├── LICENSE
 ├── README.md
 ├── spots.toml                  # real-world spots the fetch tool can crop
-├── docs/
-│   ├── bathymetry.md           # real-world bed data notes
-│   ├── dispersion.md           # the dispersive model, what was tried, limits
-│   └── data-format.md          # bed and run file formats
+├── .github/workflows/ci.yml    # checks on GitHub: fast ones per push and PR, slow ones weekly
+├── docs/                       # the eight docs in the Documentation Map above
+├── scripts/
+│   └── slow-tests.sh           # every test, the slow physics checks too, on the efficiency cores
+├── cases/                      # the same breaking wave in other codes, one core in Docker each
+│   ├── v1-steep/               # OpenFOAM: case set-up, measurement, run.sh with a thermal watchdog
+│   └── v1-basilisk/            # Basilisk: 2D, 3D strip and peel cases, figures, run.sh likewise
 ├── img/
 │   └── header-banner.png
 ├── viewer/                     # browser replay: Vite, TypeScript, Three.js
@@ -421,12 +424,13 @@ wavesim/
 │   ├── sheet_preview.html      # the sheet's preview map (Leaflet on satellite imagery)
 │   └── tests/test_{fetch_spot,merge_bed,fetch_line,direction,spot_sheet}.py
 └── crates/
-    ├── wavecore/               # pure numerics, no dependencies
+    ├── wavecore/               # pure numerics; its only dependency, rayon, is optional
     │   ├── src/
     │   │   ├── lib.rs
     │   │   ├── grid.rs         # padded Cartesian grid, metres, three ghost layers
     │   │   ├── bathymetry.rs   # flat, plane beach, rough bed, from raw values
     │   │   ├── dispersion.rs   # SGN correction: operator, conjugate gradients, smoothness switch
+    │   │   ├── eddy.rs         # breaking fronts and their eddy viscosity (Kennedy et al.), opt-in
     │   │   ├── forcing.rs      # wave-maker, sponge layers, relaxation zones, Manning friction
     │   │   ├── par.rs          # row loops, threaded on big grids with the `parallel` feature
     │   │   ├── state.rs        # h, hu, hv, time, boundaries, diagnostics
@@ -436,7 +440,9 @@ wavesim/
     │       ├── common/mod.rs     # harmonic analysis shared by the wave tests
     │       ├── stoker.rs         # dam breaks against exact solutions
     │       ├── waves.rs          # wave-maker, shoaling, refraction, friction, runup
-    │       └── dispersion.rs     # dispersion relation, solitary wave, deep swell, beach breaking
+    │       ├── dispersion.rs     # dispersion relation, solitary wave, deep swell, beach breaking
+    │       ├── lab.rs            # breaking against Ting & Kirby's laboratory beach (data/)
+    │       └── time_step.rs      # the time step, and the cell that sets it when water goes wrong
     ├── waveio/                 # all file I/O: bed files, run and slice directories
     │   ├── src/{lib,bed,run,slice,error}.rs
     │   └── tests/{formats,golden}.rs
