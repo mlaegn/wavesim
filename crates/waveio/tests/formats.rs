@@ -5,11 +5,36 @@ use std::path::PathBuf;
 
 use waveio::{Bed, Error, Landing, Run, RunWriter, SLICE_FORMAT, Slice, SliceWriter};
 
-fn scratch(name: &str) -> PathBuf {
+/// A test's own directory in the system's temp folder, removed when the test passes. A failed
+/// test leaves it, to look at.
+struct Scratch(PathBuf);
+
+impl std::ops::Deref for Scratch {
+    type Target = std::path::Path;
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl AsRef<std::path::Path> for Scratch {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        if !std::thread::panicking() {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+}
+
+fn scratch(name: &str) -> Scratch {
     let dir = std::env::temp_dir().join(format!("waveio-test-{name}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
-    dir
+    Scratch(dir)
 }
 
 fn sample_bed(nx: usize, ny: usize) -> Bed {

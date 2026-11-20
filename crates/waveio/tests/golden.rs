@@ -99,4 +99,6 @@ fn the_run_the_viewer_tests_read_is_what_the_writer_produces() {
              regenerate with UPDATE_GOLDEN=1 cargo test -p waveio --test golden"
         );
     }
+    // Only once every file matched: a failure leaves the scratch copy to compare.
+    let _ = fs::remove_dir_all(&scratch);
 }
