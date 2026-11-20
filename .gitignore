@@ -27,3 +27,7 @@ __pycache__/
 # Viewer
 node_modules/
 /viewer/dist
+
+# Claude Code: one checkout per parallel session, and per-machine settings
+.claude/worktrees/
+.claude/settings.local.json
