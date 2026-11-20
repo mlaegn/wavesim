@@ -1028,3 +1028,15 @@ fn a_run_into_an_old_run_directory_keeps_nothing_of_the_old_run_but_the_files_it
         "mine"
     );
 }
+
+#[test]
+fn a_run_whose_bed_file_is_cut_short_gets_an_error_from_breaks_not_a_panic() {
+    let dir = scratch("shortbed");
+    let opts = options(&dir, beach(&dir));
+    run(&opts, |_| {}).unwrap();
+    let bed = opts.out.join("bed.f32");
+    let bytes = fs::read(&bed).unwrap();
+    fs::write(&bed, &bytes[..bytes.len() - 4 * 7]).unwrap();
+    let err = wavesim::update_breaks(&opts.out).unwrap_err().to_string();
+    assert!(err.contains("bed.f32") && err.contains("values"), "{err}");
+}
