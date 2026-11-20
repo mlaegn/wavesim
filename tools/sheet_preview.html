@@ -66,6 +66,18 @@ const esri = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/W
 });
 L.control.layers({ "DGT 2023 (Portugal)": dgt, "Esri satellite": esri }, null, { position: "topright" }).addTo(map);
 let layer = L.layerGroup().addTo(map);
+// Fit to what is drawn once the map's box has a size: a fit before that (a fresh page, a
+// hidden pane) lands at zoom 0 and stays there. Until then, a view near the first point, since
+// layers added to a map without one never draw.
+let home = null, fitted = false;
+const first = SHEET.swells[0].rows[0].tides[Object.keys(SHEET.swells[0].rows[0].tides)[0]].breaks[0];
+map.setView(first ? [first[1], first[0]] : [0, 0], 15);
+function fitHome() {
+  if (fitted || !home || !home.isValid() || map.getSize().x === 0) return;
+  map.fitBounds(home);
+  fitted = true;
+}
+new ResizeObserver(() => { map.invalidateSize(); fitHome(); }).observe(document.getElementById("map"));
 let swellIdx = 0;
 let dirIdx = SHEET.swells[0].rows.findIndex(r => r.from_deg === 320); if (dirIdx < 0) dirIdx = 0;
 let tide = "mid";
@@ -123,10 +135,8 @@ function draw(fit) {
       .bindTooltip(`takeoff at this swell: breaks ${p.stands_out_s} s before the reef either side, in ${p.depth_m} m of water`).addTo(layer);
   });
   if (fit) {
-    // Leaflet needs the map's size first; on a fresh page it may not have it yet.
-    const bounds = L.featureGroup(layer.getLayers()).getBounds().pad(0.15);
-    map.fitBounds(bounds);
-    window.addEventListener("load", () => { map.invalidateSize(); map.fitBounds(bounds); });
+    home = L.featureGroup(layer.getLayers()).getBounds().pad(0.15);
+    fitHome();
   }
 
   const n = t.near_takeoff, f = document.getElementById("facts");
