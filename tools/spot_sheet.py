@@ -280,23 +280,33 @@ def read_run(run: dict, trust_y: tuple[float, float], area=None, loop_png: Path 
 
 def mark_strays(rows: list) -> None:
     """Sets each row's "stray": its break point lies more than STRAY_M off the median of its
-    neighbours, or the wave there is under STRAY_HD of the depth; and "x_median", that median."""
+    neighbours, or the wave there is under STRAY_HD of the depth; "x_median", that median; and
+    for a stray row "x_kept", the median of the break points of the rows within STRAY_ROWS that
+    are not stray, or None when there are none (a long run of stray rows, where the swell never
+    peaks inshore: at Ribeira the tallest wave on 60 rows was at the wave-maker)."""
     xs = median_filter(np.array([r["x"] for r in rows]), size=2 * STRAY_ROWS + 1, mode="nearest")
     for r, m in zip(rows, xs):
         r["stray"] = bool(abs(r["x"] - m) > STRAY_M or r["height"] < STRAY_HD * r["depth"])
         r["x_median"] = float(m)
+    for k, r in enumerate(rows):
+        if r["stray"]:
+            near = [q["x"] for q in rows[max(0, k - STRAY_ROWS) : k + STRAY_ROWS + 1] if not q["stray"]]
+            r["x_kept"] = float(np.median(near)) if near else None
 
 
 def zone_mask(run: dict, rows: list) -> np.ndarray:
     """1 where the waves break and the broken water runs in, 0 elsewhere: in each row of `rows`,
     from its break point to the shoreline at the run's tide (the first cell from there whose bed is
-    at or above it). A stray row starts at the median of its neighbours' break points instead."""
+    at or above it). A stray row starts where the rows near it that are not stray break, and has
+    no zone when none of them are."""
     h = run["header"]
     nx, dx, tide = h["nx"], h["dx"], h["waves"]["tide_m"]
     bed = run["bed"]
     mask = np.zeros(bed.shape)
     for r in rows:
-        x = r["x_median"] if r["stray"] else r["x"]
+        x = r["x_kept"] if r["stray"] else r["x"]
+        if x is None:
+            continue
         i = min(max(int(round(x / dx - 0.5)), 0), nx - 1)
         dry = np.nonzero(bed[r["j"], i:] >= tide)[0]
         shore = i + int(dry[0]) if dry.size else nx

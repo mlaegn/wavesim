@@ -73,7 +73,7 @@ def test_the_zone_runs_from_each_break_point_to_the_shore():
     spot_sheet.mark_strays(rows)
     zone = spot_sheet.zone_mask(run, rows)
     for r in rows:
-        start = int(round((r["x_median"] if r["stray"] else r["x"]) / dx - 0.5))
+        start = int(round((r["x_kept"] if r["stray"] else r["x"]) / dx - 0.5))
         expect = np.zeros(nx)
         expect[start:shore] = 1.0
         assert np.array_equal(zone[r["j"]], expect), r["j"]
@@ -81,6 +81,25 @@ def test_the_zone_runs_from_each_break_point_to_the_shore():
     assert not zone[20].any()
     # Never on land, never seaward of a break point.
     assert not zone[:, shore:].any()
+
+
+def test_a_long_run_of_stray_rows_does_not_drag_the_zone_out_to_sea():
+    # 60 rows breaking at x = 120 m, but rows 20-49 have their tallest wave far out in deep water
+    # (the swell never peaks inshore there). Their neighbours' plain median is stray too, so the
+    # zone must not start from it: the run's edges start with the kept rows, its middle has none.
+    nx, ny, dx = 100, 60, 3.0
+    x = (np.arange(nx) + 0.5) * dx
+    bed = np.tile(-6.0 + x / 30.0, (ny, 1))
+    run = {"header": {"nx": nx, "dx": dx, "waves": {"tide_m": 0.0}}, "bed": bed}
+    rows = [{"j": j, "x": 120.0, "height": 2.0, "depth": 3.0} for j in range(ny)]
+    for j in range(20, 50):
+        rows[j].update(x=15.0, height=3.5, depth=20.0)
+    spot_sheet.mark_strays(rows)
+    zone = spot_sheet.zone_mask(run, rows)
+    assert all(rows[j]["stray"] for j in range(20, 50))
+    assert not zone[:, : int(120.0 / dx) - 1].any()  # nothing seaward of the kept break points
+    assert zone[20:30, 40].all() and zone[40:50, 40].all()  # within STRAY_ROWS of a kept row
+    assert not zone[31:39].any()  # no kept row within reach: no zone
 
 
 def test_the_tide_shift_compares_positions_on_the_bed_not_in_each_run():
