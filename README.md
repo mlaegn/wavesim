@@ -110,10 +110,12 @@ scripts/slow-tests.sh
 
 It runs on the efficiency cores, one test at a time, so the laptop stays cool; it takes longer.
 
+GitHub runs the fast tests, the tools' and the viewer's on every push to `main` and every pull request (`.github/workflows/ci.yml`), and the slow ones every Monday and on demand: Actions > CI > Run workflow with "slow" ticked, or `gh workflow run ci.yml -f slow=true --ref <branch>`. That keeps the long physics checks off the laptop.
+
 ### Test the tools
 
 ```bash
-uv run --python 3.12 --with pytest --with rasterio --with numpy --with scipy --with pyproj pytest tools
+uv run --python 3.12 --with pytest --with rasterio --with numpy --with scipy --with pyproj --with contourpy pytest tools
 ```
 
 ### Test the viewer
