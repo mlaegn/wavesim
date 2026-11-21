@@ -135,3 +135,23 @@ onshore_m = 500.0
 width_m = 1200.0
 cell_m = 3.0
 clip_above = 6.0
+
+[ribeira.sheet]
+# The run's middle half, as at Coxos before its north edge was checked further out.
+trust_y_m = [300.0, 900.0]
+# Max drew the break's outer edge as a line (data/ribeira/area_drawn.json). The first run on
+# this box breaks first 43 m seaward of it, 76 m from his start, so the area is his line moved
+# 60 m out to sea and closed along the land at 9.4185 W.
+area = [
+  [38.99168, -9.42696], [38.99078, -9.42682], [38.99045, -9.42672], [38.99014, -9.42663],
+  [38.98982, -9.42647], [38.98962, -9.42643], [38.98878, -9.42615], [38.98769, -9.42485],
+  [38.98711, -9.42374], [38.98615, -9.42128], [38.98615, -9.4185], [38.99168, -9.4185],
+]
+
+# One run so far: the moved box's first, at mid tide.
+[[ribeira.sheet.swells]]
+height_m = 2.0
+period_s = 13.0
+rows = [
+  { from = 300, maker = 290, mid = "out/ribeira_2m13s_290_a80" },
+]
