@@ -164,7 +164,7 @@ Send a swell over it:
 cargo run --release -p wavesim -- run data/pipeline.json --height 2.5 --period 14
 ```
 
-That writes `out/pipeline/` (both `data/` and `out/` are git-ignored): the reef on the bed's own cells, and in `out/pipeline/coarse/` the coarse run that carried the swell across the shelf. Options: `--tide` (metres above mean sea level), `--duration`, `--frame-interval`, `--manning`, `--dispersive false` (plain shallow water, for comparison), `--single` (everything on the bed's own cells, on one grid), `--max-minutes`, `--priority`, `--threads`, `--out`.
+That writes `out/pipeline/` (both `data/` and `out/` are git-ignored): the reef on the bed's own cells, and in `out/pipeline/coarse/` the coarse run that carried the swell across the shelf. Options: `--tide` (metres above mean sea level), `--duration`, `--frame-interval`, `--manning`, `--dispersive false` (plain shallow water, for comparison), `--breaking-viscosity` (experimental: broken waves lose height on the way to the shore as the laboratory's do; not yet tried on a reef, see [docs/surf-zone.md](docs/surf-zone.md); recorded in `run.json` as `breaking_viscosity`, and not with `--handoff-y`), `--single` (everything on the bed's own cells, on one grid), `--max-minutes`, `--priority`, `--threads`, `--out`.
 
 **What the run plans for itself.**
 

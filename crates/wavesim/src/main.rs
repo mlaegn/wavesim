@@ -61,6 +61,10 @@ enum Command {
         /// where tall waves steepen into shocks
         #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
         dispersive: bool,
+        /// Follow breaking fronts and give them an eddy viscosity, so broken waves lose height
+        /// on the way to the shore. Experimental: not yet tried on a reef (docs/surf-zone.md)
+        #[arg(long)]
+        breaking_viscosity: bool,
         /// Run everything on the bed's own cells, on one grid, instead of carrying the swell
         /// across the shelf on cells twice as large and running only the reef on the bed's cells
         #[arg(long)]
@@ -228,6 +232,7 @@ fn real_main() -> Result<(), Error> {
             frame_interval,
             manning,
             dispersive,
+            breaking_viscosity,
             single,
             threads,
             max_minutes,
@@ -252,6 +257,7 @@ fn real_main() -> Result<(), Error> {
                 frame_interval,
                 manning,
                 dispersive,
+                breaking_viscosity,
                 nested: !single,
                 threads,
                 background,
