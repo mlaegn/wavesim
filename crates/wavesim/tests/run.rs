@@ -9,11 +9,36 @@ use wavesim::{
     Error, MAX_SECOND_HARMONIC, RunOptions, estimate_seconds, layout, plan, run, second_harmonic,
 };
 
-fn scratch(name: &str) -> PathBuf {
+/// A test's own directory in the system's temp folder, removed when the test passes. A failed
+/// test leaves it, to look at.
+struct Scratch(PathBuf);
+
+impl std::ops::Deref for Scratch {
+    type Target = std::path::Path;
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl AsRef<std::path::Path> for Scratch {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        if !std::thread::panicking() {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+}
+
+fn scratch(name: &str) -> Scratch {
     let dir = std::env::temp_dir().join(format!("wavesim-test-{name}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
-    dir
+    Scratch(dir)
 }
 
 const NX: usize = 400;
@@ -1027,4 +1052,16 @@ fn a_run_into_an_old_run_directory_keeps_nothing_of_the_old_run_but_the_files_it
         fs::read_to_string(coarse.join("notes.txt")).unwrap(),
         "mine"
     );
+}
+
+#[test]
+fn a_run_whose_bed_file_is_cut_short_gets_an_error_from_breaks_not_a_panic() {
+    let dir = scratch("shortbed");
+    let opts = options(&dir, beach(&dir));
+    run(&opts, |_| {}).unwrap();
+    let bed = opts.out.join("bed.f32");
+    let bytes = fs::read(&bed).unwrap();
+    fs::write(&bed, &bytes[..bytes.len() - 4 * 7]).unwrap();
+    let err = wavesim::update_breaks(&opts.out).unwrap_err().to_string();
+    assert!(err.contains("bed.f32") && err.contains("values"), "{err}");
 }

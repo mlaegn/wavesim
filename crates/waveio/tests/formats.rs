@@ -5,11 +5,36 @@ use std::path::PathBuf;
 
 use waveio::{Bed, Error, Landing, Run, RunWriter, SLICE_FORMAT, Slice, SliceWriter};
 
-fn scratch(name: &str) -> PathBuf {
+/// A test's own directory in the system's temp folder, removed when the test passes. A failed
+/// test leaves it, to look at.
+struct Scratch(PathBuf);
+
+impl std::ops::Deref for Scratch {
+    type Target = std::path::Path;
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl AsRef<std::path::Path> for Scratch {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        if !std::thread::panicking() {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+}
+
+fn scratch(name: &str) -> Scratch {
     let dir = std::env::temp_dir().join(format!("waveio-test-{name}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
-    dir
+    Scratch(dir)
 }
 
 fn sample_bed(nx: usize, ny: usize) -> Bed {
@@ -163,6 +188,23 @@ fn a_run_written_over_an_old_one_has_no_header_until_it_finishes() {
     );
     assert!(Run::read(&dir).is_err());
     assert_eq!(fs::read_to_string(dir.join("notes.txt")).unwrap(), "mine");
+}
+
+#[test]
+fn a_header_is_read_without_the_frames() {
+    let dir = scratch("header");
+    let bed = sample_bed(6, 4);
+    let mut w =
+        RunWriter::create(&dir, &bed, &["eta"], serde_json::json!({"period": 12.0})).unwrap();
+    w.write_frame(0.0, &[&[0.0; 24]]).unwrap();
+    w.finish().unwrap();
+    fs::remove_file(dir.join("frames.f32")).unwrap();
+    let header = waveio::RunHeader::read(&dir).unwrap();
+    assert_eq!(
+        (header.frame_count, header.waves["period"].as_f64()),
+        (1, Some(12.0))
+    );
+    assert!(Run::read(&dir).is_err(), "the whole run needs its frames");
 }
 
 #[test]

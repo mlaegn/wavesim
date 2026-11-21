@@ -223,6 +223,28 @@ struct LineFile {
     z_bed: Vec<f64>,
 }
 
+impl LineFile {
+    /// At least two points, one `z` and one `z_bed` for each, along an increasing `x`: what the
+    /// slice's interpolation assumes, which would otherwise panic or read the wrong points.
+    fn check(&self) -> Result<(), String> {
+        let n = self.x.len();
+        if n < 2 {
+            return Err(format!("{n} points, a line needs at least two"));
+        }
+        if self.z.len() != n || self.z_bed.len() != n {
+            return Err(format!(
+                "{n} x, {} z and {} z_bed: one of each per point",
+                self.z.len(),
+                self.z_bed.len()
+            ));
+        }
+        if !self.x.windows(2).all(|w| w[1] > w[0]) {
+            return Err("x must increase from point to point".into());
+        }
+        Ok(())
+    }
+}
+
 /// The slice solver's tank for one wave of a swell on a real line: the main model brings the
 /// swell in along the whole line (the fine data where it has any, the bed file's where not)
 /// until a crest passes the last point `depth` deep, and that one wave is handed over (see
@@ -243,6 +265,12 @@ fn line_tank(opts: &SliceOptions, path: &std::path::Path, source: Source) -> Res
         .map_err(|e| Error::Setup(format!("{}: {e}", path.display())))?;
     let line: LineFile = serde_json::from_str(&text)
         .map_err(|e| Error::Setup(format!("{}: not a wavesim-line: {e}", path.display())))?;
+    if let Err(why) = line.check() {
+        return Err(Error::Setup(format!(
+            "{}: not a wavesim-line: {why}",
+            path.display()
+        )));
+    }
     // A 2D run's saved wave, first: its surface and bed are relative to still water at the run's
     // tide, so the line, relative to mean sea level, is lowered by that tide to sit under it.
     let saved = match &source {
@@ -519,7 +547,10 @@ pub fn run_slice(opts: &SliceOptions) -> Result<SliceSummary, Error> {
         if let Some((i, j)) = tank.landing() {
             let s = &tank.surface;
             let (x, z) = (0.5 * (s[i].0 + s[j].0), 0.5 * (s[i].1 + s[j].1));
-            let tube = tank.tube().expect("a landed lip closes a tube");
+            // Outside the solver's catch_unwind below, so a panic here would lose the header.
+            let Some(tube) = tank.tube() else {
+                break "failed: the lip landed but closed no tube".to_string();
+            };
             landing = Some(Landing {
                 time: tank.time,
                 x,
@@ -696,6 +727,41 @@ mod tests {
         assert!(e.contains("part broken"), "{e}");
         let e = slice_of_saved_wave("whole", 1.0, None, CURRENT);
         assert!(e.contains("more than its limit"), "{e}");
+    }
+
+    #[test]
+    fn a_line_with_too_few_points_mismatched_fields_or_x_out_of_order_is_refused() {
+        let line = |x: Vec<f64>, z: usize| LineFile {
+            name: "test".into(),
+            z: vec![None; z],
+            z_bed: vec![-1.0; x.len()],
+            x,
+        };
+        assert_eq!(line(vec![0.0, 1.0, 2.0], 3).check(), Ok(()));
+        assert!(
+            line(vec![0.0], 1)
+                .check()
+                .unwrap_err()
+                .contains("at least two")
+        );
+        assert!(
+            line(vec![0.0, 1.0], 3)
+                .check()
+                .unwrap_err()
+                .contains("one of each")
+        );
+        assert!(
+            line(vec![0.0, 2.0, 1.0], 3)
+                .check()
+                .unwrap_err()
+                .contains("increase")
+        );
+        assert!(
+            line(vec![0.0, 0.0], 2)
+                .check()
+                .unwrap_err()
+                .contains("increase")
+        );
     }
 
     #[test]

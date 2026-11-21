@@ -221,7 +221,8 @@ pub struct Run {
     pub stats: Option<Vec<f32>>,
 }
 
-impl Run {
+impl RunHeader {
+    /// A run's `run.json` alone, without its frames, which can be hundreds of megabytes.
     pub fn read(dir: &Path) -> Result<Self, Error> {
         let path = dir.join("run.json");
         let text = fs::read_to_string(&path).map_err(|e| Error::io(&path, e))?;
@@ -232,6 +233,13 @@ impl Run {
         if header.format != RUN_FORMAT || header.version != RUN_VERSION {
             return Err(Error::format(&path, "not a wavesim-run version 1"));
         }
+        Ok(header)
+    }
+}
+
+impl Run {
+    pub fn read(dir: &Path) -> Result<Self, Error> {
+        let header = RunHeader::read(dir)?;
         let frames_path = dir.join(&header.frames);
         let bytes = fs::read(&frames_path).map_err(|e| Error::io(&frames_path, e))?;
         let expected = header.frame_count * header.nx * header.ny * header.fields.len() * 4;

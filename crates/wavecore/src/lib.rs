@@ -1,7 +1,9 @@
 //! `wavecore`: pure-numerics nearshore wave solver.
 //!
-//! No file I/O, no graphics, no GDAL, no threads. That keeps it compilable to WASM
-//! and portable to a GPU. Reading files and writing output belong in other crates.
+//! No file I/O, no graphics, no GDAL, and no threads unless the optional `parallel` feature
+//! (rayon, row by row, with results byte-identical to the serial build) is turned on. That
+//! keeps it compilable to WASM and portable to a GPU. Reading files and writing output belong
+//! in other crates.
 //!
 //! ```
 //! use wavecore::{Bathymetry, Grid, Solver, State};
