@@ -202,8 +202,9 @@ since the tallest point proved unreliable; the same measure for all three cell s
 - **2 m cells do nearly all that 1.5 m cells do.** The surf zone comes down to 0.76 and 0.79,
   the break moves 4 and 6 m, its depth by 4% and 7%, its height by at most 8%: inside the
   bounds for the break, a few hundredths above the 0.75 top of the surf-zone range.
-- **The step is between 3 and 2 m.** That fits the cause: the fronts need about two cells per
-  metre or so of their height to be seen rising fast enough.
+- **The step is between 3 and 2 m,** for breaks in 4 to 5 m of water: cells up to about half
+  the breaking depth work, cells of three quarters of it do not. Where between those the line
+  falls, and whether it scales with depth on other reefs, these two cases cannot say.
 - **The table's tallest point again jumped at 421.5** (54 m out to a reflected bump), while
   breaking starts within 4 m of where it did. The measure above is the one to keep.
 
