@@ -1,6 +1,7 @@
 # The surf zone: broken waves that stay too tall
 
-A plan, written 2026-11-21, not started. It follows the 2026-11-17 audit, which named this the
+A plan, written 2026-11-21. Step 1, the switch, is done (PR 5); steps 2 to 4 are not started.
+It follows the 2026-11-17 audit, which named this the
 model's main accuracy gap once its bugs were fixed.
 
 ## In short
@@ -10,16 +11,19 @@ model's main accuracy gap once its bugs were fixed.
   as the water is deep (`H/h` near 1.0). Regular laboratory waves sit at 0.58 to 0.61 there
   (Ting & Kirby's spilling breaker, which the model reproduces 1.66 times too tall), and
   random waves in the field at 0.5 to 0.68 by the Surfline camera fields.
-- **What it spoils.** Heights shoreward of the break; the breaking zone on the spot sheets,
-  which gogo shows; and how much the tide changes the size there (0.78 to 0.81 on the Coxos
-  runs, against 0.50 to 0.68 in the field). The break point, its depth and its height are not
-  affected.
+- **What it spoils.** Heights shoreward of the break, which the spot sheets show as their height
+  map, and how much the tide changes the size there (0.78 to 0.81 on the Coxos runs, against
+  0.50 to 0.68 in the field). Not the break point, its depth or its height, and so not the
+  takeoffs or the sheets' breaking zone either: since 2026-11-17 that zone runs from each row's
+  break point to the shoreline, whatever the broken wave does in between. (The sheet preview's
+  legend still calls it "breaks on most waves", the name from before; gogo's says "breaking and
+  white water, to the shore".)
 - **A fix exists.** `Breaking::viscosity` follows each breaking front from step to step and
   gives it Kennedy et al.'s (2000) eddy viscosity, the closure FUNWAVE uses (`wavecore::eddy`).
   On Ting & Kirby's beach it brings the inner surf zone to 1.04 times the laboratory's, no
   station off by more than 11%. It is off by default because it breaks the plunging laboratory
-  wave 0.86 m early, against 0.5 m allowed. It has never run on a reef, and `wavesim run` has no
-  switch for it.
+  wave 0.86 m early, against 0.5 m allowed. It has never run on a reef; `wavesim run` has a
+  switch for it since step 1.
 - **The plan.** Add the switch; try it on single cross-shore lines of Pipeline and Coxos, which
   is light work; only if the break points hold there, run Coxos in 2D; then decide whether it
   becomes the default. Each step has bounds written down before its first run, as the lab tests
@@ -28,18 +32,21 @@ model's main accuracy gap once its bugs were fixed.
   the fix fails. If the reefs break early with it too, the fix stays off and the fallbacks below
   apply.
 
-## Step 1: a switch on `wavesim run` (no runs)
+## Step 1: a switch on `wavesim run` (done, PR 5)
 
 - `--breaking-viscosity` on `wavesim run`, off by default, building the solver with
-  `Breaking { viscosity: Some(EddyViscosity::default()), ..Default::default() }`. Only with
-  dispersion: the flag with `--dispersive false` is an error, since plain shallow water has no
-  switch to follow.
-- `run.json` records it (`"breaking_viscosity": true`), so a sheet, a viewer and a hand-off can
-  tell which model made a run. A hand-off from such a run is refused by the slice for now: the
-  slice's swell along a line runs without it, and the two would disagree.
-- Tests: the flag reaches the solver and the header; a short run on the synthetic beach still
-  conserves water; the slow lab tests already cover the physics, and run on GitHub every Monday.
-- Compute: the fast tests on one core, as for any change.
+  `Breaking::viscosity` set to `EddyViscosity::default()`. Refused without dispersion
+  (`--dispersive false`), since plain shallow water has no breaking fronts to follow.
+- `run.json` records `"breaking_viscosity"` (true or false) for both grids, and the `model`
+  label says when it is on, so a sheet or a viewer can tell which model made a run.
+- Refused together with `--handoff-y`, before anything is written: the slice brings its swell in
+  without the viscosity, so a wave handed over from such a run would not match.
+- Tests: the flag reaches the solver, and only when set; a run with it records it and stays
+  finite; both refusals. What it does to breaking waves is the laboratory test's job, in the slow
+  set that runs on GitHub every Monday.
+- Not done: the time estimate a run checks against `--max-minutes` does not count the
+  viscosity's extra sub-steps. Step 3 measures them; until then a run with it may stop at its
+  limit sooner than estimated, marked `truncated`.
 
 ## Step 2: single lines across real reefs (light)
 
@@ -79,16 +86,19 @@ Only if step 2 passes.
   - the inner surf zone's `H/h` falls into the step 2 range;
   - the tide response, by the same per-cell slope as the 2026-11-09 check, falls from 0.78–0.81
     towards 0.5–0.7;
-  - the sheet's breaking zone, drawn both ways on the same map, for Max to look at: he knows
-    where Coxos breaks and where the white water reaches.
+  - the sheet both ways on the same map, for Max to look at: the height map shoreward of the
+    break should come out lower, and the takeoffs and breaking zone should stay where they
+    were. He knows where Coxos breaks and how big the white water is on the inside.
 - **Cost of the extra work in each step,** measured on the first run, since the eddy viscosity
   adds explicit sub-steps.
 
 ## Step 4: decide
 
-- **If it holds:** make it the default for dispersive runs. Then every sheet's runs need doing
-  again: about 28 for Coxos and about 14 for Ribeira, a night per spot on the laptop, or a
-  rented machine if that is too much. gogo's copy of each sheet follows, as for F2.
+- **If it holds:** make it the default for dispersive runs. Sheets made before then keep their
+  takeoffs, zones and break-point numbers, since those are what the bounds hold still; only
+  their height maps and the tide's effect inside the break go stale. Bringing those in line
+  means doing a sheet's runs again: about 28 for Coxos and about 14 for Ribeira, a night per
+  spot on the laptop, or a rented machine. gogo's copy of each sheet follows, as for F2.
 - **If the reefs break early with it:** keep it off, and pick from the fallbacks.
 - **Either way,** the README's limits and the sheets' "how far to trust it" lines say what was
   found.
@@ -107,7 +117,7 @@ Only if step 2 passes.
   close to the first fallback, with no viscosity to tune.
 - **Leave the model, correct the sheet.** Scale the surf-zone heights on the sheets by the
   measured ratio and say so on the sheet. Cheap and honest about it, but it fixes the numbers,
-  not the physics, and not the extent of the white water.
+  not the physics, and a single ratio cannot be right for every reef and tide.
 
 ## Not in this plan
 

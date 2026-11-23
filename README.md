@@ -57,7 +57,7 @@ Design rules:
 | [docs/3d-box.md](docs/3d-box.md) | A scope, parked after V1 and a first 3D strip: a 3D Basilisk box around the break, to see whether the peel makes a bigger tube. A made-up 20° peel says no: its tube is 9% smaller than straight |
 | [docs/spot-sheets.md](docs/spot-sheets.md) | A plan, not built: per-spot sheets of how the wave changes with the swell's angle and the tide, shown on gogo's spot pages |
 | [docs/forecast-tables.md](docs/forecast-tables.md) | A scope, parked: per-spot tables from offshore swell to the wave at the spot, for gogo's score |
-| [docs/surf-zone.md](docs/surf-zone.md) | A plan, not started: broken waves stay too tall on their way to the shore; trying the eddy-viscosity fix on reef lines, then Coxos, before it could become the default |
+| [docs/surf-zone.md](docs/surf-zone.md) | A plan, step 1 (the switch) done: broken waves stay too tall on their way to the shore; trying the eddy-viscosity fix on reef lines, then Coxos, before it could become the default |
 
 ## Architecture
 
