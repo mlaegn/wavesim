@@ -138,6 +138,7 @@ fn options(dir: &std::path::Path, bed: PathBuf) -> RunOptions {
         frame_interval: 5.0,
         manning: 0.0,
         dispersive: false,
+        breaking_viscosity: false,
         nested: false,
         threads: 1,
         background: false,
@@ -349,6 +350,42 @@ fn a_dispersive_run_writes_the_same_kind_of_frames_and_reports_its_solver_work()
     let stats = summary.dispersion.expect("dispersive run reports stats");
     assert!(stats.solves > 0 && stats.unconverged == 0, "{stats:?}");
     assert!(summary.max_rise > 0.0);
+    assert_eq!(out.header.waves["breaking_viscosity"], false);
+}
+
+#[test]
+fn a_run_with_the_breaking_viscosity_says_so_in_its_header() {
+    // That the solver gets the viscosity is checked in lib.rs; what it does to breaking waves,
+    // by the laboratory test (`wavecore/tests/lab.rs`), which runs with it.
+    let dir = scratch("viscosity");
+    let mut opts = options(&dir, beach(&dir));
+    opts.dispersive = true;
+    opts.breaking_viscosity = true;
+    run(&opts, |_| {}).unwrap();
+    let out = Run::read(&opts.out).unwrap();
+    assert_eq!(out.header.waves["breaking_viscosity"], true);
+    assert!(
+        out.header.waves["model"]
+            .as_str()
+            .unwrap()
+            .contains("eddy viscosity")
+    );
+    assert!(out.data.iter().all(|v| v.is_finite()));
+}
+
+#[test]
+fn the_breaking_viscosity_is_refused_without_dispersion_or_with_a_hand_off() {
+    let dir = scratch("viscosity-refused");
+    let mut opts = options(&dir, beach(&dir));
+    opts.breaking_viscosity = true;
+    let err = run(&opts, |_| {}).unwrap_err().to_string();
+    assert!(err.contains("--dispersive false"), "{err}");
+
+    opts.dispersive = true;
+    opts.handoff = vec![wavesim::HandoffLine { y: 7.0, depth: 5.0 }];
+    let err = run(&opts, |_| {}).unwrap_err().to_string();
+    assert!(err.contains("hand a wave over"), "{err}");
+    assert!(!opts.out.exists(), "a refused run wrote output");
 }
 
 #[test]

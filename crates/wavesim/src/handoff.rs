@@ -189,6 +189,8 @@ pub fn swell(
         frame_interval: 1.0,
         manning: 0.0,
         dispersive: true,
+        // The slice's swell comes in without it, as the 2D runs it is checked against did.
+        breaking_viscosity: false,
         nested: false,
         threads: 1,
         background: false,

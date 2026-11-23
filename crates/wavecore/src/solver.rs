@@ -360,6 +360,11 @@ impl Solver {
         );
     }
 
+    /// The dispersion settings, breaking included, or `None` for shallow water.
+    pub fn dispersion(&self) -> Option<&Dispersion> {
+        self.dispersion.as_ref().map(|(d, _)| d)
+    }
+
     /// How hard the dispersive solves have worked so far, or `None` for shallow water.
     pub fn dispersion_stats(&self) -> Option<DispersionStats> {
         self.dispersion

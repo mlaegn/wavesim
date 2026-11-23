@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use wavecore::{
-    Dispersion, DispersionStats, G, GHOST, Order, Relaxation, Solver, Sponge, State,
+    Dispersion, DispersionStats, EddyViscosity, G, GHOST, Order, Relaxation, Solver, Sponge, State,
     THREADED_CELLS, WaveMaker, linear_wave,
 };
 pub use waveio::Bed;
@@ -73,6 +73,11 @@ pub struct RunOptions {
     /// `false` runs plain shallow water with the MC limiter, in which tall waves steepen
     /// into shocks wherever they are.
     pub dispersive: bool,
+    /// Follow breaking fronts and give them an eddy viscosity (`wavecore::Breaking::viscosity`),
+    /// so broken waves lose height on their way to the shore as the laboratory's do. Only with
+    /// `dispersive`. Off by default: it breaks a plunging laboratory wave early, and has not
+    /// been tried on a reef (docs/surf-zone.md).
+    pub breaking_viscosity: bool,
     /// Run the swell's crossing on cells twice as large and only the reef on the bed's own
     /// cells, driven by the coarse run (see [`Fine`]); `false` runs everything on one grid.
     pub nested: bool,
@@ -451,6 +456,18 @@ fn validate(opts: &RunOptions) -> Result<(), Error> {
     }
     if !(opts.manning.is_finite() && opts.manning >= 0.0 && opts.tide.is_finite()) {
         return Err(setup("manning must be >= 0 and tide must be a number"));
+    }
+    if opts.breaking_viscosity && !opts.dispersive {
+        return Err(setup(
+            "the breaking viscosity follows the dispersive model's breaking fronts; plain \
+             shallow water (--dispersive false) has none, its shocks are the breaking",
+        ));
+    }
+    if opts.breaking_viscosity && !opts.handoff.is_empty() {
+        return Err(setup(
+            "a run with the breaking viscosity cannot hand a wave over yet: the slice brings its \
+             swell in without it, and the two would disagree about the wave",
+        ));
     }
     Ok(())
 }
@@ -1374,16 +1391,21 @@ impl Stage {
 fn solver_for(bed: &Bed, opts: &RunOptions) -> Solver {
     let solver = Solver::new(bed.grid(), bed.bathymetry(opts.tide)).with_manning(opts.manning);
     if opts.dispersive {
-        solver
-            .with_order(Order::Fifth)
-            .with_dispersion(Dispersion::default())
+        let mut dispersion = Dispersion::default();
+        if opts.breaking_viscosity {
+            dispersion.breaking.viscosity = Some(EddyViscosity::default());
+        }
+        solver.with_order(Order::Fifth).with_dispersion(dispersion)
     } else {
         solver
     }
 }
 
 fn model(opts: &RunOptions) -> &'static str {
-    if opts.dispersive {
+    if opts.dispersive && opts.breaking_viscosity {
+        "Serre-Green-Naghdi (flat-bed operator), hybrid breaking with followed fronts and \
+         Kennedy et al.'s eddy viscosity, fifth-order upwind-biased scheme"
+    } else if opts.dispersive {
         "Serre-Green-Naghdi (flat-bed operator), hybrid breaking, fifth-order upwind-biased scheme"
     } else {
         "nonlinear shallow water, MC limiter, non-dispersive"
@@ -1584,6 +1606,7 @@ pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<
         "direction": "along +x of the bed frame",
         "model": model(opts),
         "dispersive": opts.dispersive,
+        "breaking_viscosity": opts.breaking_viscosity,
     });
     let coarse_out = match layout.fine {
         Some(_) => opts.out.join("coarse"),
@@ -1631,6 +1654,7 @@ pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<
                 "direction": "along +x of the bed frame",
                 "model": model(opts),
                 "dispersive": opts.dispersive,
+                "breaking_viscosity": opts.breaking_viscosity,
             });
             let solver = solver_for(&bed, opts);
             let stage = Stage::new(bed, solver, &opts.out, settings, f.start, stats_from, opts)?;
@@ -1950,6 +1974,42 @@ mod tests {
     }
 
     #[test]
+    fn the_breaking_viscosity_switch_reaches_the_solver_and_only_then() {
+        let bed = Bed {
+            header: Bed::header_for("flat", 20, 10, 2.0, 2.0),
+            elevation: vec![-3.0; 200],
+        };
+        let mut opts = RunOptions {
+            bed: PathBuf::new(),
+            out: PathBuf::new(),
+            height: 0.2,
+            period: 8.0,
+            tide: 0.0,
+            duration: None,
+            frame_interval: 5.0,
+            manning: 0.0,
+            dispersive: true,
+            breaking_viscosity: false,
+            nested: false,
+            threads: 1,
+            background: false,
+            budget_seconds: None,
+            max_wall_seconds: None,
+            handoff: Vec::new(),
+        };
+        let viscosity = |opts: &RunOptions| {
+            solver_for(&bed, opts)
+                .dispersion()
+                .expect("dispersive")
+                .breaking
+                .viscosity
+        };
+        assert_eq!(viscosity(&opts), None);
+        opts.breaking_viscosity = true;
+        assert_eq!(viscosity(&opts), Some(EddyViscosity::default()));
+    }
+
+    #[test]
     fn water_that_is_no_longer_a_number_is_a_blow_up_at_its_cell_not_a_dry_domain() {
         let dir = std::env::temp_dir().join(format!("wavesim-unit-nan-{}", std::process::id()));
         let bed = Bed {
@@ -1966,6 +2026,7 @@ mod tests {
             frame_interval: 5.0,
             manning: 0.0,
             dispersive: false,
+            breaking_viscosity: false,
             nested: false,
             threads: 1,
             background: false,
