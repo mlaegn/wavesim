@@ -48,28 +48,40 @@ model's main accuracy gap once its bugs were fixed.
   viscosity's extra sub-steps. Step 3 measures them; until then a run with it may stop at its
   limit sooner than estimated, marked `truncated`.
 
-## Step 2: single lines across real reefs (light)
+## Step 2: single lines across real reefs
 
-A run along one cross-shore line, four cells wide, costs about as much as a fast test: a few
-minutes on one core, no Docker, no release build. That is enough to see whether the break point
-moves, which is the failure the lab showed.
+A run along one cross-shore line, four cells wide, with walls at the sides, is a 2D run's
+machinery on a thousandth of the cells: the same planning, wave-maker, statistics and break
+line, through `wavesim::run` on one grid. It is enough to see whether the break point moves,
+which is the failure the lab showed. A line cannot spread energy sideways, so its heights are
+not the 2D run's (on Pipeline y = 511.5 m a line's crest came out three times the 2D run's);
+what counts is the difference the viscosity makes on the same line.
 
-- **Lines.** Pipeline y = 361.5, 421.5 and 511.5 m (in `data/`, where earlier slices ran), and
-  three rows of the Coxos bed for the 300° swell (`data/coxos/coxos.json`, `+x` along 120°),
-  cut the same way.
-- **Waves.** Pipeline 2.5 m, 14 s and 16 s; Coxos 2 m, 13 s, at mid and low tide: the sizes the
-  sheets and slices already use.
-- **Each line twice**, with and without the viscosity, on the cells the 2D runs use (3 m at
-  Pipeline, the Coxos bed's own), recording the height per cell over the last periods as the
-  runs' statistics do.
-- **Bounds, to be fixed before the first run:**
-  - the break point (the tallest point before the shore) moves no more than 10 m, and its depth
-    by no more than 10%; for scale, halving the cells moved Pipeline's by 3.7 m;
+- **Lines.** Pipeline y = 361.5, 421.5 and 511.5 m (`data/pipeline_line_*.json`, 1 m points,
+  put on 3 m cells), and three rows of the Coxos bed for the 300° swell (`data/coxos/coxos.json`,
+  `+x` along 120°, 3 m cells): y = 481.5, 601.5 and 721.5 m, rows 160, 200 and 240, whose break
+  points in the 2D runs are a plunging one and two spilling ones at mid tide.
+- **Waves.** Pipeline 2.5 m, 14 s and 16 s, at mean sea level; Coxos 2 m, 13 s, at mid tide
+  (0 m) and low tide (−1.2 m): the sizes the sheets and slices already use. Twelve cases.
+- **Each case twice**, with and without the viscosity, dispersive, on one grid, the run
+  planning its own length. Results in `out/surf_lines/`.
+- **What is measured,** on a middle row, from the run's own statistics: the break point (the
+  run's `break_line`: where, how deep, how tall) and the inner surf zone's `H/h`, the median over
+  the cells from the break point to where the still water is 1 m deep, counting only cells no
+  deeper than the break (a reef's lagoon behind the break is not surf zone). A case with fewer
+  than five such cells has no inner surf zone to judge, which a shore break may not.
+- **Bounds, fixed on 2026-11-23 before the first run:**
+  - the break point moves no more than 10 m, and its depth by no more than 10%; for scale,
+    halving the cells moved Pipeline's by 3.7 m;
   - the height at the break point changes by less than 10%;
-  - the inner surf zone (between the break and 1 m of water) falls to `H/h` 0.55 to 0.75, the
-    laboratory's regular-wave value with room for the reef.
-- **Where it goes.** A small `#[ignore]`d test or example beside `tests/lab.rs`, so the numbers
-  can be rerun, and a table in this doc.
+  - the inner surf zone's `H/h` falls into 0.55 to 0.75, the laboratory's regular-wave value
+    with room for the reef.
+- **Passing.** Step 2 passes if the break point and its height stay within their bounds in every
+  case, and the inner surf zone comes into its range in at least three quarters of the cases
+  that have one. A case that misses is reported, not dropped. If the break moves in any case,
+  step 3 waits and the fallbacks come first.
+- **Where it goes.** `crates/wavesim/examples/surf_lines.rs` runs the cases and prints the
+  table, so the numbers can be rerun; the table goes into this doc.
 
 ## Step 3: Coxos in 2D (heavy, one run at a time, each approved)
 
