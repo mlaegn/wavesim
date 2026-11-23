@@ -4,6 +4,7 @@
 //!     cargo run --release --example surf_lines                      # every case
 //!     cargo run --release --example surf_lines -- coxos_481         # cases whose name has this
 //!     cargo run --release --example surf_lines -- --out <dir> ...   # results elsewhere than out/
+//!     cargo run --release --example surf_lines -- --cell 1.5 ...    # the Pipeline lines on finer cells
 //!
 //! Each case is a 2D run's machinery on four rows with walls at the sides, through
 //! `wavesim::run` on one grid: the same planning, wave-maker, statistics and break line. Runs go
@@ -18,7 +19,7 @@ use wavesim::{RunOptions, run};
 
 /// Rows of a line's bed: a middle row is read, the walls keep them all alike.
 const ROWS: usize = 4;
-/// The cells the 2D runs use at both spots.
+/// The cells the 2D runs use at both spots, and the Coxos bed's own.
 const CELL: f64 = 3.0;
 /// The row the results are read from.
 const ROW: usize = 1;
@@ -35,6 +36,8 @@ const SURF_MIN_CELLS: usize = 5;
 struct Case {
     name: String,
     elevation: Vec<f32>,
+    /// Cell size, metres.
+    cell: f64,
     height: f64,
     period: f64,
     tide: f64,
@@ -45,6 +48,8 @@ struct Outcome {
     depth: f64,
     height: f64,
     surf: Option<(f64, usize)>,
+    /// The mean share of the time the wet cells shoreward of the break read as breaking.
+    breaking: f64,
     seconds: f64,
     truncated: bool,
 }
@@ -52,24 +57,33 @@ struct Outcome {
 fn main() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut args: Vec<String> = std::env::args().skip(1).collect();
-    let out = match args.iter().position(|a| a == "--out") {
-        Some(k) => {
-            let dir = PathBuf::from(args.get(k + 1).expect("--out needs a directory"));
-            args.drain(k..k + 2);
-            dir
-        }
-        None => root.join("out"),
-    }
-    .join("surf_lines");
+    let mut value = |flag: &str| {
+        let k = args.iter().position(|a| a == flag)?;
+        let v = args
+            .get(k + 1)
+            .unwrap_or_else(|| panic!("{flag} needs a value"))
+            .clone();
+        args.drain(k..k + 2);
+        Some(v)
+    };
+    let out_root = value("--out").map_or(root.join("out"), PathBuf::from);
+    let cell: f64 = value("--cell").map_or(CELL, |c| c.parse().expect("--cell in metres"));
+    // The 3 m runs in surf_lines/, others beside them, so neither overwrites the other.
+    let out = if cell == CELL {
+        out_root.join("surf_lines")
+    } else {
+        out_root.join(format!("surf_lines_{cell}m"))
+    };
     let data = root.join("data");
 
     let mut cases = Vec::new();
     for y in ["361.5", "421.5", "511.5"] {
-        let line = line_row(&data.join(format!("pipeline_line_{y}.json")));
+        let line = line_row(&data.join(format!("pipeline_line_{y}.json")), cell);
         for period in [14.0, 16.0] {
             cases.push(Case {
                 name: format!("pipeline_{}_2.5m{period}s", y.trim_end_matches(".5")),
                 elevation: line.clone(),
+                cell,
                 height: 2.5,
                 period,
                 tide: 0.0,
@@ -83,13 +97,16 @@ fn main() {
         (CELL, CELL),
         "the Coxos bed is on 3 m cells"
     );
-    for j in [160_usize, 200, 240] {
+    // The Coxos bed is on 3 m cells: a finer grid would only interpolate it, so its rows run on
+    // the bed's own cells.
+    for j in [160_usize, 200, 240].into_iter().filter(|_| cell == CELL) {
         let row = coxos.elevation[j * nx..(j + 1) * nx].to_vec();
         assert!(row.iter().all(|v| v.is_finite()), "Coxos row {j} has gaps");
         for (tide, label) in [(0.0, "mid"), (-1.2, "low")] {
             cases.push(Case {
                 name: format!("coxos_{:.0}_2m13s_{label}", (j as f64 + 0.5) * dy),
                 elevation: row.clone(),
+                cell: CELL,
                 height: 2.0,
                 period: 13.0,
                 tide,
@@ -128,9 +145,9 @@ fn main() {
 
     let mut summary = Vec::new();
     println!(
-        "| Case | Break, without | Break, with | Moved | Depth | Height | Inner surf H/h, without → with | Verdict | Minutes |"
+        "| Case | Break, without | Break, with | Moved | Depth | Height | Inner surf H/h, without → with | Breaking inside, without → with | Verdict | Minutes |"
     );
-    println!("|---|---|---|---|---|---|---|---|---|");
+    println!("|---|---|---|---|---|---|---|---|---|---|");
     for case in &cases {
         let dir = out.join(&case.name);
         let bed_path = dir.join("bed.json");
@@ -151,9 +168,9 @@ fn main() {
     .expect("write summary.json");
 }
 
-/// A `wavesim-line` file put on [`CELL`] cells: the fine data where it has any, the bed's where
+/// A `wavesim-line` file put on `cell` cells: the fine data where it has any, the bed's where
 /// not, linearly between its points, relative to mean sea level.
-fn line_row(path: &Path) -> Vec<f32> {
+fn line_row(path: &Path, cell: f64) -> Vec<f32> {
     let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let doc: Value = serde_json::from_str(&text).expect("a wavesim-line");
     let num = |v: &Value| v.as_f64();
@@ -171,10 +188,10 @@ fn line_row(path: &Path) -> Vec<f32> {
         .zip(z_bed)
         .map(|(z, b)| num(z).or_else(|| num(b)).unwrap())
         .collect();
-    let nx = (x[x.len() - 1] / CELL).floor() as usize;
+    let nx = (x[x.len() - 1] / cell).floor() as usize;
     (0..nx)
         .map(|i| {
-            let at = (i as f64 + 0.5) * CELL;
+            let at = (i as f64 + 0.5) * cell;
             let k = x.partition_point(|&p| p <= at).clamp(1, x.len() - 1);
             let w = ((at - x[k - 1]) / (x[k] - x[k - 1])).clamp(0.0, 1.0);
             (z[k - 1] + w * (z[k] - z[k - 1])) as f32
@@ -182,10 +199,10 @@ fn line_row(path: &Path) -> Vec<f32> {
         .collect()
 }
 
-/// The line as a bed: its row [`ROWS`] times, on [`CELL`] cells.
+/// The line as a bed: its row [`ROWS`] times, on the case's cells.
 fn line_bed(case: &Case) -> Bed {
     Bed {
-        header: Bed::header_for(&case.name, case.elevation.len(), ROWS, CELL, CELL),
+        header: Bed::header_for(&case.name, case.elevation.len(), ROWS, case.cell, case.cell),
         elevation: (0..ROWS)
             .flat_map(|_| case.elevation.iter().copied())
             .collect(),
@@ -257,11 +274,18 @@ fn run_case(case: &Case, bed: &Path, out: &Path, viscosity: bool) -> Option<Outc
         .collect();
     ratios.sort_by(f64::total_cmp);
     let surf = (ratios.len() >= SURF_MIN_CELLS).then(|| (ratios[ratios.len() / 2], ratios.len()));
+    let fraction = result.stat("break_fraction")?;
+    let wet: Vec<f64> = (start..h.nx * (ROW + 1))
+        .filter(|&k| case.tide - f64::from(bed[k]) > 0.05)
+        .map(|k| f64::from(fraction[k]))
+        .collect();
+    let breaking = wet.iter().sum::<f64>() / wet.len().max(1) as f64;
     Some(Outcome {
         x,
         depth,
         height,
         surf,
+        breaking,
         seconds: summary.wall_seconds,
         truncated: summary.truncated,
     })
@@ -275,7 +299,7 @@ fn compare(
 ) -> (String, &'static str) {
     let (Some(p), Some(v)) = (plain, viscous) else {
         return (
-            format!("| {name} | failed | | | | | | failed | |"),
+            format!("| {name} | failed | | | | | | | failed | |"),
             "failed",
         );
     };
@@ -295,7 +319,7 @@ fn compare(
         |s: Option<(f64, usize)>| s.map_or("none".to_string(), |(r, n)| format!("{r:.2} ({n})"));
     let flag = |o: &Outcome| if o.truncated { " (truncated)" } else { "" };
     let row = format!(
-        "| {name} | {:.0} m, {:.1} m deep, {:.2} m{} | {:.0} m, {:.1} m deep, {:.2} m{} | {moved:+.0} m | {:+.0}% | {:+.0}% | {} → {} | {verdict} | {:.1} + {:.1} |",
+        "| {name} | {:.0} m, {:.1} m deep, {:.2} m{} | {:.0} m, {:.1} m deep, {:.2} m{} | {moved:+.0} m | {:+.0}% | {:+.0}% | {} → {} | {:.3} → {:.3} | {verdict} | {:.1} + {:.1} |",
         p.x,
         p.depth,
         p.height,
@@ -308,6 +332,8 @@ fn compare(
         100.0 * height,
         surf(p.surf),
         surf(v.surf),
+        p.breaking,
+        v.breaking,
         p.seconds / 60.0,
         v.seconds / 60.0,
     );
@@ -319,6 +345,7 @@ fn outcome_json(o: Option<&Outcome>) -> Value {
         json!({
             "x_m": o.x, "depth_m": o.depth, "height_m": o.height,
             "inner_surf_h_over_d": o.surf.map(|s| s.0), "inner_surf_cells": o.surf.map(|s| s.1),
+            "breaking_inside": o.breaking,
             "wall_seconds": o.seconds, "truncated": o.truncated,
         })
     })

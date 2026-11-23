@@ -1,9 +1,10 @@
 # The surf zone: broken waves that stay too tall
 
 A plan, written 2026-11-21. Step 1, the switch, is done (PR 5). Step 2 ran on 2026-11-23 and did
-not pass: on reef lines the fix leaves the break point exactly where it was, but it hardly
-changes the surf zone either (results under step 2). Steps 3 and 4 are on hold until the next
-move is chosen. It follows the 2026-11-17 audit, which named this the model's main accuracy gap
+not pass on the 2D runs' 3 m cells: the fix leaves the break point where it was but hardly
+changes the surf zone. On 1.5 m cells it works, `H/h` about 1.05 down to 0.7–0.8 with the
+break unmoved: the cause is the grid (results under step 2). Steps 3 and 4 are on hold until
+the next move is chosen. It follows the 2026-11-17 audit, which named this the model's main accuracy gap
 once its bugs were fixed.
 
 ## In short
@@ -152,6 +153,51 @@ Step 3 would only confirm that in 2D, so it is not worth the runs. The next move
 Either way, nothing here holds up other work: the fix will not become the default soon, so
 sheets made now, Ribeira's included, will not need redoing because of it.
 
+### Finer cells (2026-11-23): it is the grid
+
+Max asked what is best for the project rather than to park it, so the next cheap question was
+whether the 3 m cells are why the fronts are so rarely followed. The two clean cases, Pipeline
+421.5 and 511.5 at 16 s, ran again on 1.5 m cells (`--cell 1.5`, the line data has 1 m points):
+four runs, 18 minutes on one efficiency core, nominal throughout.
+
+| Case, 1.5 m cells | Break, without | Break, with | Inner surf `H/h`, without → with | Breaking inside, without → with |
+|---|---|---|---|---|
+| Pipeline 421.5, 16 s | 1633 m, 4.4 m, 5.11 m | see below | 1.10, 1.08, 0.97 → 0.83, 0.76, 0.70 (at 3.7, 2.8, 2.1 m deep) | 4.2% → 7.3% |
+| Pipeline 511.5, 16 s | 1639 m, 4.1 m, 4.80 m | 1636 m, 4.3 m, 4.78 m | 1.05 (76) → 0.79 (78) | 6.5% → 29% |
+
+- **On 1.5 m cells the fix works.** The surf zone comes down from about 1.05 to 0.70–0.83, just
+  above the laboratory's 0.6, and the cells inside read as breaking far more often: the fronts
+  are followed. On 3 m cells the same lines barely changed.
+- **The break does not move.** At 511.5 it stays within 3 m. At 421.5 the table's "tallest
+  point" jumped 381 m out to sea, but that is the measure, not the wave: breaking starts at
+  about 1625 m, in about 5 m of water, with and without the fix, and nowhere seaward of it in
+  either run (breaking share 0 to 1600 m). The fix lowered the peak at the break from 4.66 to
+  4.45 m, below a 4.76 m bump at 1250 m that the swell reflected off the reef makes in both
+  runs, so the tallest point moved there. `break_points` takes the shoreward of two peaks only
+  within 3% of each other. If the fix ever becomes the default, the break point should be
+  where breaking starts, not the tallest point, or a reef that reflects will mislead it.
+- **Why the grid matters.** A front is followed while the surface rises faster than a
+  threshold tied to the wave speed. On 3 m cells a broken front 1 to 2 m tall is spread over one
+  or two cells, so its rise reads slow and the front is dropped. On 1.5 m cells it reads fast
+  enough. On the laboratory beach the cells are 5 cm, finer again. So option 1 above, starting
+  fronts by the same rate of rise, would meet the same smearing and is not the next step.
+- **Without the fix, finer cells make it worse:** `H/h` 1.05 against 0.95 on 3 m cells. The
+  coarse grid was taking out a little height by itself.
+
+**What it means.** The fix is right, but needs cells about a third of the breaking depth.
+The 2D runs use 3 m. That leaves:
+
+1. **Finer cells in the 2D runs' surf zone.** Halving the fine grid's cells costs about eight
+   times the work (four times the cells, twice the steps): a Coxos run of half an hour becomes
+   about four, a sheet of 14 runs about 56 hours. Too much for the laptop; a rented machine for
+   a night or two, or a third, finer grid nested over the surf zone only, which is new code.
+2. **A rule that knows the grid.** Lower the fix's thresholds with the cell size, so a smeared
+   front still counts. A new tuning, to be checked on the laboratory beach at several cell
+   sizes and on these lines at 3 and 1.5 m before it could be trusted. Light work, uncertain.
+3. **Correct the sheet's surf-zone heights** (fallback 3), now with a measured basis: about 0.75
+   to 0.8 of the model's height on these lines.
+4. **Wait for the DGT 2 m data.** A seabed on 2 m cells would bring the runs most of the way to
+   1.5 m anyway, and would be worth having for the takeoffs and peel too.
 ## Step 3: Coxos in 2D (heavy, one run at a time, each approved)
 
 Only if step 2 passes.
