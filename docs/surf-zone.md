@@ -2,8 +2,8 @@
 
 A plan, written 2026-11-21. Step 1, the switch, is done (PR 5). Step 2 ran on 2026-11-23 and did
 not pass on the 2D runs' 3 m cells: the fix leaves the break point where it was but hardly
-changes the surf zone. On 1.5 m cells it works, `H/h` about 1.05 down to 0.7–0.8 with the
-break unmoved: the cause is the grid (results under step 2). Steps 3 and 4 are on hold until
+changes the surf zone. On 2 m and 1.5 m cells it works, `H/h` about 1.0 down to 0.76–0.79
+with the break unmoved: the cause is the grid (results under step 2). Steps 3 and 4 are on hold until
 the next move is chosen. It follows the 2026-11-17 audit, which named this the model's main accuracy gap
 once its bugs were fixed.
 
@@ -184,20 +184,42 @@ four runs, 18 minutes on one efficiency core, nominal throughout.
 - **Without the fix, finer cells make it worse:** `H/h` 1.05 against 0.95 on 3 m cells. The
   coarse grid was taking out a little height by itself.
 
-**What it means.** The fix is right, but needs cells about a third of the breaking depth.
-The 2D runs use 3 m. That leaves:
+### 2 m cells (2026-11-23): enough
 
-1. **Finer cells in the 2D runs' surf zone.** Halving the fine grid's cells costs about eight
-   times the work (four times the cells, twice the steps): a Coxos run of half an hour becomes
-   about four, a sheet of 14 runs about 56 hours. Too much for the laptop; a rented machine for
-   a night or two, or a third, finer grid nested over the surf zone only, which is new code.
-2. **A rule that knows the grid.** Lower the fix's thresholds with the cell size, so a smeared
-   front still counts. A new tuning, to be checked on the laboratory beach at several cell
-   sizes and on these lines at 3 and 1.5 m before it could be trusted. Light work, uncertain.
-3. **Correct the sheet's surf-zone heights** (fallback 3), now with a measured basis: about 0.75
-   to 0.8 of the model's height on these lines.
-4. **Wait for the DGT 2 m data.** A seabed on 2 m cells would bring the runs most of the way to
-   1.5 m anyway, and would be worth having for the takeoffs and peel too.
+The same two cases on 2 m cells (four runs, 10 minutes, nominal throughout). Measured from where
+breaking starts, the first cell from the sea that reads as breaking at least 0.5% of the time,
+since the tallest point proved unreliable; the same measure for all three cell sizes:
+
+| Case | Cells | Breaking starts, without → with | Inner surf `H/h`, without → with | Breaking inside, without → with |
+|---|---|---|---|---|
+| Pipeline 421.5, 16 s | 3 m | 1648 → 1648 m, 4.3 m deep, height −3% | 0.92 → 0.89 | 1.9% → 3.5% |
+| | 2 m | 1625 → 1621 m, 4.9 → 5.1 m deep, height −4% | 1.00 → **0.76** | 3.0% → 24% |
+| | 1.5 m | 1625 → 1624 m, 4.8 m deep, height −3% | 1.05 → 0.77 | 4.0% → 27% |
+| Pipeline 511.5, 16 s | 3 m | 1654 → 1654 m, 4.0 m deep, height −2% | 0.94 → 0.93 | 5.0% → 6.3% |
+| | 2 m | 1641 → 1635 m, 4.3 → 4.6 m deep, height −8% | 1.01 → **0.79** | 5.3% → 28% |
+| | 1.5 m | 1637 → 1636 m, 4.2 → 4.3 m deep, height −2% | 1.05 → 0.79 | 6.5% → 29% |
+
+- **2 m cells do nearly all that 1.5 m cells do.** The surf zone comes down to 0.76 and 0.79,
+  the break moves 4 and 6 m, its depth by 4% and 7%, its height by at most 8%: inside the
+  bounds for the break, a few hundredths above the 0.75 top of the surf-zone range.
+- **The step is between 3 and 2 m.** That fits the cause: the fronts need about two cells per
+  metre or so of their height to be seen rising fast enough.
+- **The table's tallest point again jumped at 421.5** (54 m out to a reflected bump), while
+  breaking starts within 4 m of where it did. The measure above is the one to keep.
+
+**What it means.** The fix is right on these reefs once the cells are 2 m or finer, about half
+the breaking depth; the 2D runs use 3 m. That leaves:
+
+1. **The DGT 2 m seabed.** Runs on its own 2 m cells would bring the surf zone in line with the
+   fix on, and the finer seabed is what the sheets need most anyway, for whether a wave pitches
+   and how it peels. It comes when the data comes.
+2. **2 m cells on today's 15 m-based beds.** Resampling the bed to 2 m adds no detail but gives
+   the fix the cells it needs. About 3.4 times the work of a 3 m run (2.25 times the cells, 1.5
+   times the steps): a Coxos run of half an hour becomes about an hour and three quarters, a
+   sheet of 14 runs about a day. Two or three nights on the laptop, or a rented machine.
+3. **A rule that knows the grid,** so 3 m cells would do: new tuning, re-checked on the
+   laboratory beach and these lines at several cell sizes. Light work, uncertain.
+4. **Correct the sheet's surf-zone heights** by the measured ratio, about 0.75 to 0.8.
 ## Step 3: Coxos in 2D (heavy, one run at a time, each approved)
 
 Only if step 2 passes.
