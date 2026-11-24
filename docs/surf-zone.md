@@ -6,8 +6,8 @@ changes the surf zone. On 2 m and 1.5 m cells it works, `H/h` about 1.0 down to 
 with the break unmoved: the cause is the grid (results under step 2). But Coxos in 2D on 2 m
 cells, with and without the fix, shows the fix breaking the reef early: breaking starts 66 m
 further out, in 6 m of water instead of 3.8, and the surf zone comes out at `H/h` 0.48, too
-low. So the fix stays off; steps 3 and 4 do not go ahead as planned, and the fallbacks are
-what is left. It follows the 2026-11-17 audit, which named this the model's main accuracy gap
+low. So the fix stays off; steps 3 and 4 do not go ahead as planned. The fallback tried next,
+plain shallow water shoreward of a known break line, is planned below with its bounds. It follows the 2026-11-17 audit, which named this the model's main accuracy gap
 once its bugs were fixed.
 
 ## In short
@@ -273,6 +273,56 @@ Medians over the rows:
 the reef breaking early. Option 2 above falls with it. The fix stays off, and the fallbacks
 below are what is left; the first of them, two passes, can now start from the 2 m run's own
 break line.
+
+## The fallback tried next: shallow water inside the break (planned 2026-11-24)
+
+Of the three fallbacks below, plain shallow water inside the surf zone came first:
+
+- **It should work on the 3 m cells the sheets already use.** A shock takes the height out of
+  a broken wave by an amount the jump across it sets, not the cells, while the viscosity
+  needed its fronts resolved, on 2 m cells and at 2.5 times the work.
+- **Nothing to tune,** and on the laboratory beach plain shallow water already gives `H/h`
+  0.65 to 0.70 inside.
+- **It cannot move the break.** It acts only shoreward of a break line already known, so
+  the early break that sank the viscosity at Coxos cannot happen; only what the surf zone
+  sends back seaward (reflection, setup) can reach the break.
+- **The sheets' runs without it exist,** and their break lines with them; on Coxos the 2 m and
+  3 m lines agree.
+
+Viscosity only shoreward of the break needs 2 m cells and did badly in the one form tried on the
+laboratory beach; correcting the sheet stays the fallback if this fails.
+
+**How it works.** `wavesim run --shallow-inside <run>` takes each row's break point from an
+earlier run of the same bed, swell and tide without a fix (its `break_line`, the tallest wave
+before the shore) and holds every cell from there to the shore to plain shallow water, on both
+grids of a nested run (`Solver::with_shallow_cells`). There the breaking switch reads 0: no
+dispersive terms, the MC limiter, a broken wave goes on as a shock. Seaward the run is the
+dispersive one it was. The breaking statistics still read the surface, so `break_fraction`
+compares with runs without it. It refuses the viscosity, plain shallow water and hand-offs.
+
+**Checks, in order, each only if the one before passes. Bounds fixed on 2026-11-24, before the
+first run:**
+
+1. **The laboratory beach** (slow tests in `tests/lab.rs`, three flume runs each: one to set the
+   wave, one without, one with):
+   - the spilling breaker under the surf-zone test's own bounds: model over laboratory within
+     10% seaward of x = 5.5 m and within 15% over the inner surf zone by the median, no
+     inner-surf station off by more than 30%;
+   - both breakers' break point within 0.2 m (four cells) of the run without, and so within the
+     0.5 m of the laboratory's that the break-point tests allow.
+2. **The reef lines on 3 m cells:** the twelve step 2 cases with `--fix shallow`, each run
+   without it first for its break line, under step 2's bounds and pass rule unchanged: the break
+   point within 10 m, its depth within 10% and height within 10% in every case; inner-surf `H/h`
+   in 0.55 to 0.75 in at least three quarters of the cases that have one. Pipeline 511.5 at
+   14 s, where the wave re-forms over the deeper reef, is reported apart: a re-formed wave
+   inside the line is held to shallow water too, which steepens it early. About 15 minutes on
+   one efficiency core.
+3. **The two Pipeline 16 s lines on 2 m cells,** the same bounds, and inner-surf `H/h` within
+   0.08 of the 3 m result, the change the cells alone make without a fix: this is what says
+   the fix does not need fine cells. About 10 minutes on one core.
+4. **Only then, Coxos in 2D on 3 m cells,** mid tide, from `out/coxos_2m13s_300`'s break line:
+   about half an hour on four efficiency-core threads, with Max's go-ahead. Checked row by row as
+   the 2 m runs were (break line, where breaking starts, `H/h` by depth band).
 
 ## Step 3: Coxos in 2D (heavy, one run at a time, each approved)
 
