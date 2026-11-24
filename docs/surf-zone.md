@@ -3,10 +3,11 @@
 A plan, written 2026-11-21. Step 1, the switch, is done (PR 5). Step 2 ran on 2026-11-23 and did
 not pass on the 2D runs' 3 m cells: the fix leaves the break point where it was but hardly
 changes the surf zone. On 2 m and 1.5 m cells it works, `H/h` about 1.0 down to 0.76–0.79
-with the break unmoved: the cause is the grid (results under step 2). One Coxos run in 2D on 2 m
-cells overshoots: `H/h` down to 0.45–0.65, and breaking starts in deeper water than before. A
-2 m run without the fix would say whether that is the cells or the fix. Steps 3 and 4 are on
-hold until then. It follows the 2026-11-17 audit, which named this the model's main accuracy gap
+with the break unmoved: the cause is the grid (results under step 2). But Coxos in 2D on 2 m
+cells, with and without the fix, shows the fix breaking the reef early: breaking starts 66 m
+further out, in 6 m of water instead of 3.8, and the surf zone comes out at `H/h` 0.48, too
+low. So the fix stays off; steps 3 and 4 do not go ahead as planned, and the fallbacks are
+what is left. It follows the 2026-11-17 audit, which named this the model's main accuracy gap
 once its bugs were fixed.
 
 ## In short
@@ -224,43 +225,54 @@ the breaking depth; the 2D runs use 3 m. That leaves:
    laboratory beach and these lines at several cell sizes. Light work, uncertain.
 4. **Correct the sheet's surf-zone heights** by the measured ratio, about 0.75 to 0.8.
 
-### Coxos in 2D on 2 m cells (2026-11-23): too much, too early
+### Coxos in 2D on 2 m cells (2026-11-23/24): the fix breaks the reef early
 
-One run to see whether option 2 holds in 2D: Coxos 2 m, 13 s from 300°, mid tide, with the
-viscosity, on the bed resampled to 2 m (`tools/fetch_spot.py coxos --cell 2`). 76 minutes on
-four efficiency-core threads, nominal throughout. Compared row by row over the sheet's trusted
-300–1050 m with the existing 3 m run without it (`out/coxos_2m13s_300`), on the same bed
-coordinates. There is no 2 m run without the fix yet, so this mixes the cells and the fix.
+Two runs to see whether option 2 holds in 2D: Coxos 2 m, 13 s from 300°, mid tide, on the bed
+resampled to 2 m (`tools/fetch_spot.py coxos --cell 2`), without and with the viscosity
+(`out/coxos_2m13s_300_2m_plain`, `out/coxos_2m13s_300_2m_visc`). 72 and 76 minutes on four
+efficiency-core threads, nominal throughout. Compared over the sheet's trusted rows, 300–1050 m,
+on the same bed coordinates, with the existing 3 m run without it (`out/coxos_2m13s_300`).
 
 `H/h` and the share of time breaking, by water depth, shoreward of the 3 m run's break point:
 
-| Water depth | `H/h`, 3 m without → 2 m with | Breaking, 3 m without → 2 m with |
+| Water depth | `H/h`: 3 m / 2 m / 2 m with fix | Breaking: 3 m / 2 m / 2 m with fix |
 |---|---|---|
-| 1–2 m | 0.94 → 0.65 | 1.4% → 22% |
-| 2–3 m | 0.89 → 0.52 | 0.1% → 26% |
-| 3–4 m | 0.88 → 0.45 | 0.0% → 30% |
-| 4–6 m | 0.73 → 0.45 | 0.0% → 35% |
+| 1–2 m | 0.94 / 1.02 / 0.65 | 1.4% / 2.0% / 22% |
+| 2–3 m | 0.89 / 0.96 / 0.52 | 0.1% / 0.7% / 26% |
+| 3–4 m | 0.88 / 0.93 / 0.45 | 0.0% / 1.0% / 30% |
+| 4–6 m | 0.73 / 0.77 / 0.45 | 0.0% / 0.2% / 35% |
 
-- **Inside, it lands in range:** 0.65 in the last metre or two of water.
-- **Further out it overshoots:** 0.45 to 0.52 in 2 to 6 m of water, under the 0.55 floor and
-  well under the 0.76–0.79 the 2 m lines gave.
-- **The waves lose height before the reef break.** Each row's tallest point is 12% lower
-  (median 4.07 → 3.62 m), in deeper water (median 4.75 → 6.98 m), a median 75 m further out; 35% of
-  rows are inside the step 2 bounds. Part of that is the tallest-point jump the lines showed, but
-  breaking now starts in a median 6.1 m of water, where the 3 m run had none at all at 4–6 m.
-  Coxos's break points have sat at 3.4–4.9 m. This is the risk the plan named: the reef breaks
-  early.
-- **Cells or fix, this run cannot say.** On the lines, finer cells alone moved where breaking
-  starts 13 and 23 m out, the fix 1 to 6 m more. In 2D the waves refract and focus over the
-  reef, which the lines leave out.
-- **Cost:** 76 minutes (coarse grid 13, fine grid 63), 2.5 times the 3 m run's half hour,
-  less than the 3.4 times estimated.
+Medians over the rows:
 
-**What it means.** On 2 m cells in 2D the fix does not pass as it stands. One more run, the same
-on 2 m cells without the fix (about 75 minutes), would separate the two. If that run also breaks
-in 6 m of water, the early start is the cells', the 3 m runs have been breaking late, and the
-fix's own effect is the drop inside. If it breaks where the 3 m run does, the fix starts fronts
-too early on this reef, as it does on the plunging laboratory wave, and the fallbacks apply.
+| Run | Tallest point | Breaking starts |
+|---|---|---|
+| 3 m | 4.75 m deep, 4.07 m tall | 1.44 m deep |
+| 2 m | 4.60 m deep, 4.34 m tall | 3.76 m deep, 3.46 m tall |
+| 2 m with fix | 6.98 m deep, 3.63 m tall | 6.07 m deep, 2.73 m tall |
+
+- **The cells alone change little.** On 2 m cells the tallest point stays where it was (a metre
+  away, 0.15 m shallower) and a little taller, the surf zone a little taller too (0.84 → 0.92
+  from each row's break point), as on the lines. Breaking starts further out than on 3 m cells because the
+  switch now trips on the reef at all; on 3 m cells it hardly does before the shore.
+- **The fix breaks the reef early.** Against the 2 m run without it, row by row: breaking starts
+  a median 66 m further out (32–179 m, 10–90%), in 70% deeper water, more than 10 m out in every
+  row. It starts where the wave is 2.7 m in 6.1 m of water, `H/h` 0.45, well short of the
+  height a wave breaks at. Each row's tallest point is 18% lower, and it stays within 10 m in only
+  34% of rows.
+- **So the surf zone is overdone.** `H/h` 0.48 from each row's break point, 0.45–0.52 in 2–6 m of water,
+  under the 0.55 floor. Only the last metre or two (0.65) lands in range, because the waves
+  arrive there already small.
+- **The lines did not show it.** On 2 m cells only the two Pipeline lines ran, where the fix
+  moved the start 1–6 m. Why Coxos in 2D differs is open. Two guesses worth testing: Coxos
+  plunges, as the laboratory wave the fix breaks early does; or in 2D a front started at one
+  focusing point is carried along the crest into deeper water.
+- **Cost:** 72 and 76 minutes (the fine grid 60 and 63 of them), 2.4–2.5 times the 3 m run's
+  half hour; the viscosity added about 5%.
+
+**What it means.** The fix as it stands fails at Coxos in 2D: it is the risk the plan named,
+the reef breaking early. Option 2 above falls with it. The fix stays off, and the fallbacks
+below are what is left; the first of them, two passes, can now start from the 2 m run's own
+break line.
 
 ## Step 3: Coxos in 2D (heavy, one run at a time, each approved)
 
