@@ -177,6 +177,7 @@ fn flume(height: f64, period: f64, dx: f64) -> Breaking {
         dx,
         Some(Dispersion::default()),
         Order::Fifth,
+        None,
     )
 }
 
@@ -209,13 +210,16 @@ fn wave_height(series: &[f64]) -> f64 {
     waves.iter().sum::<f64>() / waves.len() as f64
 }
 
-/// [`flume`] with the dispersive model and the scheme's order chosen.
+/// [`flume`] with the dispersive model and the scheme's order chosen, and, if `shallow_from` is
+/// given, plain shallow water from that Ting & Kirby `x` to the shore
+/// (`Solver::with_shallow_cells`).
 fn flume_with(
     height: f64,
     period: f64,
     dx: f64,
     dispersion: Option<Dispersion>,
     order: Order,
+    shallow_from: Option<f64>,
 ) -> Breaking {
     let wave = Cnoidal::new(0.40, height, period);
     let zone = wave.length;
@@ -236,6 +240,12 @@ fn flume_with(
     let mut solver = Solver::new(grid, bed).with_order(order);
     if let Some(d) = dispersion {
         solver = solver.with_dispersion(d);
+    }
+    if let Some(from) = shallow_from {
+        let held = (0..grid.ny)
+            .flat_map(|_| (0..grid.nx).map(|i| x_tk((i as f64 + 0.5) * dx) >= from - 1e-9))
+            .collect();
+        solver = solver.with_shallow_cells(held);
     }
     let mut s = State::lake_at_rest(&grid, &solver.bed, 0.0);
     // The zone must make the wave from still water, not just correct one that is nearly right
@@ -435,9 +445,78 @@ fn a_spilling_breaker_loses_height_across_the_surf_zone_as_ting_and_kirby_saw() 
     let (height, period, dx) = (0.125, 2.0, 0.05);
     let mut d = Dispersion::default();
     d.breaking.viscosity = Some(EddyViscosity::default());
-    let run = |height| flume_with(height, period, dx, Some(d), Order::Fifth);
+    let run = |height| flume_with(height, period, dx, Some(d), Order::Fifth, None);
     let first = run(height);
     let b = run(height * height / first.incident);
+    against_the_laboratory(&b);
+}
+
+// The surf-zone fallback in docs/surf-zone.md: no viscosity, but plain shallow water from the
+// break point the run without it found, so the broken wave goes on as a shock. Bounds set
+// before the first run (2026-11-24): those of the test above for the spilling breaker; for both
+// breakers, the break point where the run without it had it, within 0.2 m (four cells), and so
+// still within the 0.5 m of the laboratory's that the break-point tests above allow.
+//
+// The break line comes from a first run, as on a reef it comes from the run without it; the
+// break point is where the envelope is tallest, as in those tests.
+fn shallow_inside(height: f64, period: f64) -> (Breaking, Breaking) {
+    let dx = 0.05;
+    let run = |height, from| {
+        flume_with(
+            height,
+            period,
+            dx,
+            Some(Dispersion::default()),
+            Order::Fifth,
+            from,
+        )
+    };
+    let first = run(height, None);
+    let height = height * height / first.incident;
+    let plain = run(height, None);
+    let held = run(height, Some(plain.peak_x));
+    println!(
+        "without: tallest at x = {:.2} m, {:.3} m; with shallow water from there: tallest at \
+         x = {:.2} m, {:.3} m; incident {:.4} m",
+        plain.peak_x, plain.peak_height, held.peak_x, held.peak_height, held.incident
+    );
+    (plain, held)
+}
+
+#[test]
+#[ignore = "slow physics check: cargo test --release -- --include-ignored"]
+fn a_spilling_breaker_with_shallow_water_inside_its_break_loses_height_as_ting_and_kirby_saw() {
+    let (plain, held) = shallow_inside(0.125, 2.0);
+    assert!(
+        (held.peak_x - plain.peak_x).abs() <= 0.2,
+        "the break moved from x = {} to {} m",
+        plain.peak_x,
+        held.peak_x
+    );
+    against_the_laboratory(&held);
+}
+
+#[test]
+#[ignore = "slow physics check: cargo test --release -- --include-ignored"]
+fn a_plunging_breaker_with_shallow_water_inside_its_break_still_breaks_where_it_did() {
+    let (plain, held) = shallow_inside(0.128, 5.0);
+    assert!(
+        (held.peak_x - plain.peak_x).abs() <= 0.2,
+        "the break moved from x = {} to {} m",
+        plain.peak_x,
+        held.peak_x
+    );
+    assert!(
+        (held.peak_x - 7.795).abs() < 0.5,
+        "tallest at x = {}",
+        held.peak_x
+    );
+}
+
+/// The spilling breaker's height against Ting & Kirby's Fig. 4, printed station by station, and
+/// the bounds of the surf-zone test: seaward of x = 5.5 m the median of model over lab within
+/// 10%, over the inner surf zone within 15%, no inner-surf station off by more than 30%.
+fn against_the_laboratory(b: &Breaking) {
     let mut shoaling = Vec::new();
     let mut surf = Vec::new();
     println!("x_TK    depth   lab H    model H  ratio  lab H/d  model H/d  envelope");
