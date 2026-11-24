@@ -19,7 +19,7 @@ use crate::dispersion::{
 };
 use crate::eddy::EddyWork;
 use crate::forcing::{Drive, H_FRICTION_MIN, Sponge, WaveMaker, manning_factor, relax_cell};
-use crate::grid::{GHOST, Grid, wrap_ghosts_y};
+use crate::grid::{GHOST, Grid, mirror_ghosts, wrap_ghosts_y};
 use crate::par::{max_or_nan, max_rows, rows3};
 use crate::state::State;
 
@@ -274,6 +274,9 @@ pub struct Solver {
     phi: RefCell<Vec<f64>>,
     /// Scratch for following breaking fronts.
     eddy: RefCell<EddyWork>,
+    /// Interior cells held to plain shallow water for the whole run, row-major with `y` outer;
+    /// see [`Solver::with_shallow_cells`].
+    shallow: Option<Vec<bool>>,
 }
 
 impl Solver {
@@ -291,6 +294,7 @@ impl Solver {
             dispersion: None,
             phi: RefCell::new(vec![0.0; grid.cells()]),
             eddy: RefCell::new(EddyWork::new(&grid)),
+            shallow: None,
         }
     }
 
@@ -358,6 +362,25 @@ impl Solver {
             phi,
             out,
         );
+    }
+
+    /// Hold these interior cells (row-major, `y` outer, one per cell) to plain shallow water for
+    /// the whole run, as if they were always breaking: the switch `phi` reads 0 there, so the
+    /// dispersive terms are off and the reconstruction keeps the MC limiter, and a broken wave
+    /// goes on as a shock, which dissipates it. For the surf zone shoreward of a known break
+    /// line (docs/surf-zone.md): with dispersion left on, the switch lets a broken wave go on as
+    /// a smooth bore that hardly loses height. Only the dynamics see it;
+    /// [`Solver::breaking_indicator`] still reads the surface alone, so a run's breaking
+    /// statistics stay comparable with runs without it. Panics if the length is not the
+    /// grid's cell count.
+    pub fn with_shallow_cells(mut self, cells: Vec<bool>) -> Self {
+        assert_eq!(
+            cells.len(),
+            self.grid.nx * self.grid.ny,
+            "one entry per interior cell"
+        );
+        self.shallow = Some(cells);
+        self
     }
 
     /// The dispersion settings, breaking included, or `None` for shallow water.
@@ -614,6 +637,18 @@ impl Solver {
                 self.periodic_y,
                 &mut phi_guard,
             );
+            if let Some(cells) = &self.shallow {
+                for (n, (i, j)) in g.interior().enumerate() {
+                    if cells[n] {
+                        phi_guard[g.idx(i, j)] = 0.0;
+                    }
+                }
+                // The ghosts follow the interior as `switch` left them: mirrored, or wrapped.
+                mirror_ghosts(g, &mut phi_guard);
+                if self.periodic_y {
+                    wrap_ghosts_y(g, &mut phi_guard);
+                }
+            }
         }
         let phi: &[f64] = &phi_guard;
         let mut out = Rhs {
