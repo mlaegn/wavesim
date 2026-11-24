@@ -78,6 +78,12 @@ pub struct RunOptions {
     /// `dispersive`. Off by default: it breaks a plunging laboratory wave early, and has not
     /// been tried on a reef (docs/surf-zone.md).
     pub breaking_viscosity: bool,
+    /// Plain shallow water shoreward of this break line, the rest dispersive as usual
+    /// ([`Solver::with_shallow_cells`]), so broken waves dissipate as shocks instead of going
+    /// on as smooth bores. The line comes from an earlier run of the same bed and swell without
+    /// it ([`BreakLine::from_run`]), so the break itself cannot move. Only with `dispersive`,
+    /// and not with `breaking_viscosity` or a hand-off. Experimental (docs/surf-zone.md).
+    pub shallow_inside: Option<BreakLine>,
     /// Run the swell's crossing on cells twice as large and only the reef on the bed's own
     /// cells, driven by the coarse run (see [`Fine`]); `false` runs everything on one grid.
     pub nested: bool,
@@ -105,6 +111,101 @@ pub struct RunOptions {
 pub struct HandoffLine {
     pub y: f64,
     pub depth: f64,
+}
+
+/// Where an earlier run broke: each row's break point, the tallest wave before the shore
+/// (`break_line` in its `run.json`), as `(y, x)` in metres in the bed file's frame, in order
+/// of `y`. Rows where it found none are left out.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BreakLine {
+    pub points: Vec<(f64, f64)>,
+    /// The earlier run's row spacing: a row of another grid takes the nearest point within
+    /// one and a half of these, and has no break point otherwise.
+    pub spacing: f64,
+    /// The run it came from, for the record.
+    pub from: PathBuf,
+}
+
+impl BreakLine {
+    /// The break line of the run in `dir`, which must have had the same swell and tide as
+    /// `opts` and neither the breaking viscosity (its tallest point can jump to a reflection
+    /// offshore) nor a break line of its own.
+    pub fn from_run(dir: &std::path::Path, opts: &RunOptions) -> Result<Self, Error> {
+        let header = waveio::RunHeader::read(dir)?;
+        let w = &header.waves;
+        let number = |key: &str| w.get(key).and_then(serde_json::Value::as_f64);
+        let wrong = |what: String| {
+            setup(format!(
+                "the break line in {} cannot be used: {what}",
+                dir.display()
+            ))
+        };
+        for (key, want) in [
+            ("wave_height_m", opts.height),
+            ("wave_period_s", opts.period),
+            ("tide_m", opts.tide),
+        ] {
+            match number(key) {
+                Some(v) if (v - want).abs() < 1e-9 => {}
+                v => return Err(wrong(format!("its {key} is {v:?}, this run's is {want}"))),
+            }
+        }
+        let flag = |key: &str| w.get(key).and_then(serde_json::Value::as_bool) == Some(true);
+        if flag("breaking_viscosity") {
+            return Err(wrong("it ran with the breaking viscosity".into()));
+        }
+        if w.get("shallow_inside_from").is_some_and(|v| !v.is_null()) {
+            return Err(wrong("it ran with a break line of its own".into()));
+        }
+        let x0 =
+            number("cropped_offshore_m").ok_or_else(|| wrong("no cropped_offshore_m".into()))?;
+        let rows = w
+            .get("break_line")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| wrong("it has no break_line".into()))?;
+        let points: Vec<(f64, f64)> = rows
+            .iter()
+            .enumerate()
+            .filter_map(|(j, p)| {
+                let x = p.get("x_m")?.as_f64()?;
+                Some(((j as f64 + 0.5) * header.dy, x0 + x))
+            })
+            .collect();
+        if points.is_empty() {
+            return Err(wrong("no row of it broke".into()));
+        }
+        Ok(Self {
+            points,
+            spacing: header.dy,
+            from: dir.to_path_buf(),
+        })
+    }
+
+    /// The break point's `x` for the row at `y`, if the line has one within reach.
+    fn x_at(&self, y: f64) -> Option<f64> {
+        let k = self.points.partition_point(|&(py, _)| py < y);
+        [k.checked_sub(1), Some(k)]
+            .into_iter()
+            .flatten()
+            .filter_map(|k| self.points.get(k))
+            .min_by(|a, b| (a.0 - y).abs().total_cmp(&(b.0 - y).abs()))
+            .filter(|p| (p.0 - y).abs() <= 1.5 * self.spacing)
+            .map(|p| p.1)
+    }
+
+    /// For each interior cell of a grid whose first column starts `x0` metres into the bed
+    /// file: is it at or shoreward of its row's break point.
+    fn shoreward(&self, grid: &wavecore::Grid, x0: f64) -> Vec<bool> {
+        let mut cells = Vec::with_capacity(grid.nx * grid.ny);
+        for j in 0..grid.ny {
+            let xb = self.x_at((j as f64 + 0.5) * grid.dy);
+            for i in 0..grid.nx {
+                let x = x0 + (i as f64 + 0.5) * grid.dx;
+                cells.push(xb.is_some_and(|xb| x >= xb - 1e-6));
+            }
+        }
+        cells
+    }
 }
 
 /// Watches one line of a grid, once the sea has settled, for the first crest to pass the
@@ -468,6 +569,26 @@ fn validate(opts: &RunOptions) -> Result<(), Error> {
             "a run with the breaking viscosity cannot hand a wave over yet: the slice brings its \
              swell in without it, and the two would disagree about the wave",
         ));
+    }
+    if opts.shallow_inside.is_some() {
+        if !opts.dispersive {
+            return Err(setup(
+                "shallow water inside the break changes a dispersive run; with --dispersive \
+                 false the whole run is shallow water already",
+            ));
+        }
+        if opts.breaking_viscosity {
+            return Err(setup(
+                "shallow water inside the break and the breaking viscosity are two different \
+                 fixes for the surf zone; choose one",
+            ));
+        }
+        if !opts.handoff.is_empty() {
+            return Err(setup(
+                "a run with shallow water inside the break cannot hand a wave over: the slice \
+                 would break the wave its own way",
+            ));
+        }
     }
     Ok(())
 }
@@ -1388,14 +1509,22 @@ impl Stage {
     }
 }
 
-fn solver_for(bed: &Bed, opts: &RunOptions) -> Solver {
+/// The solver for `bed`, a crop whose first column starts `x0` metres into the bed file.
+fn solver_for(bed: &Bed, x0: f64, opts: &RunOptions) -> Solver {
     let solver = Solver::new(bed.grid(), bed.bathymetry(opts.tide)).with_manning(opts.manning);
     if opts.dispersive {
         let mut dispersion = Dispersion::default();
         if opts.breaking_viscosity {
             dispersion.breaking.viscosity = Some(EddyViscosity::default());
         }
-        solver.with_order(Order::Fifth).with_dispersion(dispersion)
+        let solver = solver.with_order(Order::Fifth).with_dispersion(dispersion);
+        match &opts.shallow_inside {
+            Some(line) => {
+                let cells = line.shoreward(&bed.grid(), x0);
+                solver.with_shallow_cells(cells)
+            }
+            None => solver,
+        }
     } else {
         solver
     }
@@ -1405,6 +1534,9 @@ fn model(opts: &RunOptions) -> &'static str {
     if opts.dispersive && opts.breaking_viscosity {
         "Serre-Green-Naghdi (flat-bed operator), hybrid breaking with followed fronts and \
          Kennedy et al.'s eddy viscosity, fifth-order upwind-biased scheme"
+    } else if opts.dispersive && opts.shallow_inside.is_some() {
+        "Serre-Green-Naghdi (flat-bed operator), hybrid breaking, plain shallow water shoreward \
+         of an earlier run's break line, fifth-order upwind-biased scheme"
     } else if opts.dispersive {
         "Serre-Green-Naghdi (flat-bed operator), hybrid breaking, fifth-order upwind-biased scheme"
     } else {
@@ -1577,7 +1709,7 @@ pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<
         sigma: SIGMA_CELLS * grid.dx,
         ramp_periods: RAMP_PERIODS,
     };
-    let solver = solver_for(&coarse_bed, opts)
+    let solver = solver_for(&coarse_bed, plan.crop as f64 * coarse_bed.header.dx, opts)
         .with_wavemaker(maker)
         .with_sponge(
             Sponge::new(plan.sponge_offshore, SPONGE_STRENGTH).edges(true, false, false, false),
@@ -1607,6 +1739,7 @@ pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<
         "model": model(opts),
         "dispersive": opts.dispersive,
         "breaking_viscosity": opts.breaking_viscosity,
+        "shallow_inside_from": opts.shallow_inside.as_ref().map(|l| l.from.display().to_string()),
     });
     let coarse_out = match layout.fine {
         Some(_) => opts.out.join("coarse"),
@@ -1634,29 +1767,30 @@ pub fn run(opts: &RunOptions, mut on_progress: impl FnMut(&Progress)) -> Result<
             );
             let sampler = Sampler::new(&zone, &bed, &f, &coarse.bed, plan.crop);
             let settings = serde_json::json!({
-                "wave_height_m": opts.height,
-                "wave_period_s": opts.period,
-                "tide_m": opts.tide,
-                "duration_s": plan.duration,
-                "frame_interval_s": opts.frame_interval,
-                "cropped_offshore_m": f.x0 as f64 * fg.dx,
-                "side_margin_cells": fg.ny / 4,
-                "nested_in": "coarse",
-                "coarse_cell_m": coarse.bed.header.dx,
-                "fine_start_s": f.start,
-                "edge_depth_m": f.edge_depth,
-                "zone_offshore_cells": f.zone_offshore,
-                // The relaxation zone is the coarse run, not this one: a viewer should start
-                // past it.
-                "near_field_end_m": f.zone_offshore as f64 * fg.dx,
-                "sponge_offshore_cells": f.zone_offshore,
-                "manning": opts.manning,
-                "direction": "along +x of the bed frame",
-                "model": model(opts),
-                "dispersive": opts.dispersive,
-                "breaking_viscosity": opts.breaking_viscosity,
-            });
-            let solver = solver_for(&bed, opts);
+                    "wave_height_m": opts.height,
+                    "wave_period_s": opts.period,
+                    "tide_m": opts.tide,
+                    "duration_s": plan.duration,
+                    "frame_interval_s": opts.frame_interval,
+                    "cropped_offshore_m": f.x0 as f64 * fg.dx,
+                    "side_margin_cells": fg.ny / 4,
+                    "nested_in": "coarse",
+                    "coarse_cell_m": coarse.bed.header.dx,
+                    "fine_start_s": f.start,
+                    "edge_depth_m": f.edge_depth,
+                    "zone_offshore_cells": f.zone_offshore,
+                    // The relaxation zone is the coarse run, not this one: a viewer should start
+                    // past it.
+                    "near_field_end_m": f.zone_offshore as f64 * fg.dx,
+                    "sponge_offshore_cells": f.zone_offshore,
+                    "manning": opts.manning,
+                    "direction": "along +x of the bed frame",
+                    "model": model(opts),
+                    "dispersive": opts.dispersive,
+                    "breaking_viscosity": opts.breaking_viscosity,
+            "shallow_inside_from": opts.shallow_inside.as_ref().map(|l| l.from.display().to_string()),
+                });
+            let solver = solver_for(&bed, f.x0 as f64 * fg.dx, opts);
             let stage = Stage::new(bed, solver, &opts.out, settings, f.start, stats_from, opts)?;
             Some((stage, zone, sampler, f))
         }
@@ -1990,6 +2124,7 @@ mod tests {
             manning: 0.0,
             dispersive: true,
             breaking_viscosity: false,
+            shallow_inside: None,
             nested: false,
             threads: 1,
             background: false,
@@ -1998,7 +2133,7 @@ mod tests {
             handoff: Vec::new(),
         };
         let viscosity = |opts: &RunOptions| {
-            solver_for(&bed, opts)
+            solver_for(&bed, 0.0, opts)
                 .dispersion()
                 .expect("dispersive")
                 .breaking
@@ -2027,6 +2162,7 @@ mod tests {
             manning: 0.0,
             dispersive: false,
             breaking_viscosity: false,
+            shallow_inside: None,
             nested: false,
             threads: 1,
             background: false,
@@ -2034,7 +2170,7 @@ mod tests {
             max_wall_seconds: None,
             handoff: Vec::new(),
         };
-        let solver = solver_for(&bed, &opts);
+        let solver = solver_for(&bed, 0.0, &opts);
         let settings = serde_json::json!({"cropped_offshore_m": 100.0});
         let mut stage = Stage::new(bed, solver, &dir, settings, 0.0, 1e9, &opts).unwrap();
         stage.step(60.0).unwrap();
@@ -2049,6 +2185,159 @@ mod tests {
         stage.state.h.fill(f64::NAN);
         let err = stage.step(60.0).unwrap_err();
         assert!(matches!(err, Error::Unstable { .. }), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn plain_options() -> RunOptions {
+        RunOptions {
+            bed: PathBuf::new(),
+            out: PathBuf::new(),
+            height: 2.0,
+            period: 13.0,
+            tide: 0.0,
+            duration: None,
+            frame_interval: 5.0,
+            manning: 0.0,
+            dispersive: true,
+            breaking_viscosity: false,
+            shallow_inside: None,
+            nested: true,
+            threads: 1,
+            background: false,
+            budget_seconds: None,
+            max_wall_seconds: None,
+            handoff: Vec::new(),
+        }
+    }
+
+    /// A break line on 2 m rows, the first two rows at x = 110 m and the next at 104 m, and
+    /// nothing beyond y = 6 m.
+    fn line() -> BreakLine {
+        BreakLine {
+            points: vec![(1.0, 110.0), (3.0, 110.0), (5.0, 104.0)],
+            spacing: 2.0,
+            from: PathBuf::from("earlier"),
+        }
+    }
+
+    #[test]
+    fn a_break_line_holds_each_row_from_its_break_point_shoreward_in_the_bed_files_frame() {
+        // The fine grid of the earlier run: 2 m cells from x = 100 m, rows 2 m apart.
+        let fine = wavecore::Grid::new(8, 4, 2.0, 2.0);
+        let cells = line().shoreward(&fine, 100.0);
+        let row = |j: usize| -> String {
+            cells[j * 8..(j + 1) * 8]
+                .iter()
+                .map(|&c| if c { '#' } else { '.' })
+                .collect()
+        };
+        // Cell centres at 101, 103, ..., 115 m: held from 111, the first at or beyond 110.
+        assert_eq!(row(0), ".....###");
+        assert_eq!(row(1), ".....###");
+        assert_eq!(row(2), "..######");
+        // y = 7 m is within 1.5 rows of the last point (5 m) and takes it.
+        assert_eq!(row(3), "..######");
+        // A coarse grid's rows, 4 m apart from y = 0, sit between the fine rows and take the
+        // nearer; one that starts further out still holds from the same place.
+        let coarse = wavecore::Grid::new(6, 3, 4.0, 4.0);
+        let cells = line().shoreward(&coarse, 92.0);
+        assert_eq!(&cells[0..6], &[false, false, false, false, true, true]);
+        // y = 10 m is 5 m from the last point, more than 1.5 rows: not held at all.
+        assert!(cells[12..18].iter().all(|&c| !c));
+    }
+
+    #[test]
+    fn a_break_point_on_a_cell_centre_holds_that_cell() {
+        let grid = wavecore::Grid::new(4, 1, 2.0, 2.0);
+        let line = BreakLine {
+            points: vec![(1.0, 5.0)],
+            spacing: 2.0,
+            from: PathBuf::new(),
+        };
+        assert_eq!(line.shoreward(&grid, 0.0), vec![false, false, true, true]);
+    }
+
+    #[test]
+    fn shallow_water_inside_the_break_needs_the_dispersive_model_and_no_other_fix() {
+        let mut opts = plain_options();
+        opts.shallow_inside = Some(line());
+        assert!(validate(&opts).is_ok());
+        for change in [
+            |o: &mut RunOptions| o.dispersive = false,
+            |o: &mut RunOptions| o.breaking_viscosity = true,
+            |o: &mut RunOptions| o.handoff = vec![HandoffLine { y: 3.0, depth: 2.0 }],
+        ] {
+            let mut o = opts.clone();
+            change(&mut o);
+            assert!(validate(&o).is_err());
+        }
+    }
+
+    #[test]
+    fn the_shallow_cells_reach_the_solver_in_the_crops_own_frame() {
+        let bed = Bed {
+            header: Bed::header_for("flat", 8, 4, 2.0, 2.0),
+            elevation: vec![-3.0; 32],
+        };
+        let mut opts = plain_options();
+        opts.shallow_inside = Some(line());
+        // The same crop as the earlier run's fine grid: the solver holds what the line says,
+        // which it shows as a dispersive model that, left at rest, stays at rest either way.
+        let solver = solver_for(&bed, 100.0, &opts);
+        assert!(solver.dispersion().is_some());
+        let mut s = State::lake_at_rest(&bed.grid(), &solver.bed, 0.0);
+        solver.step(&mut s, 0.1);
+        assert!(s.max_abs_momentum(&bed.grid()) < 1e-12);
+        assert!(model(&opts).contains("plain shallow water shoreward"));
+    }
+
+    /// A run folder with only a `run.json` whose `waves` are these.
+    fn run_with(dir: &std::path::Path, waves: serde_json::Value) {
+        std::fs::create_dir_all(dir).unwrap();
+        let header = serde_json::json!({
+            "format": "wavesim-run", "version": 1, "name": "earlier",
+            "nx": 8, "ny": 3, "dx": 2.0, "dy": 2.0,
+            "bed": "bed.f32", "frames": "frames.f32", "fields": ["eta"],
+            "dtype": "float32", "layout": "row-major", "frame_count": 0, "times": [],
+            "frame": {"crs": "", "origin_easting": 0.0, "origin_northing": 0.0, "x_bearing_deg": 0.0},
+            "waves": waves,
+        });
+        std::fs::write(dir.join("run.json"), header.to_string()).unwrap();
+    }
+
+    #[test]
+    fn a_break_line_is_read_from_a_run_of_the_same_swell_without_a_fix() {
+        let dir =
+            std::env::temp_dir().join(format!("wavesim-unit-breakline-{}", std::process::id()));
+        let waves = |extra: serde_json::Value| {
+            let mut w = serde_json::json!({
+                "wave_height_m": 2.0, "wave_period_s": 13.0, "tide_m": 0.0,
+                "cropped_offshore_m": 100.0, "breaking_viscosity": false,
+                "break_line": [{"x_m": 9.0}, null, {"x_m": 5.0}],
+            });
+            for (k, v) in extra.as_object().unwrap() {
+                w[k] = v.clone();
+            }
+            w
+        };
+        let opts = plain_options();
+
+        run_with(&dir, waves(serde_json::json!({})));
+        let line = BreakLine::from_run(&dir, &opts).unwrap();
+        // Rows 0 and 2 broke, 9 m and 5 m into a crop starting 100 m into the bed file.
+        assert_eq!(line.points, vec![(1.0, 109.0), (5.0, 105.0)]);
+        assert_eq!(line.spacing, 2.0);
+
+        for bad in [
+            serde_json::json!({"wave_period_s": 14.0}),
+            serde_json::json!({"tide_m": -1.2}),
+            serde_json::json!({"breaking_viscosity": true}),
+            serde_json::json!({"shallow_inside_from": "older"}),
+            serde_json::json!({"break_line": [null, null, null]}),
+        ] {
+            run_with(&dir, waves(bad.clone()));
+            assert!(BreakLine::from_run(&dir, &opts).is_err(), "{bad}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

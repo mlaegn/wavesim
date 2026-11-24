@@ -191,6 +191,7 @@ pub fn swell(
         dispersive: true,
         // The slice's swell comes in without it, as the 2D runs it is checked against did.
         breaking_viscosity: false,
+        shallow_inside: None,
         nested: false,
         threads: 1,
         background: false,
@@ -216,7 +217,7 @@ pub fn swell(
         sigma: SIGMA_CELLS * cell,
         ramp_periods: RAMP_PERIODS,
     };
-    let solver = solver_for(&cropped, &opts)
+    let solver = solver_for(&cropped, 0.0, &opts)
         .with_wavemaker(maker)
         .with_sponge(
             Sponge::new(p.sponge_offshore, SPONGE_STRENGTH).edges(true, false, false, false),
