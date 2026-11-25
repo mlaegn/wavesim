@@ -438,6 +438,52 @@ Only if step 2 passes.
   measured ratio and say so on the sheet. Cheap and honest about it, but it fixes the numbers,
   not the physics, and a single ratio cannot be right for every reef and tide.
 
+## Correcting the sheet's surf-zone heights (planned 2026-11-25)
+
+The last fallback, taken once the model fixes had failed. The runs stay as they are; the sheet
+reducer (`tools/spot_sheet.py`) corrects the heights it shows inside the breaking zone.
+
+**A cap on `H/h`, not a single ratio.** One ratio was the plan's first idea, and its own
+objection holds: a reef whose model surf zone reads 0.8 needs less taken off than one that reads
+1.3. A saturated surf zone is depth-limited instead, its height a share of the depth, so the
+sheet caps it there: in each row's breaking zone (from its break point, or the kept break point
+of a stray row, to the shoreline) the wave height is held to at most `gamma(s) * h`, where `s` is
+the distance shoreward of the break point and `h` the still-water depth at the run's tide.
+
+- **`gamma` settles at 0.60,** Ting & Kirby's regular spilling breaker across the inner surf
+  zone (0.58 to 0.61). The runs are regular waves too; the field's 0.50 to 0.68 is for random
+  waves' `Hs`, which the paper on Surfline's cameras says makes the model's gap larger, not
+  smaller.
+- **It gets there over 5.6 break depths,** as their breaker did (break at 6.40 m in 0.196 m of
+  water, inner surf zone from 7.5 m). From the break point `gamma` falls linearly from the run's
+  own `H/h` there to 0.60, so the break point itself, its height and the map just around it are
+  untouched. Where the wave breaks at `H/h` 0.60 or less (deep breaks on Pipeline's outer reef)
+  the cap stays at 0.60 and mostly does nothing.
+- **Both constants come from the laboratory, not from the reefs:** there is nothing on the reefs
+  to fit them to, and nothing here is tuned to make a reef look right.
+- **What it changes:** the height map's values in the zone, and the moving wave's swing about
+  its mean in the same cells, by the same factor. **What it leaves alone:** everything seaward of
+  the break, the break points and their heights, the takeoffs, the zone, the near-takeoff
+  numbers, and the runs.
+- **What the sheet says:** a `surf_heights` entry at the top of the sheet naming the cap and its
+  source, and the preview's legend says the heights inside the break are capped, not modelled.
+  (gogo's own legend is gogo's to change, after this.) The preview's stale "breaks on most
+  waves" goes too.
+
+**Checks, fixed before the first sheet is made with it:**
+
+1. **Unit tests:** cells seaward of a row's break point and outside every zone keep their height
+   exactly; the break point's own cell is unchanged; the cap reaches 0.60 at 5.6 break depths
+   and holds there; a row whose wave is already under the cap is unchanged.
+2. **The Coxos sheet rebuilt both ways** from the same runs: everything but the height maps,
+   the moving waves and the new entry is identical.
+3. **The tide response,** the per-cell slope of height against tide between the mid and low
+   runs in 1 to 3 m of water (the 2026-11-09 check, 0.78 to 0.81 before): it must come out
+   within the field's 0.50 to 0.68. This is not built in: cells change by different amounts at
+   the two tides, and the break moves with the tide.
+4. **The map, for Max:** the corrected Coxos sheet beside the old one, to look at whether the
+   white water inside looks the size he knows.
+
 ## Not in this plan
 
 - Random waves. The runs are monochromatic, so the comparison is with the laboratory's regular
