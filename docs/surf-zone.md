@@ -508,7 +508,13 @@ the distance shoreward of the break point and `h` the still-water depth at the r
 **What it means.** The sheets now show broken waves at the laboratory's share of the depth instead
 of about the depth itself, and say so. It is a correction, not physics: the runs and their files
 are unchanged, and any number read from a run's statistics inside the break is still the
-model's. The map is for Max to judge against what he knows of the white water at Coxos.
+model's.
+
+**Max's look (2026-11-25).** Along the takeoff's row at 300°, low tide, the map gives the white
+water halfway in (about 50 m from the takeoff, 2.5 m deep) as about 1.5 m capped against 2.6 m
+before, and about 0.9 m against 1.8 m by the rocks. He judged the capped version the closer of
+the two to what he knows of Coxos ("probably the new version with 1.5 m fits better"). One
+person's memory of the spot, not a measurement, but the only check on a reef there is.
 
 ## Not in this plan
 
