@@ -27,7 +27,10 @@ rows to trust. For each run the sheet gives, in latitude and longitude:
   height, smoothed over the wet cells (sigma HEIGHT_SMOOTH_M) so that the stripes the swell
   reflected off the rock lays over the incoming one, half a wavelength apart, do not read as
   peaks, and resampled onto a latitude-longitude grid of about one cell, as an 8-bit grey PNG
-  (0 = no data; v = 1 + round(ratio / HEIGHT_TOP * 254)) that the page colours itself.
+  (0 = no data; v = 1 + round(ratio / HEIGHT_TOP * 254)) that the page colours itself. Inside the
+  breaking zone it is capped, not modelled: the model's broken waves stay about as tall as the
+  water is deep, so there the height is held under a share of the depth falling to SURF_HD
+  (`surf_cap`, docs/surf-zone.md), and the moving wave's swing with it.
 
 A break point more than STRAY_M seaward or shoreward of the median of its neighbours (STRAY_ROWS
 either side) is a misreading of a single row on the 15 m bed, and is left out. So is one where
@@ -60,6 +63,12 @@ G = 9.81
 RIDE_M = 150.0  # how far along the shore from the takeoff the numbers are read
 STRAY_M, STRAY_ROWS = 40.0, 10  # a break point this far off its neighbours' median is dropped
 STRAY_HD = 0.4  # ... and one where the wave is under this share of the depth
+# The model's broken waves stay about as tall as the water is deep (docs/surf-zone.md), so inside
+# each row's breaking zone the height map and the moving wave are capped at gamma * depth, gamma
+# falling from the run's own H/h at the break point to SURF_HD over SURF_TRANSITION break depths:
+# Ting & Kirby's regular spilling breaker, 0.58-0.61 across its inner surf zone, which began 1.1 m
+# (5.6 break depths) shoreward of its break at 6.40 m in 0.196 m of water.
+SURF_HD, SURF_TRANSITION = 0.60, 5.6
 HEIGHT_TOP = 3.0  # the height map's grey levels span 0 to this many times the offshore height
 HEIGHT_SMOOTH_M = 15.0  # Gaussian sigma: the swell reflected off the rock stripes the raw height
 LOOP_FRAMES, LOOP_PIXEL_M, LOOP_HARMONICS = 24, 4.0, 6  # the moving wave: frames per period, pixel, most harmonics
@@ -246,8 +255,9 @@ def read_run(run: dict, trust_y: tuple[float, float], area=None, loop_png: Path 
     rows_ok = [r for r in rows if not r["stray"]]
     ts = median_filter(np.array([r["t"] for r in rows_ok]), size=max(3, int(30 / dy) | 1), mode="nearest")
     peaks = [p for p in takeoffs(rows_ok, ts, dy) if rows_ok[p["k"]]["in_area"]] if rows_ok else []
-    shared = common(run, rows, frame, j0, j1, area)
-    shared["loop"] = wave_loop(run["dir"], run, frame, j0, j1, area, loop_png) if loop_png else None
+    cap = surf_cap(run, rows)
+    shared = common(run, rows, frame, j0, j1, area, cap)
+    shared["loop"] = wave_loop(run["dir"], run, frame, j0, j1, area, loop_png, cap) if loop_png else None
     if not peaks:
         return {"tide_m": tide, "takeoff": None, "takeoffs": [], "near_takeoff": None, "_rows": rows, **shared}
     k0 = peaks[0]["k"]
@@ -314,9 +324,40 @@ def zone_mask(run: dict, rows: list) -> np.ndarray:
     return mask
 
 
-def common(run: dict, rows: list, frame: Frame, j0: int, j1: int, area=None) -> dict:
+def surf_cap(run: dict, rows: list) -> np.ndarray:
+    """The factor each cell's wave height is multiplied by on the sheet: 1 outside the breaking
+    zone, and inside it (each row of `rows` from its break point, or a stray row's kept one, to
+    the shoreline, as `zone_mask`) as much as keeps the height under gamma(s) * depth. gamma falls
+    linearly from the run's own H/h at the zone's first cell to SURF_HD over SURF_TRANSITION times
+    the depth there, and stays SURF_HD after; it never starts under SURF_HD."""
+    h = run["header"]
+    nx, dx, tide = h["nx"], h["dx"], h["waves"]["tide_m"]
+    bed, height = run["bed"], run["height"]
+    factor = np.ones(bed.shape)
+    for r in rows:
+        x = r["x_kept"] if r["stray"] else r["x"]
+        if x is None:
+            continue
+        j = r["j"]
+        i0 = min(max(int(round(x / dx - 0.5)), 0), nx - 1)
+        dry = np.nonzero(bed[j, i0:] >= tide)[0]
+        shore = i0 + int(dry[0]) if dry.size else nx
+        if shore <= i0:
+            continue
+        depth = tide - bed[j, i0:shore]
+        d0 = depth[0]
+        g0 = max(height[j, i0] / d0, SURF_HD)
+        s = np.arange(shore - i0) * dx
+        gamma = g0 + (SURF_HD - g0) * np.minimum(s / (SURF_TRANSITION * d0), 1.0)
+        cap = gamma * depth
+        wave = height[j, i0:shore]
+        factor[j, i0:shore] = np.where(wave > cap, cap / np.maximum(wave, 1e-12), 1.0)
+    return factor
+
+
+def common(run: dict, rows: list, frame: Frame, j0: int, j1: int, area=None, cap=None) -> dict:
     """What every run's entry carries, takeoff or not: the zone and the break points, inside the
-    spot's area."""
+    spot's area, and the height map, capped inside the zone by `cap` (`surf_cap`)."""
     share = zone_mask(run, rows)
     if area:
         h = run["header"]
@@ -330,7 +371,7 @@ def common(run: dict, rows: list, frame: Frame, j0: int, j1: int, area=None) -> 
             for r in kept
         ],
         "zone": zone_polygons(share, slice(j0, j1), 0.5, run["header"]["dx"], frame),
-        "height_map": height_map(run, frame, j0, j1, area),
+        "height_map": height_map(run, frame, j0, j1, area, cap),
     }
 
 
@@ -384,9 +425,10 @@ def area_grid(run: dict, frame: Frame, j0: int, j1: int, area=None, pixel_m: flo
     return {"bounds": bounds, "i": i, "j": j, "ok": ok, "geom": geom, "shape": (rows, cols)}
 
 
-def height_map(run: dict, frame: Frame, j0: int, j1: int, area=None) -> dict | None:
+def height_map(run: dict, frame: Frame, j0: int, j1: int, area=None, cap=None) -> dict | None:
     """The wave height over the offshore height on a latitude-longitude grid of about one cell,
     over the area (or the trusted rows), wet cells only: {bounds: [[s, w], [n, e]], png: base64}.
+    With `cap` (`surf_cap`), each cell's height is multiplied by it before smoothing.
     """
     g = area_grid(run, frame, j0, j1, area)
     if g is None:
@@ -395,7 +437,8 @@ def height_map(run: dict, frame: Frame, j0: int, j1: int, area=None) -> dict | N
     tide, h0 = h["waves"]["tide_m"], h["waves"]["wave_height_m"]
     wet_cells = (run["bed"] < tide).astype("float64")
     s = HEIGHT_SMOOTH_M / h["dx"]
-    smooth = gaussian_filter(run["height"] * wet_cells, s) / np.maximum(gaussian_filter(wet_cells, s), 1e-9)
+    height = run["height"] if cap is None else run["height"] * cap
+    smooth = gaussian_filter(height * wet_cells, s) / np.maximum(gaussian_filter(wet_cells, s), 1e-9)
     ratio = map_coordinates(smooth, [g["j"], g["i"]], order=1, mode="nearest") / h0
     ok = g["ok"] & np.isfinite(ratio)
     grey = np.where(ok, 1 + np.round(np.clip(ratio, 0, HEIGHT_TOP) / HEIGHT_TOP * 254), 0)
@@ -428,11 +471,13 @@ def at_phase(coef: np.ndarray, k: int, phase: float) -> np.ndarray:
     return out
 
 
-def wave_loop(run_dir: Path, run: dict, frame: Frame, j0: int, j1: int, area, out_png: Path) -> dict | None:
+def wave_loop(run_dir: Path, run: dict, frame: Frame, j0: int, j1: int, area, out_png: Path,
+              cap=None) -> dict | None:
     """One period of the settled sea as LOOP_FRAMES frames, rebuilt from the saved frames by
     fitting the mean and the first harmonics of the swell's period at every cell, resampled
     onto the area's grid, faded over LOOP_FADE_M towards the edges in open water, and written
-    as one grey PNG, the frames stacked top to bottom. Each
+    as one grey PNG, the frames stacked top to bottom. With `cap` (`surf_cap`), the surface's
+    swing about its mean is multiplied by it, cell by cell. Each
     pixel: 0 = no data; the surface level quantised over +-LOOP_ETA_TOP x the swell height to
     1..127; plus 128 where it is breaking."""
     h = run["header"]
@@ -459,7 +504,11 @@ def wave_loop(run_dir: Path, run: dict, frame: Frame, j0: int, j1: int, area, ou
     tiles = []
     for n in range(LOOP_FRAMES):
         ph = n / LOOP_FRAMES
-        e = map_coordinates(at_phase(ce, k, ph).reshape(ny, nx), [g["j"], g["i"]], order=1, mode="nearest") * fade
+        field = at_phase(ce, k, ph).reshape(ny, nx)
+        if cap is not None:
+            mean = ce[0].reshape(ny, nx)
+            field = mean + cap * (field - mean)
+        e = map_coordinates(field, [g["j"], g["i"]], order=1, mode="nearest") * fade
         b = (map_coordinates(at_phase(cb, k, ph).reshape(ny, nx), [g["j"], g["i"]], order=1, mode="nearest") > 0.5) & (fade > 0.5)
         level = 1 + np.round((np.clip(e, -top, top) + top) / (2 * top) * 126)
         tiles.append(np.where(g["ok"], level + 128 * b, 0))
@@ -600,6 +649,14 @@ def main(argv=None) -> int:
         "note": "model, not observation",
         "seabed": {"source": spot.get("source"), "cell_m": spot.get("cell_m"), "attribution": spot.get("attribution")},
         "zone": "each row from its break point to the shoreline",
+        "surf_heights": {
+            "capped": True,
+            "h_over_depth": SURF_HD,
+            "over_break_depths": SURF_TRANSITION,
+            "source": "Ting & Kirby (1994), spilling breaker, inner surf zone",
+            "why": "the model's broken waves stay about as tall as the water is deep; inside each "
+            "breaking zone the height map and the moving wave are capped, not modelled",
+        },
         "trust_y_m": list(trust),
         "area": area,
         "generated": datetime.date.today().isoformat(),

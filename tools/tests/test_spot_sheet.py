@@ -83,6 +83,56 @@ def test_the_zone_runs_from_each_break_point_to_the_shore():
     assert not zone[:, shore:].any()
 
 
+def beach_run(height_over_depth: float, tide: float = 0.0):
+    """A beach rising 1 in 30 from 6 m deep at x = 0 on 1 m cells, four rows, whose wave
+    height is `height_over_depth` times the depth everywhere wet, and 2.5 m seaward of x = 60 m
+    whatever the depth; a break point at x = 120.5 m, 2 m deep."""
+    nx, ny, dx = 200, 4, 1.0
+    x = (np.arange(nx) + 0.5) * dx
+    bed = np.tile(-6.0 + x / 30.0, (ny, 1))
+    depth = np.maximum(tide - bed, 0.0)
+    height = np.where(x < 60.0, 2.5, height_over_depth * depth)
+    run = {"header": {"nx": nx, "dx": dx, "waves": {"tide_m": tide}}, "bed": bed, "height": height}
+    rows = [{"j": j, "x": 120.5, "stray": False} for j in range(ny)]
+    return run, rows, x, depth
+
+
+def test_the_surf_cap_falls_from_the_break_to_the_laboratorys_share_of_the_depth():
+    run, rows, _, depth = beach_run(1.0)
+    cap = spot_sheet.surf_cap(run, rows)
+    capped = run["height"] * cap
+    i0 = 120
+    d0 = depth[0, i0]
+    assert d0 == pytest.approx(2.0, abs=0.02)
+    # Seaward of the break, and the break point's own cell: exactly as the run had it.
+    assert np.array_equal(cap[:, :i0 + 1], np.ones((4, i0 + 1)))
+    # It settles at SURF_HD 5.6 break depths in and holds there, to the shore.
+    settled = i0 + int(math.ceil(spot_sheet.SURF_TRANSITION * d0))
+    shore = int(np.nonzero(depth[0] == 0)[0][0])
+    ratio = capped[0, settled:shore] / depth[0, settled:shore]
+    assert np.allclose(ratio, spot_sheet.SURF_HD)
+    # On the way it falls steadily from the break's own 1.0.
+    between = capped[0, i0:settled] / depth[0, i0:settled]
+    assert between[0] == pytest.approx(1.0) and np.all(np.diff(between) < 0)
+    # Dry land and the cells past the shoreline are left alone.
+    assert np.all(cap[:, shore:] == 1.0)
+
+
+def test_a_surf_zone_already_under_the_cap_is_left_alone():
+    run, rows, _, _ = beach_run(0.5)
+    assert np.array_equal(spot_sheet.surf_cap(run, rows), np.ones(run["bed"].shape))
+
+
+def test_a_stray_row_is_capped_from_its_kept_break_point_and_a_row_without_one_not_at_all():
+    run, rows, _, _ = beach_run(1.0)
+    rows[1].update(stray=True, x=30.0, x_kept=120.5)
+    rows[2].update(stray=True, x=30.0, x_kept=None)
+    del rows[3]
+    cap = spot_sheet.surf_cap(run, rows)
+    assert np.array_equal(cap[1], cap[0])
+    assert np.array_equal(cap[2], np.ones(200)) and np.array_equal(cap[3], np.ones(200))
+
+
 def test_a_long_run_of_stray_rows_does_not_drag_the_zone_out_to_sea():
     # 60 rows breaking at x = 120 m, but rows 20-49 have their tallest wave far out in deep water
     # (the swell never peaks inshore there). Their neighbours' plain median is stray too, so the
