@@ -62,9 +62,15 @@ enum Command {
         #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
         dispersive: bool,
         /// Follow breaking fronts and give them an eddy viscosity, so broken waves lose height
-        /// on the way to the shore. Experimental: not yet tried on a reef (docs/surf-zone.md)
+        /// on the way to the shore. Experimental: at Coxos in 2D it breaks the reef
+        /// early (docs/surf-zone.md)
         #[arg(long)]
         breaking_viscosity: bool,
+        /// Plain shallow water shoreward of the break line of an earlier run (its folder), which
+        /// must have had the same bed, swell and tide without this or the breaking viscosity, so
+        /// broken waves dissipate as shocks. Experimental (docs/surf-zone.md)
+        #[arg(long, value_name = "RUN")]
+        shallow_inside: Option<PathBuf>,
         /// Run everything on the bed's own cells, on one grid, instead of carrying the swell
         /// across the shelf on cells twice as large and running only the reef on the bed's cells
         #[arg(long)]
@@ -233,6 +239,7 @@ fn real_main() -> Result<(), Error> {
             manning,
             dispersive,
             breaking_viscosity,
+            shallow_inside,
             single,
             threads,
             max_minutes,
@@ -258,6 +265,7 @@ fn real_main() -> Result<(), Error> {
                 manning,
                 dispersive,
                 breaking_viscosity,
+                shallow_inside: None,
                 nested: !single,
                 threads,
                 background,
@@ -271,6 +279,10 @@ fn real_main() -> Result<(), Error> {
                     })
                     .collect(),
             };
+            let mut opts = opts;
+            if let Some(dir) = &shallow_inside {
+                opts.shallow_inside = Some(wavesim::BreakLine::from_run(dir, &opts)?);
+            }
             if let Ok(bed) = Bed::read(&opts.bed)
                 && let Ok(layout) = layout(&bed, &opts)
             {

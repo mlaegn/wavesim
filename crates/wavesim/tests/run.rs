@@ -139,6 +139,7 @@ fn options(dir: &std::path::Path, bed: PathBuf) -> RunOptions {
         manning: 0.0,
         dispersive: false,
         breaking_viscosity: false,
+        shallow_inside: None,
         nested: false,
         threads: 1,
         background: false,

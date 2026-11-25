@@ -1,21 +1,25 @@
-//! Step 2 of docs/surf-zone.md: single cross-shore lines of Pipeline and Coxos, each run with and
-//! without the breaking viscosity, and a table of what the viscosity changes.
+//! Step 2 of docs/surf-zone.md and its fallback: single cross-shore lines of Pipeline and Coxos,
+//! each run without a surf-zone fix and with one, and a table of what the fix changes. The fix is
+//! the breaking viscosity, or with `--fix shallow` plain shallow water shoreward of the break
+//! line the run without it found.
 //!
 //!     cargo run --release --example surf_lines                      # every case
 //!     cargo run --release --example surf_lines -- coxos_481         # cases whose name has this
 //!     cargo run --release --example surf_lines -- --out <dir> ...   # results elsewhere than out/
 //!     cargo run --release --example surf_lines -- --cell 1.5 ...    # the Pipeline lines on finer cells
+//!     cargo run --release --example surf_lines -- --fix shallow ... # shallow water inside the break
 //!
 //! Each case is a 2D run's machinery on four rows with walls at the sides, through
 //! `wavesim::run` on one grid: the same planning, wave-maker, statistics and break line. Runs go
-//! to `<out>/surf_lines/<case>/{plain,viscous}`, the table to stdout and `summary.json`. Run it
-//! on one core (`RAYON_NUM_THREADS=1`), under `taskpolicy -b`.
+//! to `<out>/surf_lines/<case>/{plain,viscous,shallow}`, the table to stdout and `summary.json`
+//! (`summary_shallow.json` with `--fix shallow`). Run it on one core (`RAYON_NUM_THREADS=1`),
+//! under `taskpolicy -b`.
 
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 use waveio::{Bed, Run};
-use wavesim::{RunOptions, run};
+use wavesim::{BreakLine, RunOptions, run};
 
 /// Rows of a line's bed: a middle row is read, the walls keep them all alike.
 const ROWS: usize = 4;
@@ -32,6 +36,22 @@ const DEPTH_SHARE: f64 = 0.10;
 const HEIGHT_SHARE: f64 = 0.10;
 const SURF_RANGE: (f64, f64) = (0.55, 0.75);
 const SURF_MIN_CELLS: usize = 5;
+
+/// The surf-zone fix a case is run with, beside the run without one.
+#[derive(Clone, Copy, PartialEq)]
+enum Fix {
+    Viscosity,
+    Shallow,
+}
+
+impl Fix {
+    fn folder(self) -> &'static str {
+        match self {
+            Fix::Viscosity => "viscous",
+            Fix::Shallow => "shallow",
+        }
+    }
+}
 
 struct Case {
     name: String,
@@ -68,6 +88,11 @@ fn main() {
     };
     let out_root = value("--out").map_or(root.join("out"), PathBuf::from);
     let cell: f64 = value("--cell").map_or(CELL, |c| c.parse().expect("--cell in metres"));
+    let fix = match value("--fix").as_deref() {
+        None | Some("viscosity") => Fix::Viscosity,
+        Some("shallow") => Fix::Shallow,
+        Some(other) => panic!("--fix is viscosity or shallow, not {other}"),
+    };
     // The 3 m runs in surf_lines/, others beside them, so neither overwrites the other.
     let out = if cell == CELL {
         out_root.join("surf_lines")
@@ -123,7 +148,7 @@ fn main() {
         let mut total = 0.0;
         for case in &cases {
             let bed = line_bed(case);
-            let opts = options(case, Path::new(""), Path::new(""), false);
+            let opts = options(case, Path::new(""), Path::new(""), None);
             let layout = wavesim::layout(&bed, &opts).expect("a run that plans");
             let seconds = wavesim::estimate_seconds(&bed, &opts, &layout);
             total += 2.0 * seconds;
@@ -154,15 +179,23 @@ fn main() {
         line_bed(case)
             .write(&bed_path)
             .expect("write the line's bed");
-        let plain = run_case(case, &bed_path, &dir.join("plain"), false);
-        let viscous = run_case(case, &bed_path, &dir.join("viscous"), true);
-        let (row, verdict) = compare(&case.name, plain.as_ref(), viscous.as_ref());
+        let plain_dir = dir.join("plain");
+        let plain = run_case(case, &bed_path, &plain_dir, None);
+        let fixed = plain.as_ref().and_then(|_| {
+            let fixed_dir = dir.join(fix.folder());
+            run_case(case, &bed_path, &fixed_dir, Some((fix, &plain_dir)))
+        });
+        let (row, verdict) = compare(&case.name, plain.as_ref(), fixed.as_ref());
         println!("{row}");
-        summary.push(json!({ "case": case.name, "verdict": verdict, "plain": outcome_json(plain.as_ref()), "viscous": outcome_json(viscous.as_ref()) }));
+        summary.push(json!({ "case": case.name, "verdict": verdict, "plain": outcome_json(plain.as_ref()), fix.folder(): outcome_json(fixed.as_ref()) }));
     }
     std::fs::create_dir_all(&out).expect("the results directory");
+    let file = match fix {
+        Fix::Viscosity => "summary.json",
+        Fix::Shallow => "summary_shallow.json",
+    };
     std::fs::write(
-        out.join("summary.json"),
+        out.join(file),
         serde_json::to_string_pretty(&summary).unwrap() + "\n",
     )
     .expect("write summary.json");
@@ -210,9 +243,10 @@ fn line_bed(case: &Case) -> Bed {
 }
 
 /// A case's run: dispersive, one grid, planning its own length, frames every 10 s (the
-/// statistics, not the frames, are what is read).
-fn options(case: &Case, bed: &Path, out: &Path, viscosity: bool) -> RunOptions {
-    RunOptions {
+/// statistics, not the frames, are what is read). A fix comes with the run without it, whose
+/// break line [`Fix::Shallow`] takes.
+fn options(case: &Case, bed: &Path, out: &Path, fix: Option<(Fix, &Path)>) -> RunOptions {
+    let mut opts = RunOptions {
         bed: bed.to_path_buf(),
         out: out.to_path_buf(),
         height: case.height,
@@ -222,25 +256,31 @@ fn options(case: &Case, bed: &Path, out: &Path, viscosity: bool) -> RunOptions {
         frame_interval: 10.0,
         manning: 0.0,
         dispersive: true,
-        breaking_viscosity: viscosity,
+        breaking_viscosity: fix.is_some_and(|(f, _)| f == Fix::Viscosity),
+        shallow_inside: None,
         nested: false,
         threads: 1,
         background: true,
         budget_seconds: None,
         max_wall_seconds: Some(MAX_SECONDS),
         handoff: Vec::new(),
+    };
+    if let Some((Fix::Shallow, plain)) = fix {
+        let line = BreakLine::from_run(plain, &opts).expect("the plain run's break line");
+        opts.shallow_inside = Some(line);
     }
+    opts
 }
 
-fn run_case(case: &Case, bed: &Path, out: &Path, viscosity: bool) -> Option<Outcome> {
-    let opts = options(case, bed, out, viscosity);
+fn run_case(case: &Case, bed: &Path, out: &Path, fix: Option<(Fix, &Path)>) -> Option<Outcome> {
+    let opts = options(case, bed, out, fix);
     let summary = match run(&opts, |_| {}) {
         Ok(s) => s,
         Err(e) => {
             eprintln!(
                 "{} ({}): {e}",
                 case.name,
-                if viscosity { "with" } else { "without" }
+                fix.map_or("without", |(f, _)| f.folder())
             );
             return None;
         }
@@ -292,12 +332,8 @@ fn run_case(case: &Case, bed: &Path, out: &Path, viscosity: bool) -> Option<Outc
 }
 
 /// A table row, and the verdict: "pass", "break moved" or "surf zone out of range".
-fn compare(
-    name: &str,
-    plain: Option<&Outcome>,
-    viscous: Option<&Outcome>,
-) -> (String, &'static str) {
-    let (Some(p), Some(v)) = (plain, viscous) else {
+fn compare(name: &str, plain: Option<&Outcome>, fixed: Option<&Outcome>) -> (String, &'static str) {
+    let (Some(p), Some(v)) = (plain, fixed) else {
         return (
             format!("| {name} | failed | | | | | | | failed | |"),
             "failed",

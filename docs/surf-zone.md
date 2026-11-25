@@ -6,8 +6,10 @@ changes the surf zone. On 2 m and 1.5 m cells it works, `H/h` about 1.0 down to 
 with the break unmoved: the cause is the grid (results under step 2). But Coxos in 2D on 2 m
 cells, with and without the fix, shows the fix breaking the reef early: breaking starts 66 m
 further out, in 6 m of water instead of 3.8, and the surf zone comes out at `H/h` 0.48, too
-low. So the fix stays off; steps 3 and 4 do not go ahead as planned, and the fallbacks are
-what is left. It follows the 2026-11-17 audit, which named this the model's main accuracy gap
+low. So the fix stays off; steps 3 and 4 do not go ahead as planned. The fallback tried next,
+plain shallow water shoreward of a known break line (2026-11-24), passes the laboratory beach but
+fails on the reef lines: the sheet's break line is the tallest wave, which on gentle reefs is
+well seaward of where the wave breaks. Correcting the sheet's heights is what is left. It follows the 2026-11-17 audit, which named this the model's main accuracy gap
 once its bugs were fixed.
 
 ## In short
@@ -273,6 +275,120 @@ Medians over the rows:
 the reef breaking early. Option 2 above falls with it. The fix stays off, and the fallbacks
 below are what is left; the first of them, two passes, can now start from the 2 m run's own
 break line.
+
+## The fallback tried next: shallow water inside the break (planned 2026-11-24)
+
+Of the three fallbacks below, plain shallow water inside the surf zone came first:
+
+- **It should work on the 3 m cells the sheets already use.** A shock takes the height out of
+  a broken wave by an amount the jump across it sets, not the cells, while the viscosity
+  needed its fronts resolved, on 2 m cells and at 2.5 times the work.
+- **Nothing to tune,** and on the laboratory beach plain shallow water already gives `H/h`
+  0.65 to 0.70 inside.
+- **It cannot move the break.** It acts only shoreward of a break line already known, so
+  the early break that sank the viscosity at Coxos cannot happen; only what the surf zone
+  sends back seaward (reflection, setup) can reach the break.
+- **The sheets' runs without it exist,** and their break lines with them; on Coxos the 2 m and
+  3 m lines agree.
+
+Viscosity only shoreward of the break needs 2 m cells and did badly in the one form tried on the
+laboratory beach; correcting the sheet stays the fallback if this fails.
+
+**How it works.** `wavesim run --shallow-inside <run>` takes each row's break point from an
+earlier run of the same bed, swell and tide without a fix (its `break_line`, the tallest wave
+before the shore) and holds every cell from there to the shore to plain shallow water, on both
+grids of a nested run (`Solver::with_shallow_cells`). There the breaking switch reads 0: no
+dispersive terms, the MC limiter, a broken wave goes on as a shock. Seaward the run is the
+dispersive one it was. The breaking statistics still read the surface, so `break_fraction`
+compares with runs without it. It refuses the viscosity, plain shallow water and hand-offs.
+
+**Checks, in order, each only if the one before passes. Bounds fixed on 2026-11-24, before the
+first run:**
+
+1. **The laboratory beach** (slow tests in `tests/lab.rs`, three flume runs each: one to set the
+   wave, one without, one with):
+   - the spilling breaker under the surf-zone test's own bounds: model over laboratory within
+     10% seaward of x = 5.5 m and within 15% over the inner surf zone by the median, no
+     inner-surf station off by more than 30%;
+   - both breakers' break point within 0.2 m (four cells) of the run without, and so within the
+     0.5 m of the laboratory's that the break-point tests allow.
+2. **The reef lines on 3 m cells:** the twelve step 2 cases with `--fix shallow`, each run
+   without it first for its break line, under step 2's bounds and pass rule unchanged: the break
+   point within 10 m, its depth within 10% and height within 10% in every case; inner-surf `H/h`
+   in 0.55 to 0.75 in at least three quarters of the cases that have one. Pipeline 511.5 at
+   14 s, where the wave re-forms over the deeper reef, is reported apart: a re-formed wave
+   inside the line is held to shallow water too, which steepens it early. About 15 minutes on
+   one efficiency core.
+3. **The two Pipeline 16 s lines on 2 m cells,** the same bounds, and inner-surf `H/h` within
+   0.08 of the 3 m result, the change the cells alone make without a fix: this is what says
+   the fix does not need fine cells. About 10 minutes on one core.
+4. **Only then, Coxos in 2D on 3 m cells,** mid tide, from `out/coxos_2m13s_300`'s break line:
+   about half an hour on four efficiency-core threads, with Max's go-ahead. Checked row by row as
+   the 2 m runs were (break line, where breaking starts, `H/h` by depth band).
+
+### Results (2026-11-24): the laboratory passes, the reef lines do not
+
+**1. The laboratory beach passes.** Both slow tests, 7.7 minutes on the efficiency cores after a
+5-minute build, nominal throughout:
+
+| | Without a fix | Viscosity | Shallow water inside | Bound |
+|---|---|---|---|---|
+| Spilling, inner surf zone, model over lab (median) | 1.66 | 1.04 | **1.13** | within 15% |
+| Spilling, worst inner-surf station | | 11% | **24%** | under 30% |
+| Spilling, seaward of 5.5 m (median) | | | **1.04** | within 10% |
+| Spilling, break point | 6.66 m | | **6.61 m** | within 0.2 m of without |
+| Plunging, break point (lab 7.795 m) | 7.48 m | 0.86 m early | **7.48 m** | within 0.2 m of without |
+
+Inside, the model's `H/d` comes out 0.65 to 0.79 against the laboratory's 0.58 to 0.61: a little
+taller than with the viscosity, and the plunging wave keeps its break.
+
+**2. The reef lines on 3 m cells do not.** 24 runs, 18 minutes on one efficiency core, nominal
+throughout (`out/surf_lines/<case>/shallow`, `summary_shallow.json`):
+
+| Case | Break, without → with | Inner surf `H/h`, without → with | Verdict |
+|---|---|---|---|
+| Pipeline 361.5, 14 s | 1342 → 1336 m, 8.4 → 8.3 m deep, height −19% | 0.63 → 0.37 | break moved |
+| Pipeline 361.5, 16 s | 1474 → 1468 m, 8.3 m deep, height −15% | 0.66 → 0.42 | break moved |
+| Pipeline 421.5, 14 s | 1424 → 1420 m, 6.8 → 7.0 m deep, −7% | 0.80 → 0.49 | surf zone out |
+| Pipeline 421.5, 16 s | 1646 → 1630 m, 4.4 → 5.0 m deep, −5% | 0.95 → 0.81 | break moved |
+| Pipeline 511.5, 14 s (re-forms) | 1028 → 1012 m, 10.8 → 9.5 m deep, −14% | 0.36 → 0.32 | break moved |
+| Pipeline 511.5, 16 s | 1654 → 1652 m, 4.0 → 4.3 m deep, +3% | 0.96 → 0.76 | surf zone out |
+| Coxos 481.5, mid | 940 → 932 m, 3.4 → 3.9 m deep, −3% | 1.30 → 0.89 | break moved |
+| Coxos 481.5, low | 962 → 952 m, 3.6 → 4.2 m deep, −3% | 1.01 → 0.81 | break moved |
+| Coxos 601.5, mid | 898 → 896 m, 4.8 → 5.1 m deep, −5% | 0.99 → 0.85 | surf zone out |
+| Coxos 601.5, low | 970 → 926 m, 3.9 → 5.4 m deep, −2% | 1.19 → 0.77 | break moved |
+| Coxos 721.5, mid | 898 m, 1.8 m deep, −7% | none | pass |
+| Coxos 721.5, low | 962 → 958 m, 4.9 → 5.0 m deep, 0% | 0.79 → 0.69 | pass |
+
+The break moved past its bounds in 7 of the 12 cases, and the inner surf zone came into range in
+1 of the 10 that have one and do not re-form. By the rule fixed beforehand that is a fail, so
+steps 3 (2 m lines) and 4 (Coxos in 2D) did not run.
+
+**Why.** Not the shallow water as such, which does take the height out (`H/h` fell in every case),
+but where it starts:
+
+- **The break line is not always where the wave breaks.** It is each row's tallest wave before
+  the shore. On Pipeline 361.5 and 421.5 at 14 s that is in 7 to 8 m of water, 150 to 240 m
+  seaward of where the switch first reads breaking (1580 and 1574 m, in about 2 m). Held from
+  there, waves that have not broken steepen into shocks over 200 m and lose too much: 0.37 to
+  0.49. On the lab beach the tallest wave and the break coincide, which is why it passed there.
+- **Holding the peak's own cell flattens the peak.** In the run without, the wave still grows
+  into that cell; in shallow water it starts losing height there. So the height at the break
+  point falls (by 19% at Pipeline 361.5) and the tallest point steps one to five cells seaward:
+  most of the "break moved" verdicts, by 3 to 15 m. Where breaking starts moved little in most
+  cases, but in three of the Pipeline ones (361.5 both periods, 421.5 at 14 s) it moved 38 to
+  78 m shoreward, the waves having been flattened before they could break.
+- **On Coxos's short insides** (8 to 23 cells from the break to 1 m of water) `H/h` falls by
+  0.1 to 0.4 but mostly stays above range, 0.77 to 0.89.
+
+**What it means.** Shallow water held from the sheet's break line overdoes long, gentle surf zones
+and underdoes short ones, and it moves the break point it was meant to leave alone. A start
+further in (where the switch first reads breaking, or some distance shoreward of the tallest
+wave) would answer the first two, but on 3 m cells the switch at Coxos reads breaking only near
+the shore (0.6 to 1.7 m of water), so it would hardly act there, and choosing the distance is the
+tuning these bounds were set to avoid. `--shallow-inside` stays in, off unless asked for, like
+`--breaking-viscosity`. Of the fallbacks, correcting the sheet's surf-zone heights is what is
+left without new physics.
 
 ## Step 3: Coxos in 2D (heavy, one run at a time, each approved)
 

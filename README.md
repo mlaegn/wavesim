@@ -57,7 +57,7 @@ Design rules:
 | [docs/3d-box.md](docs/3d-box.md) | A scope, parked after V1 and a first 3D strip: a 3D Basilisk box around the break, to see whether the peel makes a bigger tube. A made-up 20° peel says no: its tube is 9% smaller than straight |
 | [docs/spot-sheets.md](docs/spot-sheets.md) | A plan, not built: per-spot sheets of how the wave changes with the swell's angle and the tide, shown on gogo's spot pages |
 | [docs/forecast-tables.md](docs/forecast-tables.md) | A scope, parked: per-spot tables from offshore swell to the wave at the spot, for gogo's score |
-| [docs/surf-zone.md](docs/surf-zone.md) | Broken waves stay too tall on their way to the shore. The eddy-viscosity fix, tried on reef lines (2026-11-23), leaves the break point alone; it brings the surf zone down on 2 m cells or finer but hardly on the 2D runs' 3 m. In 2D on 2 m cells (2026-11-24) it breaks Coxos early, 66 m further out, so it stays off and the fallbacks are what is left |
+| [docs/surf-zone.md](docs/surf-zone.md) | Broken waves stay too tall on their way to the shore. The eddy-viscosity fix, tried on reef lines (2026-11-23), leaves the break point alone; it brings the surf zone down on 2 m cells or finer but hardly on the 2D runs' 3 m. In 2D on 2 m cells (2026-11-24) it breaks Coxos early, 66 m further out, so it stays off. Shallow water shoreward of a known break line (2026-11-24) passes the laboratory beach but not the reef lines, where the tallest wave is often well seaward of the break; correcting the sheet's heights is what is left |
 
 ## Architecture
 
@@ -165,7 +165,7 @@ Send a swell over it:
 cargo run --release -p wavesim -- run data/pipeline.json --height 2.5 --period 14
 ```
 
-That writes `out/pipeline/` (both `data/` and `out/` are git-ignored): the reef on the bed's own cells, and in `out/pipeline/coarse/` the coarse run that carried the swell across the shelf. Options: `--tide` (metres above mean sea level), `--duration`, `--frame-interval`, `--manning`, `--dispersive false` (plain shallow water, for comparison), `--breaking-viscosity` (experimental: broken waves lose height on the way to the shore as the laboratory's do, but at Coxos in 2D it starts breaking too early, see [docs/surf-zone.md](docs/surf-zone.md); recorded in `run.json` as `breaking_viscosity`, and not with `--handoff-y`), `--single` (everything on the bed's own cells, on one grid), `--max-minutes`, `--priority`, `--threads`, `--out`.
+That writes `out/pipeline/` (both `data/` and `out/` are git-ignored): the reef on the bed's own cells, and in `out/pipeline/coarse/` the coarse run that carried the swell across the shelf. Options: `--tide` (metres above mean sea level), `--duration`, `--frame-interval`, `--manning`, `--dispersive false` (plain shallow water, for comparison), `--breaking-viscosity` (experimental: broken waves lose height on the way to the shore as the laboratory's do, but at Coxos in 2D it starts breaking too early, see [docs/surf-zone.md](docs/surf-zone.md); recorded in `run.json` as `breaking_viscosity`, and not with `--handoff-y`), `--shallow-inside <run>` (experimental: plain shallow water from the break line of an earlier run of the same bed, swell and tide to the shore, so broken waves dissipate as shocks; right on the laboratory beach, not on the reef lines; recorded as `shallow_inside_from`, see [docs/surf-zone.md](docs/surf-zone.md)), `--single` (everything on the bed's own cells, on one grid), `--max-minutes`, `--priority`, `--threads`, `--out`.
 
 **What the run plans for itself.**
 
