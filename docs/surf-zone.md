@@ -9,7 +9,9 @@ further out, in 6 m of water instead of 3.8, and the surf zone comes out at `H/h
 low. So the fix stays off; steps 3 and 4 do not go ahead as planned. The fallback tried next,
 plain shallow water shoreward of a known break line (2026-11-24), passes the laboratory beach but
 fails on the reef lines: the sheet's break line is the tallest wave, which on gentle reefs is
-well seaward of where the wave breaks. Correcting the sheet's heights is what is left. It follows the 2026-11-17 audit, which named this the model's main accuracy gap
+well seaward of where the wave breaks. So the sheets correct their heights instead (2026-11-25):
+inside each breaking zone the height map is capped at a share of the depth falling to 0.60, the
+laboratory's. It follows the 2026-11-17 audit, which named this the model's main accuracy gap
 once its bugs were fixed.
 
 ## In short
@@ -483,6 +485,30 @@ the distance shoreward of the break point and `h` the still-water depth at the r
    the two tides, and the break moves with the tide.
 4. **The map, for Max:** the corrected Coxos sheet beside the old one, to look at whether the
    white water inside looks the size he knows.
+
+### Results (2026-11-25)
+
+1. **Unit tests** (`tools/tests/test_spot_sheet.py`): pass. Seaward of the break and at the break
+   point's own cell the height is untouched, `H/h` falls steadily to 0.60 by 5.6 break depths and
+   holds to the shore, a surf zone already under the cap is left alone, and a stray row is capped
+   from its kept break point.
+2. **The Coxos sheet both ways** (all 35 runs, both reducers): everything but the height maps,
+   the moving waves and the new entry is identical; all 28 height maps changed.
+3. **The tide response** over the 7 mid and low pairs of the 2 m, 13 s swell, 23 599 cells in 1 to
+   3 m of water: 0.81 as run (10–90% 0.46–1.18), which reproduces the 2026-11-09 check, and
+   **0.60 capped**, inside 0.50 to 0.68. But the plan was wrong to call this not built in: in 1
+   to 3 m of water nearly every cell is past the transition at both tides, so it is capped at
+   both, and the slope is the cap's own 0.60 (10–90% 0.60–0.60). It shows the cap does what it
+   says, not that 0.60 is right; that rests on the laboratory and the field figures.
+4. **Inside the zone at mid tide,** `H/h` by depth, as run → capped: 0.98 → 0.60 in 1–2 m,
+   0.91 → 0.60 in 2–3 m, 0.87 → 0.60 in 3–4 m, 0.72 → 0.60 in 4–6 m. The map's peaks just inside
+   the takeoff, at about 1.9 times the swell, are seaward of the cap and unchanged; the white
+   water between them and the shore comes out darker.
+
+**What it means.** The sheets now show broken waves at the laboratory's share of the depth instead
+of about the depth itself, and say so. It is a correction, not physics: the runs and their files
+are unchanged, and any number read from a run's statistics inside the break is still the
+model's. The map is for Max to judge against what he knows of the white water at Coxos.
 
 ## Not in this plan
 

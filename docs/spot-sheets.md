@@ -19,9 +19,11 @@ its findings still hold, and this one links to them rather than repeating them.
 - **How far to trust it today.** On the 15 m seabed, size, where it breaks, depth, how the tide
   moves it and whether it hits the rock are usable. Whether it pitches or crumbles (barrels) and
   how fast it peels depend on the bottom's exact shape at the break, which 15 m blurs. Those
-  lines wait for the DGT 2 m data. Heights shoreward of the break read high: the model's inner
-  surf zone is too tall (H/h near 1.0, where real ones sit at 0.5 to 0.65; see the README's
-  limits), so it also overstates how much the tide changes the size there.
+  lines wait for the DGT 2 m data. Heights shoreward of the break are capped, not modelled: the
+  model's inner surf zone is too tall (H/h near 1.0, where real ones sit at 0.5 to 0.65; see the
+  README's limits), so since 2026-11-25 the sheet holds the height map and the moving wave there
+  under a share of the depth that falls to 0.60, Ting & Kirby's (docs/surf-zone.md). The tide's
+  effect there follows the cap, 0.60 per metre, not the model.
 - **It is a map.** The sheet shows on a satellite or aerial photo where the swell breaks at each
   direction and tide, and where it breaks first (the takeoffs), with a few lines of text beside
   it. Max asked for that on 2026-11-06, over a table of text.
